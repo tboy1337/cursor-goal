@@ -1,0 +1,134 @@
+"""Tests for cursor_goal.validation."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from typing import Any
+
+import pytest
+
+from cursor_goal.validation import (
+    _stream_to_text,
+    redact_command,
+    run_validation,
+    try_split_argv,
+)
+
+
+def test_stream_to_text_none_str_bytes() -> None:
+    assert _stream_to_text(None) == ""
+    assert _stream_to_text("hello") == "hello"
+    assert _stream_to_text(b"bytes") == "bytes"
+    assert _stream_to_text(b"\xff") == "\ufffd"
+
+
+def test_run_validation_empty_command() -> None:
+    result = run_validation("   ")
+    assert result.exit_code == 1
+    assert "empty validation command" in result.output
+    assert result.timed_out is False
+
+
+def test_run_validation_success() -> None:
+    # Avoid nested quotes so argv mode works cross-platform.
+    result = run_validation(f"{sys.executable} -c print(12345)")
+    assert result.exit_code == 0
+    assert "12345" in result.output
+    assert result.timed_out is False
+
+
+def test_run_validation_nonzero_exit() -> None:
+    # No shell metacharacters (no ';') so argv mode is exercised.
+    result = run_validation(f'{sys.executable} -c "raise SystemExit(7)"')
+    assert result.exit_code == 7
+    assert result.timed_out is False
+
+
+def test_run_validation_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*_args: Any, **_kwargs: Any) -> None:
+        raise subprocess.TimeoutExpired(
+            cmd="sleep",
+            timeout=0.01,
+            output="partial-out",
+            stderr=b"partial-err",
+        )
+
+    monkeypatch.setattr(subprocess, "run", boom)
+    result = run_validation("sleep 99", timeout_sec=0.01)
+    assert result.exit_code == 124
+    assert result.timed_out is True
+    assert "partial-out" in result.output
+    assert "partial-err" in result.output
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("pytest -q", ["pytest", "-q"]),
+        ("echo hi | cat", None),
+        ("a && b", None),
+        ("", None),
+        ('"unterminated', None),
+    ],
+)
+def test_try_split_argv(command: str, expected: list[str] | None) -> None:
+    assert try_split_argv(command) == expected
+
+
+def test_run_validation_uses_argv_when_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, Any] = {}
+
+    def fake_run(args: Any, **kwargs: Any) -> Any:
+        seen["args"] = args
+        seen["shell"] = kwargs.get("shell")
+
+        class Result:
+            returncode = 0
+            stdout = "ok\n"
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = run_validation("pytest -q")
+    assert result.exit_code == 0
+    assert seen["shell"] is False
+    assert seen["args"] == ["pytest", "-q"]
+
+
+def test_run_validation_uses_shell_for_metacharacters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, Any] = {}
+
+    def fake_run(args: Any, **kwargs: Any) -> Any:
+        seen["args"] = args
+        seen["shell"] = kwargs.get("shell")
+
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = run_validation("npm test && npm run lint")
+    assert result.exit_code == 0
+    assert seen["shell"] is True
+    assert seen["args"] == "npm test && npm run lint"
+
+
+def test_try_split_argv_windows_percent(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(os, "name", "nt")
+    assert try_split_argv("echo %PATH%") is None
+    assert try_split_argv("echo hi^there") is None
+
+
+def test_redact_command_hides_secrets() -> None:
+    assert "<redacted>" in redact_command("run --token=supersecret")
+    assert redact_command("x" * 250).endswith("…")

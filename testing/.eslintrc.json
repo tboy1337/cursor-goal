@@ -1,0 +1,9 @@
+{
+  "env": { "es2021": true, "node": true },
+  "parserOptions": { "ecmaVersion": 2021, "sourceType": "module" },
+  "rules": {
+    "no-console": "error",
+    "no-var": "error",
+    "no-unused-vars": "error"
+  }
+}

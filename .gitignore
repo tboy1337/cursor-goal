@@ -1,0 +1,63 @@
+# --- Python bytecode & caches ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# --- Packaging / build artifacts ---
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+wheels/
+*.whl
+pip-wheel-metadata/
+sdist/
+
+# --- Virtual environments ---
+.venv/
+venv/
+ENV/
+env/
+
+# --- Test, typecheck, lint, coverage ---
+.pytest_cache/
+.mypy_cache/
+.hypothesis/
+.benchmarks/
+.ruff_cache/
+.tox/
+.nox/
+.cache/
+.coverage
+.coverage.*
+coverage.xml
+coverage.json
+htmlcov/
+*.cover
+.pylint.d/
+
+# --- Logs & OS junk ---
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# --- Editors ---
+.idea/
+*.swp
+*.swo
+*~
+
+# --- Secrets / local env ---
+.env
+.env.*
+!.env.example
+
+# --- Harness ephemeral run output ---
+testing/results/run-*/

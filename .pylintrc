@@ -1,0 +1,108 @@
+[MASTER]
+jobs = 0
+persistent = yes
+# Ignore generated, vendored, and non-package trees.
+ignore =
+    .git,
+    .mypy_cache,
+    .pytest_cache,
+    .venv,
+    venv,
+    dist,
+    build,
+    website,
+    testing/scripts,
+    testing/samples
+ignore-patterns = ^\.#
+# Fail the run when the score drops below the configured floor.
+fail-under = 9.5
+
+[MESSAGES CONTROL]
+# C011x: docstrings optional for small internal helpers
+# E1205: false positives with logger = get_logger(...) factories
+# R0801: small CLI dispatch blocks are intentionally similar
+# W0511: allow TODO notes
+# W0718: stop hook must fail-open on any unexpected error
+disable =
+    C0114,
+    C0115,
+    C0116,
+    E1205,
+    R0801,
+    R0903,
+    W0511,
+    W0718
+
+[REPORTS]
+output-format = text
+reports = no
+score = yes
+evaluation = max(0, 0 if fatal else 10.0 - ((float(5 * error + warning + refactor + convention) / statement) * 10))
+
+[REFACTORING]
+# User rule: avoid deep nesting (max 3 levels).
+max-nested-blocks = 3
+
+[FORMAT]
+max-line-length = 88
+max-module-lines = 1000
+indent-string = "    "
+indent-after-paren = 4
+expected-line-ending-format =
+
+[BASIC]
+good-names = i,j,k,ex,id,_,ok,fd,py
+include-naming-hint = yes
+argument-naming-style = snake_case
+attr-naming-style = snake_case
+class-naming-style = PascalCase
+const-naming-style = UPPER_CASE
+function-naming-style = snake_case
+method-naming-style = snake_case
+module-naming-style = snake_case
+variable-naming-style = snake_case
+class-attribute-naming-style = any
+inlinevar-naming-style = any
+
+[DESIGN]
+# User rule: refactor functions with >10 branches into helpers / dispatch tables.
+max-args = 8
+max-attributes = 12
+max-bool-expr = 5
+max-branches = 10
+max-locals = 20
+max-parents = 7
+max-public-methods = 20
+max-returns = 8
+max-statements = 60
+min-public-methods = 0
+
+[IMPORTS]
+# fcntl is Unix-only; imported only on non-Windows lock paths.
+ignored-modules = fcntl
+allow-reexport-from-package = no
+known-third-party =
+
+[TYPECHECK]
+ignore-none = yes
+ignore-on-opaque-inference = yes
+
+[SIMILARITIES]
+min-similarity-lines = 8
+ignore-comments = yes
+ignore-docstrings = yes
+ignore-imports = yes
+ignore-signatures = yes
+
+[LOGGING]
+logging-format-style = new
+logging-modules = logging
+
+[EXCEPTIONS]
+overgeneral-exceptions = builtins.BaseException,builtins.Exception
+
+[CLASSES]
+defining-attr-methods = __init__,__new__,setUp,__post_init__
+exclude-protected = _asdict,_fields,_replace,_source,_make
+valid-classmethod-first-arg = cls
+valid-metaclass-classmethod-first-arg = mcs

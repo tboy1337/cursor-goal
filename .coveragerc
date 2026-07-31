@@ -1,0 +1,33 @@
+# coverage.py configuration for cursor-goal
+# https://coverage.readthedocs.io/en/latest/config.html
+#
+# Used by pytest-cov (`pytest --cov=cursor_goal`) and by
+# `scripts/check_coverage_metrics.py` (reads coverage.json produced after tests).
+
+[run]
+branch = True
+source = cursor_goal
+# Portable paths in reports (CI / multi-OS checkouts).
+relative_files = True
+# Parallel workers write separate data files; pytest-cov combines them.
+parallel = True
+omit =
+    */cursor_goal/__pycache__/*
+    */cursor_goal.egg-info/*
+
+[report]
+# Combined statement+branch floor; scripts/check_coverage_metrics.py also
+# enforces statement, branch, and function each >= 95% from coverage.json.
+fail_under = 95
+precision = 2
+show_missing = True
+skip_covered = True
+exclude_lines =
+    pragma: no cover
+    if TYPE_CHECKING:
+
+[html]
+directory = htmlcov
+
+[json]
+output = coverage.json

@@ -1,0 +1,323 @@
+#!/usr/bin/env python3
+"""Local verification pipeline for the cursor-goal harness.
+
+Runs formatting checks (or optional auto-fix), typecheck, lint, pytest with
+multi-metric coverage (>=95% statement/branch/function/combined), ShellCheck
+for bash, and on Windows PSScriptAnalyzer + Pester (>=95% command coverage).
+
+Usage:
+  py -3 scripts/verify.py
+  py -3 scripts/verify.py --fix
+  py -3 scripts/verify.py --skip-format
+  py -3 scripts/verify.py --skip-shell
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import os
+import shutil
+import subprocess
+import sys
+import time
+from collections.abc import Sequence
+from dataclasses import dataclass
+from pathlib import Path
+
+LOG = logging.getLogger("verify")
+
+SRC_PATHS = ("src", "tests", "scripts")
+MYPY_TARGET = "src/cursor_goal"
+PYLINT_TARGET = "src/cursor_goal"
+PYTEST_TARGET = "tests"
+PYPROJECT_TOML = "pyproject.toml"
+COVERAGE_JSON = "coverage.json"
+COVERAGE_CHECK = "scripts/check_coverage_metrics.py"
+POWERSHELL_TESTS = "scripts/run-powershell-tests.ps1"
+
+
+@dataclass(frozen=True)
+class StepResult:
+    name: str
+    command: tuple[str, ...]
+    exit_code: int
+    duration_sec: float
+
+    @property
+    def ok(self) -> bool:
+        return self.exit_code == 0
+
+
+def repo_root() -> Path:
+    """Resolve repository root from this script location."""
+    return Path(__file__).resolve().parent.parent
+
+
+def setup_logging(*, verbose: bool) -> None:
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="[verify] %(levelname)s: %(message)s",
+        stream=sys.stderr,
+    )
+
+
+def run_step(name: str, command: Sequence[str], *, cwd: Path) -> StepResult:
+    display = " ".join(command)
+    LOG.info("START %s: %s", name, display)
+    started = time.perf_counter()
+    completed = subprocess.run(
+        list(command),
+        cwd=cwd,
+        check=False,
+        env=os.environ.copy(),
+    )
+    duration = time.perf_counter() - started
+    result = StepResult(
+        name=name,
+        command=tuple(command),
+        exit_code=completed.returncode,
+        duration_sec=duration,
+    )
+    if result.ok:
+        LOG.info("PASS  %s (%.2fs)", name, duration)
+    else:
+        LOG.error("FAIL  %s (exit %s, %.2fs)", name, result.exit_code, duration)
+    return result
+
+
+def bash_scripts(root: Path) -> list[Path]:
+    """Return sorted bash scripts under scripts/."""
+    scripts_dir = root / "scripts"
+    found = list(scripts_dir.glob("*.sh")) + list(scripts_dir.glob("*.bash"))
+    return sorted(path for path in found if path.is_file())
+
+
+def build_steps(
+    *,
+    root: Path,
+    fix: bool,
+    skip_format: bool,
+    skip_shell: bool,
+) -> list[tuple[str, list[str]]]:
+    py = sys.executable
+    steps: list[tuple[str, list[str]]] = []
+
+    if not skip_format:
+        if fix:
+            steps.append(("isort (fix)", [py, "-m", "isort", *SRC_PATHS]))
+            steps.append(("black (fix)", [py, "-m", "black", *SRC_PATHS]))
+            steps.append(
+                (
+                    "pyproject-fmt (fix)",
+                    [py, "-m", "pyproject_fmt", PYPROJECT_TOML],
+                )
+            )
+        else:
+            steps.append(
+                (
+                    "isort (check)",
+                    [py, "-m", "isort", "--check-only", "--diff", *SRC_PATHS],
+                )
+            )
+            steps.append(
+                (
+                    "black (check)",
+                    [py, "-m", "black", "--check", "--diff", *SRC_PATHS],
+                )
+            )
+            steps.append(
+                (
+                    "pyproject-fmt (check)",
+                    [py, "-m", "pyproject_fmt", "--check", PYPROJECT_TOML],
+                )
+            )
+
+    steps.append(("mypy", [py, "-m", "mypy", MYPY_TARGET]))
+    steps.append(("pylint", [py, "-m", "pylint", PYLINT_TARGET]))
+    steps.append(
+        (
+            "bandit",
+            [py, "-m", "bandit", "-r", MYPY_TARGET, "-c", "pyproject.toml", "-q"],
+        )
+    )
+    steps.append(("pip-audit", [py, "-m", "pip_audit"]))
+    steps.append(
+        (
+            "pytest",
+            [
+                py,
+                "-m",
+                "pytest",
+                PYTEST_TARGET,
+                "-q",
+                "--tb=short",
+                f"--cov-report=json:{COVERAGE_JSON}",
+            ],
+        )
+    )
+    steps.append(
+        (
+            "coverage-metrics",
+            [py, COVERAGE_CHECK, "--json", COVERAGE_JSON, "--threshold", "95"],
+        )
+    )
+
+    if not skip_shell:
+        shellcheck = shutil.which("shellcheck")
+        scripts = bash_scripts(root)
+        if shellcheck is None:
+            # shellcheck-py installs a console script when .[dev] is installed.
+            LOG.error(
+                "shellcheck not on PATH; install with: pip install shellcheck-py "
+                "(or ./scripts/run-shellcheck.sh)"
+            )
+            steps.append(
+                ("shellcheck", [py, "-c", "raise SystemExit('shellcheck missing')"])
+            )
+        elif not scripts:
+            LOG.warning("No bash scripts found under scripts/; skipping shellcheck")
+        else:
+            steps.append(
+                (
+                    "shellcheck",
+                    [shellcheck, "--severity=warning", *[str(p) for p in scripts]],
+                )
+            )
+
+        if sys.platform == "win32":
+            powershell = shutil.which("powershell") or shutil.which("pwsh")
+            if powershell is None:
+                LOG.warning("powershell not found; skipping PSScriptAnalyzer/Pester")
+            else:
+                steps.append(
+                    (
+                        "powershell-tests",
+                        [
+                            powershell,
+                            "-NoProfile",
+                            "-ExecutionPolicy",
+                            "Bypass",
+                            "-File",
+                            str(root / POWERSHELL_TESTS),
+                        ],
+                    )
+                )
+
+    return steps
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run the local verification pipeline: isort, black, pyproject-fmt, "
+            "mypy, pylint, bandit, pip-audit, pytest (+ multi-metric coverage), "
+            "shellcheck, and on Windows PSScriptAnalyzer/Pester."
+        )
+    )
+    parser.add_argument(
+        "--fix",
+        action="store_true",
+        help="Apply isort/black/pyproject-fmt fixes instead of check-only mode.",
+    )
+    parser.add_argument(
+        "--skip-format",
+        action="store_true",
+        help="Skip isort, black, and pyproject-fmt steps.",
+    )
+    parser.add_argument(
+        "--skip-shell",
+        action="store_true",
+        help="Skip ShellCheck and PowerShell (PSScriptAnalyzer/Pester) steps.",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable debug logging.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    setup_logging(verbose=args.verbose)
+
+    if args.fix and args.skip_format:
+        LOG.error("Cannot combine --fix with --skip-format")
+        return 2
+
+    root = repo_root()
+    LOG.info("Repository root: %s", root)
+    LOG.info(
+        "Mode: fix=%s skip_format=%s skip_shell=%s python=%s",
+        args.fix,
+        args.skip_format,
+        args.skip_shell,
+        sys.executable,
+    )
+
+    required = [
+        "pytest",
+        "mypy",
+        "pylint",
+        "black",
+        "isort",
+        "pyproject_fmt",
+        "bandit",
+        "pip_audit",
+    ]
+    # Tools are invoked via `python -m`, so check importability instead of PATH.
+    missing_mods: list[str] = []
+    for mod in required:
+        try:
+            __import__(mod if mod != "pytest" else "pytest")
+        except ImportError:
+            missing_mods.append(mod)
+    if missing_mods:
+        LOG.error(
+            'Missing tools: %s. Install with: pip install -e ".[dev]"',
+            ", ".join(missing_mods),
+        )
+        return 2
+
+    steps = build_steps(
+        root=root,
+        fix=args.fix,
+        skip_format=args.skip_format,
+        skip_shell=args.skip_shell,
+    )
+    LOG.info("Planned steps: %s", ", ".join(name for name, _ in steps))
+
+    results: list[StepResult] = []
+    for name, command in steps:
+        results.append(run_step(name, command, cwd=root))
+        if not results[-1].ok:
+            # Continue remaining steps so the developer sees the full picture.
+            LOG.warning("Continuing after failure so remaining checks still run")
+
+    failed = [r for r in results if not r.ok]
+    LOG.info("----- summary -----")
+    for result in results:
+        status = "PASS" if result.ok else "FAIL"
+        LOG.info(
+            "%s  %-18s  %6.2fs  (exit %s)",
+            status,
+            result.name,
+            result.duration_sec,
+            result.exit_code,
+        )
+
+    if failed:
+        LOG.error(
+            "%s step(s) failed: %s", len(failed), ", ".join(r.name for r in failed)
+        )
+        return 1
+
+    LOG.info("All verification steps passed")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

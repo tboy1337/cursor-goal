@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+# install-goal.sh — Install /goal Python harness for Cursor (Unix/macOS/WSL/Git Bash)
+#
+# Usage (from a full clone or release tarball):
+#   ./scripts/install-goal.sh
+#   ./scripts/uninstall-goal.sh
+#
+# Do NOT pipe a lone curl of this file into bash — the installer needs the repo tree.
+
+set -euo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+INSTALL_DIR="${HOME}/.cursor/skills/goal"
+AGENTS_DIR="${HOME}/.cursor/agents"
+DATA_DIR="${HOME}/.cursor-goal/data"
+CURSOR_HOOKS_FILE="${HOME}/.cursor/hooks.json"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+log_info()  { echo -e "${GREEN}[install-goal]${NC} $1"; }
+log_warn()  { echo -e "${YELLOW}[install-goal]${NC} $1"; }
+log_error() { echo -e "${RED}[install-goal]${NC} $1" >&2; }
+log_step()  { echo -e "${BLUE}==>${NC} $1"; }
+
+# Resolve a Python 3.12+ interpreter to an absolute sys.executable path.
+detect_python() {
+  local cand abs
+  for cand in python3 python; do
+    if command -v "$cand" >/dev/null 2>&1; then
+      if "$cand" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' 2>/dev/null; then
+        abs="$("$cand" -c 'import sys; print(sys.executable)')"
+        if [ -n "$abs" ] && [ -x "$abs" ]; then
+          echo "$abs"
+          return 0
+        fi
+      fi
+    fi
+  done
+  return 1
+}
+
+shell_quote() {
+  "$PYTHON_BIN" -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' "$1"
+}
+
+check_dependencies() {
+  log_step "Checking dependencies..."
+  if ! PYTHON_BIN="$(detect_python)"; then
+    log_error "Python 3.12+ is required (python3 or python)."
+    log_error "Install Python from https://www.python.org/downloads/ then re-run."
+    exit 1
+  fi
+  local py_ver
+  py_ver="$("$PYTHON_BIN" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+  log_info "Using interpreter: $PYTHON_BIN ($py_ver)"
+  export PYTHON_BIN
+}
+
+install_skill_files() {
+  log_step "Installing skill files..."
+  local SOURCE_SKILL="${REPO_ROOT}/.cursor/skills/goal"
+  local SOURCE_PKG="${REPO_ROOT}/src/cursor_goal"
+  local SOURCE_AGENT="${REPO_ROOT}/.cursor/agents/goalKeeper.md"
+  local SOURCE_EVALUATOR="${REPO_ROOT}/.cursor/agents/goal-evaluator.md"
+
+  if [ ! -d "$SOURCE_PKG" ]; then
+    log_error "Package not found: $SOURCE_PKG"
+    log_error "Run this script from a full cursor-goal clone or release tarball (not a lone curl)."
+    exit 1
+  fi
+  if [ ! -f "${SOURCE_SKILL}/SKILL.md" ]; then
+    log_error "SKILL.md not found under $SOURCE_SKILL"
+    exit 1
+  fi
+
+  mkdir -p "$INSTALL_DIR/scripts" "$AGENTS_DIR" "$DATA_DIR"
+
+  if [ -d "$INSTALL_DIR" ] && [ -f "${INSTALL_DIR}/SKILL.md" ]; then
+    local skill_bak
+    skill_bak="${INSTALL_DIR}.bak.$(date -u +%Y%m%dT%H%M%SZ)"
+    rm -rf "$skill_bak"
+    cp -R "$INSTALL_DIR" "$skill_bak"
+    log_info "Backed up previous skill install to $skill_bak"
+  fi
+
+  rm -rf "${INSTALL_DIR}/cursor_goal"
+  cp -R "$SOURCE_PKG" "${INSTALL_DIR}/cursor_goal"
+  cp "${SOURCE_SKILL}/SKILL.md" "${INSTALL_DIR}/SKILL.md"
+  cp "${SOURCE_SKILL}/scripts/stop_hook.py" "${INSTALL_DIR}/scripts/stop_hook.py"
+  cp "${SOURCE_SKILL}/scripts/run_goal.py" "${INSTALL_DIR}/scripts/run_goal.py"
+
+  "$PYTHON_BIN" - "$INSTALL_DIR" <<'PY'
+import sys
+from pathlib import Path
+install = Path(sys.argv[1])
+sys.path.insert(0, str(install))
+from cursor_goal import __version__
+(install / "VERSION").write_text(__version__ + "\n", encoding="utf-8")
+print(__version__)
+PY
+
+  # Remove legacy bash harness if present
+  rm -f "${INSTALL_DIR}/goal-manage.sh" \
+        "${INSTALL_DIR}/goal-stop.sh" \
+        "${INSTALL_DIR}/goal-eval.sh" \
+        "${INSTALL_DIR}/goal-parse.sh"
+
+  if [ -f "$SOURCE_AGENT" ]; then
+    cp "$SOURCE_AGENT" "${AGENTS_DIR}/goalKeeper.md"
+    log_info "Installed: ${AGENTS_DIR}/goalKeeper.md"
+  fi
+  if [ -f "$SOURCE_EVALUATOR" ]; then
+    cp "$SOURCE_EVALUATOR" "${AGENTS_DIR}/goal-evaluator.md"
+    log_info "Installed: ${AGENTS_DIR}/goal-evaluator.md"
+  fi
+
+  log_info "Installed package + scripts under $INSTALL_DIR"
+}
+
+hook_command() {
+  local stop_script="${INSTALL_DIR}/scripts/stop_hook.py"
+  echo "$(shell_quote "$PYTHON_BIN") -u $(shell_quote "$stop_script")"
+}
+
+configure_stop_hook() {
+  log_step "Configuring Cursor stop hook..."
+  mkdir -p "${HOME}/.cursor"
+
+  local CMD
+  CMD="$(hook_command)"
+
+  if [ -f "$CURSOR_HOOKS_FILE" ]; then
+    local hooks_bak
+    hooks_bak="${CURSOR_HOOKS_FILE}.bak.$(date -u +%Y%m%dT%H%M%SZ)"
+    cp "$CURSOR_HOOKS_FILE" "$hooks_bak"
+    log_info "Backed up existing hooks.json to $hooks_bak"
+  fi
+
+  if ! "$PYTHON_BIN" - "$INSTALL_DIR" "$CURSOR_HOOKS_FILE" "$CMD" <<'PY'
+import sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+from cursor_goal.hooks_config import merge_hooks_at_path
+
+merge_hooks_at_path(Path(sys.argv[2]), sys.argv[3])
+print("merged")
+PY
+  then
+    log_error "Failed to merge stop hook into hooks.json."
+    log_error "Skill files were installed under $INSTALL_DIR."
+    log_error "If a skill backup exists (${INSTALL_DIR}.bak.*), restore it manually."
+    exit 1
+  fi
+  log_info "Merged/upgraded stop hook in hooks.json"
+}
+
+print_summary() {
+  echo ""
+  echo -e "${GREEN}============================================${NC}"
+  echo -e "${GREEN} /goal Autonomous Loop - Installed!         ${NC}"
+  echo -e "${GREEN}============================================${NC}"
+  echo ""
+  echo "Components:"
+  echo "  goalKeeper.md       $AGENTS_DIR/goalKeeper.md"
+  echo "  goal-evaluator.md   $AGENTS_DIR/goal-evaluator.md"
+  echo "  skill               $INSTALL_DIR"
+  echo "  stop hook        $(hook_command)"
+  echo "  hooks.json       $CURSOR_HOOKS_FILE"
+  echo "  Data dir         $DATA_DIR"
+  echo ""
+  echo "Verify:"
+  echo "  $(shell_quote "$PYTHON_BIN") -u $(shell_quote "$INSTALL_DIR/scripts/run_goal.py") manage status"
+  echo ""
+  echo "Usage in Cursor agent:"
+  echo "  /goal all tests pass and lint is clean"
+  echo "  /goal status | pause | resume | clear"
+  echo ""
+  echo "Note: Prefer in-turn evaluation; the stop hook is a safety net."
+  echo "On Windows, use install-goal.ps1 (stop_hook.cmd + drain delay)."
+  echo ""
+}
+
+main() {
+  echo ""
+  echo -e "${BLUE}================================${NC}"
+  echo -e "${BLUE} Installing /goal skill         ${NC}"
+  echo -e "${BLUE} Python harness for Cursor      ${NC}"
+  echo -e "${BLUE}================================${NC}"
+  echo ""
+
+  check_dependencies
+  install_skill_files
+  configure_stop_hook
+  print_summary
+}
+
+main "$@"

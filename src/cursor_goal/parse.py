@@ -1,0 +1,168 @@
+"""Parse natural-language /goal input into structured JSON."""
+
+from __future__ import annotations
+
+import json
+import re
+import sys
+from typing import Any
+
+from cursor_goal.logging_config import get_logger
+from cursor_goal.validation import redact_command
+
+logger = get_logger("cursor_goal.parse")
+
+SUBCOMMANDS = frozenset(
+    {"status", "pause", "resume", "clear", "stop", "off", "reset", "cancel"}
+)
+CLEAR_ALIASES = frozenset({"stop", "off", "reset", "cancel"})
+
+KNOWN_RUNNERS = (
+    "npm",
+    "yarn",
+    "pnpm",
+    "make",
+    "cargo",
+    "go",
+    "python",
+    "pytest",
+    "jest",
+    "vitest",
+    "rspec",
+    "mix",
+    "dotnet",
+    "gradle",
+    "mvn",
+)
+
+_BUDGET_NL = re.compile(
+    r",?\s*(?:stop|limit|max)\s+(?:after\s+|to\s+)?(\d+)\s*"
+    r"(?:turns?|iterations?|cycles?|rounds?)",
+    re.IGNORECASE,
+)
+_TEST_FLAG_QUOTED = re.compile(r'--test\s+"([^"]+)"')
+_TEST_FLAG_BARE = re.compile(r"--test\s+(\S+)")
+_BUDGET_FLAG = re.compile(r"--budget\s+(\d+)")
+_VALIDATION_HINTS = [
+    re.compile(
+        rf",?\s*(?:verified\s+by|run|check\s+with|using|via)\s+"
+        rf"[`\"]?({runner}\b[^`\",]*)[`\"]?",
+        re.IGNORECASE,
+    )
+    for runner in KNOWN_RUNNERS
+]
+
+
+def _extract_test_flag(condition: str) -> tuple[str, str]:
+    """Pull --test from condition text; return (test_cmd, remaining)."""
+    match = _TEST_FLAG_QUOTED.search(condition)
+    if match:
+        return match.group(1), _TEST_FLAG_QUOTED.sub("", condition)
+    match = _TEST_FLAG_BARE.search(condition)
+    if match:
+        return match.group(1), _TEST_FLAG_BARE.sub("", condition)
+    return "", condition
+
+
+def _extract_budget(condition: str, default: int = 20) -> tuple[int, str]:
+    """Pull --budget / natural-language budget; return (budget, remaining)."""
+    budget = default
+    match = _BUDGET_FLAG.search(condition)
+    if match:
+        budget = int(match.group(1))
+        condition = _BUDGET_FLAG.sub("", condition)
+    match = _BUDGET_NL.search(condition)
+    if match:
+        budget = int(match.group(1))
+        condition = _BUDGET_NL.sub("", condition)
+    return budget, condition
+
+
+def _truncate_shell_chain(candidate: str) -> str:
+    """Keep only the first segment before common shell chain operators."""
+    for sep in ("&&", "||", ";", "|"):
+        if sep in candidate:
+            return candidate.split(sep, 1)[0].strip()
+    return candidate
+
+
+def _extract_validation_hint(condition: str) -> tuple[str, str]:
+    """Pull a known-runner validation hint; return (test_cmd, remaining).
+
+    Truncates at shell chain operators so NL hints do not swallow ``&&`` tails.
+    Prefer explicit ``--test "..."`` for compound commands.
+    """
+    for pattern in _VALIDATION_HINTS:
+        match = pattern.search(condition)
+        if not match:
+            continue
+        candidate = _truncate_shell_chain(match.group(1).strip().strip("`'\""))
+        return candidate, pattern.sub("", condition, count=1)
+    return "", condition
+
+
+def _normalize_condition(condition: str) -> str:
+    cleaned = condition.strip().strip('",').strip()
+    return re.sub(r"\s+", " ", cleaned)
+
+
+def parse_raw(raw: str) -> dict[str, Any]:
+    """Parse /goal input into a JSON-serializable dict."""
+    text = raw.strip()
+    if not text:
+        raise ValueError('Usage: cursor-goal parse "<raw /goal input>"')
+
+    text = re.sub(r"^/goal\s*", "", text, count=1)
+
+    if text in SUBCOMMANDS:
+        action = "clear" if text in CLEAR_ALIASES else text
+        result: dict[str, Any] = {
+            "subcommand": text,
+            "action": action,
+            "condition": None,
+            "test_cmd": None,
+            "budget": None,
+        }
+        logger.info("Parsed subcommand=%s action=%s", text, action)
+        return result
+
+    test_cmd, condition = _extract_test_flag(text)
+    budget, condition = _extract_budget(condition)
+    if not test_cmd:
+        test_cmd, condition = _extract_validation_hint(condition)
+    condition = _normalize_condition(condition)
+
+    if not condition:
+        raise ValueError(f"Could not extract a condition from: {raw}")
+    if budget < 1:
+        raise ValueError(f"Budget must be a positive integer, got {budget}")
+
+    result = {
+        "subcommand": None,
+        "action": "create",
+        "condition": condition,
+        "test_cmd": test_cmd or None,
+        "budget": budget,
+    }
+    logger.info(
+        "Parsed create condition=%r test=%r budget=%s",
+        condition,
+        redact_command(test_cmd) if test_cmd else "",
+        budget,
+    )
+    return result
+
+
+def cmd_parse(argv: list[str]) -> int:
+    if not argv:
+        print('[goal-parse] Error: Usage: cursor-goal parse "<raw>"', file=sys.stderr)
+        return 1
+    raw = argv[0]
+    try:
+        payload = parse_raw(raw)
+    except ValueError as exc:
+        print(f"[goal-parse] Error: {exc}", file=sys.stderr)
+        return 1
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+    return 0

@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main, testing]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  harness:
+    name: Python harness
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Format (isort/black/pyproject-fmt)
+        run: |
+          isort --check-only --diff src tests scripts
+          black --check --diff src tests scripts
+          pyproject-fmt --check pyproject.toml
+      - name: pip-audit
+        run: pip-audit
+      - name: Bandit
+        run: bandit -r src/cursor_goal -c pyproject.toml -q
+      - name: Pytest
+        run: pytest tests -q --tb=short
+      - name: Coverage metrics (>=95% statement/branch/function/combined)
+        run: python scripts/check_coverage_metrics.py --threshold 95
+      - name: Mypy
+        run: mypy src/cursor_goal
+      - name: Pylint
+        run: pylint src/cursor_goal
+      - name: ShellCheck
+        run: |
+          shellcheck --severity=warning scripts/*.sh
+      - name: Unix install smoke
+        if: matrix.python-version == '3.12'
+        run: bash scripts/install-smoke.sh
+
+  macos-install-smoke:
+    name: macOS install smoke
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install package (for VERSION stamp helpers)
+        run: pip install -e .
+      - name: macOS install smoke
+        run: bash scripts/install-smoke.sh
+
+  powershell:
+    name: PowerShell scripts
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install PSScriptAnalyzer and Pester 5
+        shell: pwsh
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+          Install-Module Pester -MinimumVersion 5.0.0 -Scope CurrentUser -Force -SkipPublisherCheck
+      - name: PSScriptAnalyzer + Pester (>=95% coverage)
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-powershell-tests.ps1

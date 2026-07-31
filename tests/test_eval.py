@@ -1,0 +1,276 @@
+"""Tests for cursor_goal.evaluate."""
+
+from __future__ import annotations
+
+import io
+import json
+import sys
+from contextlib import redirect_stdout
+from pathlib import Path
+
+import pytest
+
+from cursor_goal.evaluate import _emit_prompt, parse_result_text
+from cursor_goal.state import GoalState, load_goal, save_goal
+from tests.conftest import run_cli
+
+
+def test_eval_prompt_active_goal(goal_home: Path) -> None:
+    run_cli("manage", "create", "all tests pass")
+    code, out, _err = run_cli("eval", "prompt")
+    assert code == 0
+    assert "Goal condition: all tests pass" in out
+
+
+def test_eval_prompt_work_summary(goal_home: Path) -> None:
+    run_cli("manage", "create", "fix the login bug")
+    code, out, _err = run_cli("eval", "prompt", "--work-summary", "did X")
+    assert code == 0
+    assert "did X" in out
+
+
+def test_eval_prompt_ignores_incomplete_work_summary_flag(goal_home: Path) -> None:
+    """Cover the argv else-branch when --work-summary has no value."""
+    run_cli("manage", "create", "fix the login bug")
+    code, out, _err = run_cli("eval", "prompt", "--work-summary")
+    assert code == 0
+    assert "No work summary provided" in out
+
+
+def test_emit_prompt_adds_trailing_newline() -> None:
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        _emit_prompt("hello")
+    assert buf.getvalue() == "hello\n"
+
+
+def test_emit_prompt_keeps_existing_newline() -> None:
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        _emit_prompt("hello\n")
+    assert buf.getvalue() == "hello\n"
+
+
+def test_eval_signal_requires_yes_or_force(goal_home: Path) -> None:
+    run_cli("manage", "create", "test condition")
+    assert run_cli("eval", "check")[0] == 1
+    assert run_cli("eval", "signal")[0] == 1
+    assert run_cli("eval", "signal", "--force")[0] == 0
+    assert (goal_home / "goal-eval-done").is_file()
+    raw = json.loads((goal_home / "goal-eval-done").read_text(encoding="utf-8"))
+    assert raw["verdict"] == "YES"
+    assert "condition_hash" in raw
+    assert run_cli("eval", "check")[0] == 0
+
+
+def test_eval_parse_result_yes_auto_signals(goal_home: Path) -> None:
+    run_cli("manage", "create", "test condition")
+    code, out, _err = run_cli("eval", "parse-result", "YES: all done")
+    assert code == 0
+    assert "VERDICT=YES" in out
+    assert "YES signal recorded" in out
+    assert run_cli("eval", "check")[0] == 0
+    state = load_goal()
+    assert state is not None
+    assert state.last_eval_verdict == "YES"
+
+
+def test_eval_signal_requires_goal(goal_home: Path) -> None:
+    code, _out, err = run_cli("eval", "signal")
+    assert code == 1
+    assert "No active goal" in err
+
+
+def test_eval_parse_result_no_clears_signal(goal_home: Path) -> None:
+    run_cli("manage", "create", "test condition")
+    run_cli("eval", "parse-result", "YES: done")
+    assert run_cli("eval", "check")[0] == 0
+    code, out, _err = run_cli("eval", "parse-result", "NO: 2 tests failing")
+    assert code == 1
+    assert "VERDICT=NO" in out
+    assert run_cli("eval", "check")[0] == 1
+
+
+def test_eval_parse_result_empty(goal_home: Path) -> None:
+    run_cli("manage", "create", "test condition")
+    code, _out, err = run_cli("eval", "parse-result", "")
+    assert code == 1
+    assert "Usage" in err
+
+
+def test_eval_prompt_no_goal(goal_home: Path) -> None:
+    code, _out, err = run_cli("eval", "prompt")
+    assert code == 1
+    assert "No active goal" in err
+
+
+def test_parse_result_rejects_loose_substring() -> None:
+    verdict, _reason = parse_result_text("I cannot say YES yet")
+    assert verdict == "UNCLEAR"
+    verdict2, reason2 = parse_result_text("NO: not ready\nextra")
+    assert verdict2 == "NO"
+    assert "not ready" in reason2
+
+
+def test_parse_result_last_line_wins() -> None:
+    verdict, reason = parse_result_text("YES: shipped\nNO: ignore")
+    assert verdict == "NO"
+    assert "ignore" in reason
+    verdict2, reason2 = parse_result_text(
+        "Analysis says YES: maybe\nMore prose\nYES: confirmed"
+    )
+    assert verdict2 == "YES"
+    assert "confirmed" in reason2
+
+
+def test_parse_result_ignores_mid_prose_yes() -> None:
+    verdict, _reason = parse_result_text(
+        "The answer would be YES: if tests passed, but they did not.\nStill working"
+    )
+    assert verdict == "UNCLEAR"
+
+
+def test_eval_help_and_unknown(goal_home: Path) -> None:
+    assert run_cli("eval")[0] == 1
+    assert run_cli("eval", "help")[0] == 0
+    code, out, _err = run_cli("eval", "nope")
+    assert code == 1
+    assert "Usage:" in out
+    assert "validate" in out
+
+
+def test_eval_prompt_validation_not_run(goal_home: Path) -> None:
+    run_cli("manage", "create", "g", "--test", "pytest")
+    code, out, _err = run_cli("eval", "prompt")
+    assert code == 0
+    assert "has not been run yet" in out
+
+
+def test_eval_prompt_with_validation_output(goal_home: Path) -> None:
+    run_cli("manage", "create", "g", "--test", "echo")
+    state = GoalState(
+        active=True,
+        condition="g",
+        validation_command="echo",
+        created_at="t",
+        turn_budget=20,
+        turns_used=1,
+        status="pursuing",
+        last_validation_output="all green",
+        last_validation_exit_code=0,
+    )
+    save_goal(state)
+    code, out, _err = run_cli("eval", "prompt")
+    assert code == 0
+    assert "all green" in out
+    assert "Validation command: echo" in out
+    assert "Exit code: 0" in out
+    assert "passed" in out
+
+
+def test_eval_parse_result_without_goal(goal_home: Path) -> None:
+    code, out, _err = run_cli("eval", "parse-result", "YES: done")
+    assert code == 0
+    assert "VERDICT=YES" in out
+    assert not (goal_home / "goal-eval-done").exists()
+
+
+def test_eval_validate_persists_output(goal_home: Path) -> None:
+    cmd = f'{sys.executable} -c "print(4242)"'
+    run_cli("manage", "create", "g", "--test", cmd)
+    code, out, _err = run_cli("eval", "validate")
+    assert code == 0
+    assert "4242" in out
+    state = load_goal()
+    assert state is not None
+    assert "4242" in state.last_validation_output
+    assert state.last_validation_exit_code == 0
+    _code2, prompt, _err2 = run_cli("eval", "prompt")
+    assert "4242" in prompt
+    assert "Exit code: 0" in prompt
+
+
+def test_eval_validate_requires_command(goal_home: Path) -> None:
+    run_cli("manage", "create", "g")
+    code, _out, err = run_cli("eval", "validate")
+    assert code == 1
+    assert "No validation command" in err
+
+
+def test_eval_validate_nonzero(goal_home: Path) -> None:
+    cmd = f'{sys.executable} -c "raise SystemExit(3)"'
+    run_cli("manage", "create", "g", "--test", cmd)
+    code, _out, _err = run_cli("eval", "validate")
+    assert code == 1
+    state = load_goal()
+    assert state is not None
+    assert state.last_validation_exit_code == 3
+
+
+def test_eval_prompt_failed_exit_note(goal_home: Path) -> None:
+    state = GoalState(
+        active=True,
+        condition="g",
+        validation_command="false",
+        created_at="t",
+        status="pursuing",
+        last_validation_output="boom",
+        last_validation_exit_code=1,
+    )
+    save_goal(state)
+    code, out, _err = run_cli("eval", "prompt")
+    assert code == 0
+    assert "Exit code: 1" in out
+    assert "failed" in out
+    assert "maker" in out.lower() or "checker" in out.lower()
+
+
+def test_eval_spawn_config_default(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CURSOR_GOAL_EVAL_MODEL", raising=False)
+    code, out, _err = run_cli("eval", "spawn-config")
+    assert code == 0
+    data = json.loads(out.strip())
+    assert data["subagent_type"] == "goal-evaluator"
+    assert data["model"] == "fast"
+    assert data["readonly"] is True
+
+
+def test_eval_spawn_config_override(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CURSOR_GOAL_EVAL_MODEL", "composer-2.5")
+    code, out, _err = run_cli("eval", "spawn-config")
+    assert code == 0
+    data = json.loads(out.strip())
+    assert data["model"] == "composer-2.5"
+    assert data["subagent_type"] == "goal-evaluator"
+
+
+def test_eval_spawn_config_empty_env_falls_back(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CURSOR_GOAL_EVAL_MODEL", "   ")
+    code, out, _err = run_cli("eval", "spawn-config")
+    assert code == 0
+    data = json.loads(out.strip())
+    assert data["model"] == "fast"
+
+
+def test_eval_check_no_signal_and_ok(goal_home: Path) -> None:
+    run_cli("manage", "create", "check coverage")
+    code, out, _err = run_cli("eval", "check")
+    assert code == 1
+    assert "FAIL" in out
+    assert "evaluator signal" in out.lower() or "Evaluator" in out
+    run_cli("eval", "parse-result", "YES: evidence complete")
+    code2, out2, _err2 = run_cli("eval", "check")
+    assert code2 == 0
+    assert "OK" in out2
+
+
+def test_eval_help_lists_spawn_config(goal_home: Path) -> None:
+    code, out, _err = run_cli("eval", "help")
+    assert code == 0
+    assert "spawn-config" in out

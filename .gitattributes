@@ -1,0 +1,63 @@
+# Normalize line endings for cross-platform (Windows / macOS / Linux) development.
+* text=auto eol=lf
+
+# --- Source & config (explicit LF) ---
+*.py      text eol=lf diff=python
+*.pyi     text eol=lf
+*.typed   text eol=lf
+*.md      text eol=lf diff=markdown
+*.txt     text eol=lf
+*.json    text eol=lf
+*.jsonl   text eol=lf
+*.toml    text eol=lf
+*.ini     text eol=lf
+*.cfg     text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.html    text eol=lf
+*.css     text eol=lf
+*.scss    text eol=lf
+*.js      text eol=lf
+*.jsx     text eol=lf
+*.mjs     text eol=lf
+*.cjs     text eol=lf
+*.ts      text eol=lf
+*.tsx     text eol=lf
+*.svg     text eol=lf
+*.xml     text eol=lf
+*.graphql text eol=lf
+
+# Unix shell scripts must use LF (shebang / WSL / GitHub Actions).
+*.sh   text eol=lf
+*.bash text eol=lf
+
+# PowerShell: LF is portable across Windows PowerShell 5.1 and PowerShell 7+.
+*.ps1 text eol=lf
+*.psm1 text eol=lf
+*.psd1 text eol=lf
+
+# Classic Windows batch files expect CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# --- Binary assets (no text / EOL conversion) ---
+*.png  -text -diff -merge -eol
+*.jpg  -text -diff -merge -eol
+*.jpeg -text -diff -merge -eol
+*.gif  -text -diff -merge -eol
+*.ico  -text -diff -merge -eol
+*.webp -text -diff -merge -eol
+*.pdf  -text -diff -merge -eol
+*.zip  -text -diff -merge -eol
+*.gz   -text -diff -merge -eol
+*.tgz  -text -diff -merge -eol
+*.whl  -text -diff -merge -eol
+*.woff -text -diff -merge -eol
+*.woff2 -text -diff -merge -eol
+*.ttf  -text -diff -merge -eol
+*.otf  -text -diff -merge -eol
+*.eot  -text -diff -merge -eol
+
+# --- Generated / lockfile hints for Linguist ---
+*.min.js                  linguist-generated=true
+*.min.css                 linguist-generated=true
