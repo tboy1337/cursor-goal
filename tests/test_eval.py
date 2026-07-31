@@ -155,9 +155,9 @@ def test_eval_parse_result_stdin(goal_home: Path) -> None:
     assert (goal_home / "goal-eval-done").is_file()
 
 
-def test_eval_parse_result_at_file(goal_home: Path, tmp_path: Path) -> None:
+def test_eval_parse_result_at_file(goal_home: Path) -> None:
     run_cli("manage", "create", "g")
-    path = tmp_path / "verdict.txt"
+    path = goal_home / "verdict.txt"
     path.write_text("NO: more work\n", encoding="utf-8")
     code, out, _err = run_cli("eval", "parse-result", f"@{path}")
     assert code == 1

@@ -145,6 +145,20 @@ def build_steps(
     steps.append(("pip-audit", [py, "-m", "pip_audit"]))
     steps.append(
         (
+            "version-sync",
+            [py, str(root / "scripts" / "check_version_sync.py")],
+        )
+    )
+    plugin_sync = root / "scripts" / "sync-plugin-tree.py"
+    if plugin_sync.is_file():
+        steps.append(
+            (
+                "plugin-tree-sync",
+                [py, str(plugin_sync), "--check"],
+            )
+        )
+    steps.append(
+        (
             "pytest",
             [
                 py,

@@ -52,6 +52,7 @@ Some Cursor plans only accept Task `model: "fast"`; specific model IDs work when
 | `CURSOR_GOAL_STOP_DRAIN_MS` | Stop-hook stdout drain delay before exit (default ~100, max 2000) |
 | `CURSOR_GOAL_DENY_SHELL` | When `1`/`true`/`yes`/`on`, refuse shell-mode validation (argv only) |
 | `CURSOR_GOAL_LOG_SECRETS` | When set, DEBUG may log full validation commands (default: never) |
+| `CURSOR_GOAL_SKIP_ACL` | When set, skip Windows `icacls` data-dir harden (used by tests) |
 
 ## Harness Commands
 
@@ -64,7 +65,7 @@ Some Cursor plans only accept Task `model: "fast"`; specific model IDs work when
 | `…/run_goal.py eval prompt\|parse-result\|signal\|check` | Evaluator harness (`parse-result --stdin` / `@file` preferred on Windows) |
 | `…/run_goal.py stop` / `stop_hook.py` | Cursor stop hook stdin/stdout JSON |
 
-State: `~/.cursor-goal/data/goal.json` (or `CURSOR_GOAL_DATA`). Treat that directory as **trusted-user state** — equivalent to shell trust. Create/validate refuse a group/world-writable data dir on Unix. `validation_command` may be executed by `eval validate` (prefers argv; falls back to `shell=True` / `COMSPEC` on Windows for metacharacters unless `CURSOR_GOAL_DENY_SHELL` is set). Unix installers attempt `0600` on state files; Windows ACL hardening is not applied.
+State: `~/.cursor-goal/data/goal.json` (or `CURSOR_GOAL_DATA`). Treat that directory as **trusted-user state** — equivalent to shell trust. Create/validate refuse a group/world-writable data dir on Unix. `validation_command` may be executed by `eval validate` (prefers argv; falls back to `shell=True` / `COMSPEC` on Windows for metacharacters unless `CURSOR_GOAL_DENY_SHELL` is set). Unix uses `0700` on the data dir and `0600` on state files. Windows best-effort `icacls` grants the current user full control on the data dir (skip with `CURSOR_GOAL_SKIP_ACL=1`). Corrupt `goal.json` is quarantined to `goal.json.corrupt.<UTC>`. Exclusive `goal.lock` times out after ~10s on both Unix and Windows.
 
 ## Subagent Invocation Pattern
 
@@ -86,9 +87,11 @@ On Windows, pipe the response into `eval parse-result --stdin` (or use `@file`) 
 
 - `~/.cursor-goal/data` and `validation_command` are trusted-user local state. If an attacker can write `goal.json`, they can run commands as you.
 - Prefer `--test "..."` / simple argv-safe commands; compound shell snippets force `shell=True` (cmd.exe on Windows via `COMSPEC`, not PowerShell). Set `CURSOR_GOAL_DENY_SHELL=1` to refuse shell mode.
+- `eval parse-result @file` only accepts paths under the goal data directory or the current working directory.
 - Eval signal is a protocol guard bound to the goal content hash with `verdict: YES` — not cryptographic attestation. `manage done --force` and `eval signal --force` exist for recovery and are logged.
 - Stop hook does **not** run validation (avoids 30s hook timeouts).
 - Turn budget is capped at 500; stop-hook drain is capped at 2000ms.
+- See [SECURITY.md](../SECURITY.md) for the full threat model and reporting process.
 
 ## Design notes
 

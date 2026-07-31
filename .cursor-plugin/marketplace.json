@@ -1,0 +1,26 @@
+{
+  "name": "cursor-goal-marketplace",
+  "owner": {
+    "name": "tboy1337"
+  },
+  "metadata": {
+    "description": "cursor-goal autonomous /goal loop plugin",
+    "version": "1.2.0",
+    "pluginRoot": "plugins"
+  },
+  "plugins": [
+    {
+      "name": "cursor-goal",
+      "source": "cursor-goal",
+      "description": "Autonomous /goal loop for Cursor IDE (multi-model maker!=checker + stop-hook safety net)",
+      "version": "1.2.0",
+      "license": "AGPL-3.0-only",
+      "keywords": [
+        "goal",
+        "agent",
+        "automation",
+        "cursor"
+      ]
+    }
+  ]
+}

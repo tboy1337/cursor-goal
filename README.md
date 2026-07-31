@@ -25,6 +25,14 @@ No `jq` dependency.
 
 ## Install
 
+Three supported paths:
+
+| Path | Who | How |
+|------|-----|-----|
+| **Clone + installer** | Individuals | Full clone or GitHub Release archive → `install-goal.sh` / `install-goal.ps1` |
+| **Tagged release** | Individuals | `git clone --branch v1.2.0 …` then installer (see [docs/install.md](docs/install.md)) |
+| **Teams marketplace** | Teams/Enterprise | Import this repo in Cursor Dashboard → Plugins (see `.cursor-plugin/marketplace.json`) |
+
 **Agent install (explicit steps):**
 
 1. Clone `https://github.com/tboy1337/cursor-goal` (or download a tagged source archive from GitHub Releases).
@@ -61,7 +69,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-goal.ps1
 
 Uninstall: `./scripts/uninstall-goal.sh` or `.\scripts\uninstall-goal.ps1` (add `--purge-data` / `-PurgeData` to remove `~/.cursor-goal`).
 
-`pip install -e ".[dev]"` installs the `cursor-goal` CLI for development only — it does **not** register the Cursor skill, agents, or stop hook. Always run the installer for Cursor integration.
+`pip install -e ".[dev]"` installs the `cursor-goal` CLI for **development only** — it does **not** register the Cursor skill, agents, or stop hook. Always run the installer (or Teams marketplace import) for Cursor integration.
+
+Security: see [SECURITY.md](SECURITY.md). Platform notes: [docs/platform-compatibility.md](docs/platform-compatibility.md).
 
 Note: an unrelated npm package is also named `cursor-goal`; this project is the Python/AGPL harness at `tboy1337/cursor-goal`.
 

@@ -26,6 +26,9 @@ jobs:
         run: pip install -e ".[dev]"
       - name: Version sync
         run: python scripts/check_version_sync.py
+      - name: Plugin tree sync
+        if: matrix.python-version == '3.12'
+        run: python scripts/sync-plugin-tree.py --check
       - name: Format (isort/black/pyproject-fmt)
         run: |
           isort --check-only --diff src tests scripts
@@ -64,6 +67,38 @@ jobs:
         run: pip install -e .
       - name: macOS install smoke
         run: bash scripts/install-smoke.sh
+
+  windows-harness:
+    name: Windows pytest
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Pytest
+        run: pytest tests -q --tb=short
+      - name: Plugin tree sync
+        run: python scripts/sync-plugin-tree.py --check
+
+  macos-harness:
+    name: macOS pytest
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Pytest
+        run: pytest tests -q --tb=short
 
   powershell:
     name: PowerShell scripts

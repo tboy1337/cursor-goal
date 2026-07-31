@@ -358,11 +358,12 @@ def test_active_string_false_is_corrupt(goal_home: Path) -> None:
         ),
         encoding="utf-8",
     )
-    assert load_goal() is None
     from cursor_goal.state import CorruptGoalError
 
     with pytest.raises(CorruptGoalError):
         load_goal(raise_corrupt=True)
+    assert load_goal() is None
+    assert list(goal_home.glob("goal.json.corrupt.*"))
 
 
 def test_update_goal_fields_rejects_bad_types(goal_home: Path) -> None:

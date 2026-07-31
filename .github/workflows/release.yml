@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install build tools
+        run: |
+          pip install -e ".[dev]"
+          pip install build
+
+      - name: Version sync
+        run: python scripts/check_version_sync.py
+
+      - name: Sync plugin tree
+        run: python scripts/sync-plugin-tree.py --check
+
+      - name: Tag matches package version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          PKG="$(python -c 'from cursor_goal import __version__; print(__version__)')"
+          expect="v${PKG}"
+          if [ "$TAG" != "$expect" ]; then
+            echo "Tag $TAG does not match package version $expect" >&2
+            exit 1
+          fi
+          echo "Tag OK: $TAG"
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          NOTES="$(printf '%s\n' \
+            "## cursor-goal ${TAG}" \
+            "" \
+            "Install from this release:" \
+            "1. Download the source archive or clone \`--branch ${TAG}\`" \
+            "2. Run \`./scripts/install-goal.sh\` or \`scripts/install-goal.ps1\`" \
+            "" \
+            "See [docs/install.md](https://github.com/tboy1337/cursor-goal/blob/${TAG}/docs/install.md)." \
+          )"
+          gh release create "$TAG" \
+            --title "cursor-goal ${TAG}" \
+            --notes "$NOTES" \
+            dist/*

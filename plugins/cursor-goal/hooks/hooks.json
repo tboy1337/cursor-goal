@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "hooks": {
+    "stop": [
+      {
+        "command": "python3 -u ${CURSOR_PLUGIN_ROOT}/skills/goal/scripts/stop_hook.py",
+        "loop_limit": null,
+        "timeout": 30,
+        "_cursor_goal": "cursor_goal_stop_hook"
+      }
+    ]
+  }
+}

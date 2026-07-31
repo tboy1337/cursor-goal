@@ -1,30 +1,137 @@
 #!/usr/bin/env python3
-"""Fail if pyproject.toml version != cursor_goal.__version__."""
+"""Fail if package / docs / plugin versions are out of sync.
+
+Checks:
+  - pyproject.toml ``version`` == ``cursor_goal.__version__``
+  - docs/install.md tagged clone pin ``vX.Y.Z`` matches (when present)
+  - plugins/cursor-goal/.cursor-plugin/plugin.json ``version`` matches (when present)
+  - .cursor-plugin/marketplace.json plugin entry version matches (when present)
+"""
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
 
 
+def _read_pyproject_version(root: Path) -> str:
+    text = (root / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+    if match is None:
+        raise ValueError("Could not parse version from pyproject.toml")
+    return match.group(1)
+
+
+def _read_init_version(root: Path) -> str:
+    text = (root / "src" / "cursor_goal" / "__init__.py").read_text(encoding="utf-8")
+    match = re.search(r'__version__\s*=\s*"([^"]+)"', text)
+    if match is None:
+        raise ValueError("Could not parse __version__ from __init__.py")
+    return match.group(1)
+
+
+def _read_docs_pin(root: Path) -> str | None:
+    path = root / "docs" / "install.md"
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8")
+    matches = re.findall(r"git clone --branch v(\d+\.\d+\.\d+)", text)
+    if not matches:
+        return None
+    # All pins in the doc must agree.
+    unique = set(matches)
+    if len(unique) != 1:
+        raise ValueError(f"Conflicting docs version pins: {sorted(unique)}")
+    return next(iter(unique))
+
+
+def _read_plugin_version(root: Path) -> str | None:
+    path = root / "plugins" / "cursor-goal" / ".cursor-plugin" / "plugin.json"
+    if not path.is_file():
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    version = data.get("version")
+    if not isinstance(version, str) or not version:
+        raise ValueError(f"Missing version in {path}")
+    return version
+
+
+def _read_marketplace_version(root: Path) -> str | None:
+    path = root / ".cursor-plugin" / "marketplace.json"
+    if not path.is_file():
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    plugins = data.get("plugins")
+    if not isinstance(plugins, list) or not plugins:
+        raise ValueError(f"No plugins listed in {path}")
+    versions: set[str] = set()
+    for entry in plugins:
+        if not isinstance(entry, dict):
+            continue
+        ver = entry.get("version")
+        if isinstance(ver, str) and ver:
+            versions.add(ver)
+    if not versions:
+        return None
+    if len(versions) != 1:
+        raise ValueError(f"Conflicting marketplace versions: {sorted(versions)}")
+    return next(iter(versions))
+
+
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
-    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
-    init = (root / "src" / "cursor_goal" / "__init__.py").read_text(encoding="utf-8")
-    match_proj = re.search(r'^version\s*=\s*"([^"]+)"', pyproject, re.MULTILINE)
-    match_init = re.search(r'__version__\s*=\s*"([^"]+)"', init)
-    if match_proj is None or match_init is None:
-        print("Could not parse versions", file=sys.stderr)
+    errors: list[str] = []
+    try:
+        proj = _read_pyproject_version(root)
+        init = _read_init_version(root)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
         return 1
-    if match_proj.group(1) != match_init.group(1):
-        print(
-            f"version mismatch: pyproject={match_proj.group(1)} "
-            f"init={match_init.group(1)}",
-            file=sys.stderr,
-        )
+
+    if proj != init:
+        errors.append(f"pyproject={proj} init={init}")
+
+    try:
+        docs = _read_docs_pin(root)
+    except ValueError as exc:
+        errors.append(str(exc))
+        docs = None
+    if docs is not None and docs != proj:
+        errors.append(f"docs pin v{docs} != package {proj}")
+
+    try:
+        plugin = _read_plugin_version(root)
+    except ValueError as exc:
+        errors.append(str(exc))
+        plugin = None
+    if plugin is not None and plugin != proj:
+        errors.append(f"plugin.json={plugin} != package {proj}")
+
+    try:
+        market = _read_marketplace_version(root)
+    except ValueError as exc:
+        errors.append(str(exc))
+        market = None
+    if market is not None and market != proj:
+        errors.append(f"marketplace={market} != package {proj}")
+
+    if errors:
+        print("version mismatch:", file=sys.stderr)
+        for item in errors:
+            print(f"  - {item}", file=sys.stderr)
         return 1
-    print(f"version OK {match_proj.group(1)}")
+
+    extras = []
+    if docs is not None:
+        extras.append(f"docs=v{docs}")
+    if plugin is not None:
+        extras.append(f"plugin={plugin}")
+    if market is not None:
+        extras.append(f"marketplace={market}")
+    suffix = f" ({', '.join(extras)})" if extras else ""
+    print(f"version OK {proj}{suffix}")
     return 0
 
 

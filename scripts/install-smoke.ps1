@@ -31,6 +31,19 @@ try {
     if (-not (Test-Path $runGoal)) { throw "Missing run_goal.py" }
     if (-not (Test-Path $stopCmd)) { throw "Missing stop_hook.cmd" }
     if (-not (Test-Path $hooksFile)) { throw "Missing hooks.json" }
+    $versionFile = Join-Path $installDir "VERSION"
+    if (-not (Test-Path $versionFile)) { throw "Missing VERSION stamp" }
+    $agentsDir = Join-Path $tmpHome ".cursor\agents"
+    if (-not (Test-Path (Join-Path $agentsDir "goalKeeper.md"))) {
+        throw "Missing goalKeeper.md"
+    }
+    if (-not (Test-Path (Join-Path $agentsDir "goal-evaluator.md"))) {
+        throw "Missing goal-evaluator.md"
+    }
+    $keeper = Get-Content -LiteralPath (Join-Path $agentsDir "goalKeeper.md") -Raw
+    if ($keeper -notmatch "goalKeeper|Autonomous|goal") {
+        throw "goalKeeper.md content looks empty/wrong"
+    }
 
     $hooks = Get-Content -LiteralPath $hooksFile -Raw -Encoding UTF8 | ConvertFrom-Json
     $entry = @($hooks.hooks.stop)[0]
@@ -45,6 +58,7 @@ try {
         throw "Hook command should reference stop_hook.cmd: $cmd"
     }
     Write-Host "[install-smoke] Hook command: $cmd"
+    Write-Host ("[install-smoke] VERSION={0}" -f ((Get-Content -LiteralPath $versionFile -Raw).Trim()))
 
     $py = Find-GoalPython
     if (-not $py) { throw "Python 3.12+ required for smoke verify" }
@@ -53,6 +67,21 @@ try {
     if ($statusOut -notmatch "No active goal") {
         throw "Unexpected manage status output: $statusOut"
     }
+
+    Write-Host "[install-smoke] Running eval spawn-config..."
+    $spawnOut = & $py.Exe @($py.PrefixArgs) "-u" $runGoal "eval" "spawn-config" 2>&1 | Out-String
+    $spawn = $spawnOut.Trim()
+    $spawnObj = $spawn | ConvertFrom-Json
+    if ($spawnObj.subagent_type -ne "goal-evaluator") {
+        throw "Unexpected spawn-config: $spawn"
+    }
+    if ($spawnObj.readonly -ne $true) {
+        throw "spawn-config readonly should be true: $spawn"
+    }
+    if (-not $spawnObj.model) {
+        throw "spawn-config missing model: $spawn"
+    }
+    Write-Host "[install-smoke] spawn-config: $spawn"
 
     Write-Host "[install-smoke] Uninstalling..."
     $env:CURSOR_GOAL_SKIP_MAIN = "1"

@@ -20,6 +20,8 @@ def goal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     # Keep stop-hook tests fast; production default remains 100ms drain.
     monkeypatch.setenv("CURSOR_GOAL_STOP_DRAIN_MS", "0")
+    # Avoid icacls on ephemeral pytest dirs (can race / lock out writers).
+    monkeypatch.setenv("CURSOR_GOAL_SKIP_ACL", "1")
     (tmp_path / "home").mkdir()
     return data
 

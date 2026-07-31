@@ -104,6 +104,14 @@ install_skill_files() {
     log_error "SKILL.md not found under $SOURCE_SKILL"
     exit 1
   fi
+  if [ ! -f "$SOURCE_AGENT" ]; then
+    log_error "Required agent not found: $SOURCE_AGENT"
+    exit 1
+  fi
+  if [ ! -f "$SOURCE_EVALUATOR" ]; then
+    log_error "Required agent not found: $SOURCE_EVALUATOR"
+    exit 1
+  fi
 
   mkdir -p "$INSTALL_DIR/scripts" "$AGENTS_DIR" "$DATA_DIR"
 
@@ -137,14 +145,10 @@ PY
         "${INSTALL_DIR}/goal-eval.sh" \
         "${INSTALL_DIR}/goal-parse.sh"
 
-  if [ -f "$SOURCE_AGENT" ]; then
-    cp "$SOURCE_AGENT" "${AGENTS_DIR}/goalKeeper.md"
-    log_info "Installed: ${AGENTS_DIR}/goalKeeper.md"
-  fi
-  if [ -f "$SOURCE_EVALUATOR" ]; then
-    cp "$SOURCE_EVALUATOR" "${AGENTS_DIR}/goal-evaluator.md"
-    log_info "Installed: ${AGENTS_DIR}/goal-evaluator.md"
-  fi
+  cp "$SOURCE_AGENT" "${AGENTS_DIR}/goalKeeper.md"
+  log_info "Installed: ${AGENTS_DIR}/goalKeeper.md"
+  cp "$SOURCE_EVALUATOR" "${AGENTS_DIR}/goal-evaluator.md"
+  log_info "Installed: ${AGENTS_DIR}/goal-evaluator.md"
 
   log_info "Installed package + scripts under $INSTALL_DIR"
 }
@@ -160,12 +164,12 @@ configure_stop_hook() {
 
   local CMD
   CMD="$(hook_command)"
+  local HOOKS_BACKUP=""
 
   if [ -f "$CURSOR_HOOKS_FILE" ]; then
-    local hooks_bak
-    hooks_bak="${CURSOR_HOOKS_FILE}.bak.$(date -u +%Y%m%dT%H%M%SZ)"
-    cp "$CURSOR_HOOKS_FILE" "$hooks_bak"
-    log_info "Backed up existing hooks.json to $hooks_bak"
+    HOOKS_BACKUP="${CURSOR_HOOKS_FILE}.bak.$(date -u +%Y%m%dT%H%M%SZ)"
+    cp "$CURSOR_HOOKS_FILE" "$HOOKS_BACKUP"
+    log_info "Backed up existing hooks.json to $HOOKS_BACKUP"
   fi
 
   if ! "$PYTHON_BIN" - "$INSTALL_DIR" "$CURSOR_HOOKS_FILE" "$CMD" <<'PY'
@@ -180,6 +184,11 @@ print("merged")
 PY
   then
     log_error "Failed to merge stop hook into hooks.json."
+    if [ -n "$HOOKS_BACKUP" ] && [ -f "$HOOKS_BACKUP" ]; then
+      log_warn "Restoring hooks.json from $HOOKS_BACKUP"
+      cp "$HOOKS_BACKUP" "$CURSOR_HOOKS_FILE"
+      log_info "Restored previous hooks.json."
+    fi
     if [ -n "$SKILL_BACKUP" ] && [ -d "$SKILL_BACKUP" ]; then
       log_warn "Restoring skill files from $SKILL_BACKUP"
       rm -rf "$INSTALL_DIR"

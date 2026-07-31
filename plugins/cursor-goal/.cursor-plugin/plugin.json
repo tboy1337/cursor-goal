@@ -1,0 +1,20 @@
+{
+  "name": "cursor-goal",
+  "version": "1.2.0",
+  "description": "Autonomous /goal loop for Cursor IDE (multi-model maker!=checker + stop-hook safety net)",
+  "author": {
+    "name": "tboy1337"
+  },
+  "homepage": "https://github.com/tboy1337/cursor-goal",
+  "repository": "https://github.com/tboy1337/cursor-goal",
+  "license": "AGPL-3.0-only",
+  "keywords": [
+    "goal",
+    "agent",
+    "automation",
+    "cursor"
+  ],
+  "skills": "./skills/",
+  "agents": "./agents/",
+  "hooks": "./hooks/hooks.json"
+}

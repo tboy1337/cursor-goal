@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
+from cursor_goal import __version__
 from cursor_goal.hooks_config import (
     HOOK_MARKER,
     build_stop_entry,
@@ -159,3 +163,42 @@ def test_read_hooks_file_accepts_bom(tmp_path: Path) -> None:
     path.write_bytes(b'\xef\xbb\xbf{"version": 1, "hooks": {"stop": []}}\n')
     data = read_hooks_file(path)
     assert data["version"] == 1
+
+
+def test_plugin_manifests_and_hooks_contract() -> None:
+    root = Path(__file__).resolve().parents[1]
+    plugin = root / "plugins" / "cursor-goal"
+    market = root / ".cursor-plugin" / "marketplace.json"
+    manifest = plugin / ".cursor-plugin" / "plugin.json"
+    hooks = plugin / "hooks" / "hooks.json"
+    assert market.is_file()
+    assert manifest.is_file()
+    assert hooks.is_file()
+
+    plugin_data = json.loads(manifest.read_text(encoding="utf-8"))
+    assert plugin_data["name"] == "cursor-goal"
+    assert plugin_data["version"] == __version__
+    assert plugin_data["hooks"] == "./hooks/hooks.json"
+    market_data = json.loads(market.read_text(encoding="utf-8"))
+    assert market_data["plugins"][0]["source"] == "cursor-goal"
+    assert market_data["plugins"][0]["version"] == __version__
+    hooks_data = json.loads(hooks.read_text(encoding="utf-8"))
+    stop = hooks_data["hooks"]["stop"][0]
+    assert "${CURSOR_PLUGIN_ROOT}" in stop["command"]
+    assert stop["loop_limit"] is None
+    assert stop["_cursor_goal"] == HOOK_MARKER
+    assert (plugin / "skills" / "goal" / "cursor_goal" / "__init__.py").is_file()
+    assert (plugin / "agents" / "goalKeeper.md").is_file()
+    assert (plugin / "skills" / "goal" / "scripts" / "stop_hook.cmd").is_file()
+
+
+def test_sync_plugin_tree_check() -> None:
+    root = Path(__file__).resolve().parents[1]
+    completed = subprocess.run(
+        [sys.executable, str(root / "scripts" / "sync-plugin-tree.py"), "--check"],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr

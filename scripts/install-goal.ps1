@@ -259,6 +259,18 @@ function Invoke-GoalInstall {
         Write-GoalErr "Run from a full cursor-goal clone or release tarball (not a lone download of this script)."
         return 1
     }
+    if (-not (Test-Path (Join-Path $sourceSkill "SKILL.md"))) {
+        Write-GoalErr "SKILL.md not found under $sourceSkill"
+        return 1
+    }
+    if (-not (Test-Path $sourceAgent)) {
+        Write-GoalErr "Required agent not found: $sourceAgent"
+        return 1
+    }
+    if (-not (Test-Path $sourceEvaluator)) {
+        Write-GoalErr "Required agent not found: $sourceEvaluator"
+        return 1
+    }
 
     New-Item -ItemType Directory -Force -Path (Join-Path $installDir "scripts") | Out-Null
     New-Item -ItemType Directory -Force -Path $agentsDir | Out-Null
@@ -311,17 +323,14 @@ print(__version__)
         if (Test-Path $legacy) { Remove-Item -Force $legacy }
     }
 
-    if (Test-Path $sourceAgent) {
-        Copy-Item $sourceAgent (Join-Path $agentsDir "goalKeeper.md") -Force
-        Write-GoalInfo "Installed: $(Join-Path $agentsDir 'goalKeeper.md')"
-    }
-    if (Test-Path $sourceEvaluator) {
-        Copy-Item $sourceEvaluator (Join-Path $agentsDir "goal-evaluator.md") -Force
-        Write-GoalInfo "Installed: $(Join-Path $agentsDir 'goal-evaluator.md')"
-    }
+    Copy-Item $sourceAgent (Join-Path $agentsDir "goalKeeper.md") -Force
+    Write-GoalInfo "Installed: $(Join-Path $agentsDir 'goalKeeper.md')"
+    Copy-Item $sourceEvaluator (Join-Path $agentsDir "goal-evaluator.md") -Force
+    Write-GoalInfo "Installed: $(Join-Path $agentsDir 'goal-evaluator.md')"
 
     New-Item -ItemType Directory -Force -Path (Join-Path $HomeDir ".cursor") | Out-Null
 
+    $hooksBak = $null
     if (Test-Path $hooksFile) {
         $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
         $hooksBak = "$hooksFile.bak.$stamp"
@@ -332,6 +341,11 @@ print(__version__)
     $mergeCode = Invoke-GoalHooksConfigMerge -Python $Python -InstallDir $installDir -HooksFile $hooksFile -HookCommand $hookCommand
     if ($mergeCode -ne 0) {
         Write-GoalErr "Failed to merge stop hook via hooks_config (exit $mergeCode)."
+        if ($hooksBak -and (Test-Path -LiteralPath $hooksBak)) {
+            Write-GoalWarn "Restoring hooks.json from $hooksBak"
+            Copy-Item -LiteralPath $hooksBak -Destination $hooksFile -Force
+            Write-GoalInfo "Restored previous hooks.json."
+        }
         if ($skillBak -and (Test-Path -LiteralPath $skillBak)) {
             Write-GoalWarn "Restoring skill files from $skillBak"
             if (Test-Path -LiteralPath $installDir) {
@@ -357,6 +371,7 @@ print(__version__)
     Write-Host ("  {0} -u {1} manage status" -f $Python.Exe, (Join-Path $installDir "scripts\run_goal.py"))
     Write-GoalInfo "Windows stop hook uses stop_hook.cmd + stdout drain delay (Cursor capture race mitigation)."
     Write-GoalWarn "If followups still drop, keep evaluating in-turn; set CURSOR_GOAL_LOG=DEBUG to write last-stop-response.json."
+    Write-GoalWarn "Re-run the installer after moving/upgrading Python (stop_hook.cmd bakes an absolute interpreter path)."
     Write-Host ""
     return 0
 }
