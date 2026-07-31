@@ -129,6 +129,16 @@ def test_try_split_argv_windows_percent(monkeypatch: pytest.MonkeyPatch) -> None
     assert try_split_argv("echo hi^there") is None
 
 
+def test_try_split_argv_windows_strips_quotes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """posix=False keeps quote chars; Windows path must strip them."""
+    monkeypatch.setattr(os, "name", "nt")
+    assert try_split_argv('pytest -q "foo bar"') == ["pytest", "-q", "foo bar"]
+    assert try_split_argv("pytest -q 'single'") == ["pytest", "-q", "single"]
+    assert try_split_argv("pytest -q") == ["pytest", "-q"]
+
+
 def test_redact_command_hides_secrets() -> None:
     assert "<redacted>" in redact_command("run --token=supersecret")
     assert redact_command("x" * 250).endswith("…")

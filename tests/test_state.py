@@ -177,6 +177,22 @@ def test_chmod_private_best_effort(
     assert calls
 
 
+def test_chmod_private_noop_on_windows(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import cursor_goal.state as state_mod
+
+    calls: list[object] = []
+
+    def fake_chmod(*_a: object, **_k: object) -> None:
+        calls.append(True)
+
+    monkeypatch.setattr(state_mod.os, "name", "nt")
+    monkeypatch.setattr(state_mod.os, "chmod", fake_chmod)
+    state_mod._chmod_private(goal_home / "goal.json")
+    assert not calls
+
+
 def test_warn_if_world_writable(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -188,6 +204,70 @@ def test_warn_if_world_writable(
     monkeypatch.setattr(state_mod.os, "name", "posix")
     monkeypatch.setattr(Path, "stat", lambda self: FakeStat())
     state_mod._warn_if_world_writable(goal_home)
+
+
+def test_warn_if_world_writable_noop_on_windows(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import cursor_goal.state as state_mod
+
+    monkeypatch.setattr(state_mod.os, "name", "nt")
+    state_mod._warn_if_world_writable(goal_home)
+
+
+def test_warn_if_world_writable_stat_oserror(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import cursor_goal.state as state_mod
+
+    def boom_stat(self: Path) -> object:
+        raise OSError("stat failed")
+
+    monkeypatch.setattr(state_mod.os, "name", "posix")
+    monkeypatch.setattr(Path, "stat", boom_stat)
+    state_mod._warn_if_world_writable(goal_home)
+
+
+def test_lock_acquire_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    import cursor_goal.state as state_mod
+
+    calls: list[tuple[object, ...]] = []
+
+    class Handle:
+        def __init__(self) -> None:
+            self._pos = 0
+            self._size = 0
+
+        def fileno(self) -> int:
+            return 3
+
+        def seek(self, offset: int, whence: int = 0) -> None:
+            if whence == os.SEEK_END:
+                self._pos = self._size
+            else:
+                self._pos = offset
+
+        def tell(self) -> int:
+            return self._pos
+
+        def write(self, data: bytes) -> int:
+            self._size += len(data)
+            self._pos += len(data)
+            return len(data)
+
+        def flush(self) -> None:
+            return None
+
+    def fake_locking(fd: int, mode: int, nbytes: int) -> None:
+        calls.append((fd, mode, nbytes))
+
+    fake_msvcrt = type(sys)("msvcrt")
+    fake_msvcrt.locking = fake_locking  # type: ignore[attr-defined]
+    fake_msvcrt.LK_LOCK = 1  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
+    monkeypatch.setattr(sys, "platform", "win32")
+    state_mod._lock_acquire(Handle())
+    assert calls == [(3, 1, 1)]
 
 
 def test_set_eval_signal_rejects_non_yes(goal_home: Path) -> None:
