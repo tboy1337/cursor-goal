@@ -61,3 +61,4 @@ Desktop.ini
 
 # --- Harness ephemeral run output ---
 testing/results/run-*/
+testing/subagent-tests/results/run-*/
