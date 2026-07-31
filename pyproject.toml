@@ -30,6 +30,7 @@ optional-dependencies.dev = [
   "pyproject-fmt",
   "pytest",
   "pytest-asyncio",
+  "pytest-benchmark",
   "pytest-cov",
   "pytest-mock",
   "pytest-timeout",
