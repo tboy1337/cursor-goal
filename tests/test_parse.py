@@ -10,6 +10,18 @@ from cursor_goal.parse import parse_raw
 from tests.conftest import run_cli
 
 
+def test_parse_cli_joins_unquoted_argv() -> None:
+    code, out, _err = run_cli("parse", "fix", "the", "login", "bug")
+    assert code == 0
+    data = json.loads(out.strip())
+    assert data["condition"] == "fix the login bug"
+
+
+def test_parse_rejects_budget_over_max() -> None:
+    with pytest.raises(ValueError, match="500"):
+        parse_raw("ship it --budget 9999")
+
+
 def test_parse_simple_condition() -> None:
     result = parse_raw("fix the login bug")
     assert result["action"] == "create"

@@ -47,7 +47,19 @@ Override data directory with `CURSOR_GOAL_DATA` (resolved absolute path).
 
 Override evaluator model with `CURSOR_GOAL_EVAL_MODEL` (default `fast`). See [platform-compatibility.md](platform-compatibility.md).
 
-On upgrade, a previous skill tree is copied to `~/.cursor/skills/goal.bak.<UTC>` before replace. If hook merge fails after files are copied, restore from that backup manually.
+On upgrade, a previous skill tree is copied to `~/.cursor/skills/goal.bak.<UTC>` before replace. If hook merge fails after files are copied, the installer restores that backup automatically when one exists.
+
+`pip install -e .` provides the `cursor-goal` console script for contributors; it does **not** install the Cursor skill, agents, or hooks. Use the scripts above for Cursor.
+
+### Install from a tagged release
+
+```bash
+git clone --branch v1.2.0 https://github.com/tboy1337/cursor-goal.git
+cd cursor-goal
+./scripts/install-goal.sh   # or install-goal.ps1 on Windows
+```
+
+Or download the source archive from the GitHub Release for that tag and run the same installer from the extracted tree.
 
 ## Verify
 
@@ -78,8 +90,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\uninstall-goal.ps1
 | Platform | Install notes |
 |----------|----------------|
 | Cursor IDE (Unix/macOS) | Fully supported |
-| Cursor IDE (Windows) | Installer writes `stop_hook.cmd` (absolute Python baked in) plus a ~100ms stdout drain delay to mitigate Cursor’s capture race. Prefer in-turn evaluation; set `CURSOR_GOAL_LOG=DEBUG` to write `last-stop-response.json` if diagnosing followups. Unix-style `chmod` privacy on state files is N/A on Windows. |
-| WSL | Use `./scripts/install-goal.sh` inside WSL; prefer WSL Cursor for reliable stop followups |
+| Cursor IDE (Windows) | Use `install-goal.ps1` only. Writes `stop_hook.cmd` (absolute Python baked in) plus a ~100ms stdout drain delay to mitigate Cursor’s capture race. Prefer in-turn evaluation; set `CURSOR_GOAL_LOG=DEBUG` to write `last-stop-response.json` if diagnosing followups. `install-goal.sh` from Git Bash is refused. Unix-style `chmod` privacy on state files is N/A on Windows. |
+| WSL | Use `./scripts/install-goal.sh` inside WSL with a WSL home for WSL Cursor. Do not point `$HOME` at `/mnt/c/...` for native Windows Cursor — use `install-goal.ps1` instead. |
 
 ## Contributor install
 

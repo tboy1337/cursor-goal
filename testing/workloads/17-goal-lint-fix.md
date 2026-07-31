@@ -28,7 +28,7 @@ Fix all lint violations in testing/src/utils.ts.
 
 ## Verification Patterns
 
-- `goal-manage.sh create` with natural language condition
+- `run_goal.py manage create` with natural language condition
 - `eslint src/` or `eslint testing/src/` executed in transcript
 - Lint errors identified and fixed
 - Subagent "Evaluate goal completion" invoked

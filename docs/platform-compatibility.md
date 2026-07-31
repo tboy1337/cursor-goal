@@ -49,7 +49,9 @@ Some Cursor plans only accept Task `model: "fast"`; specific model IDs work when
 | `CURSOR_GOAL_DATA` | Absolute override for `~/.cursor-goal/data` |
 | `CURSOR_GOAL_EVAL_MODEL` | Evaluator model slug for `eval spawn-config` (default `fast`) |
 | `CURSOR_GOAL_LOG` | Log level (`WARNING` default; `DEBUG` writes `last-stop-response.json`) |
-| `CURSOR_GOAL_STOP_DRAIN_MS` | Stop-hook stdout drain delay before exit (default ~100) |
+| `CURSOR_GOAL_STOP_DRAIN_MS` | Stop-hook stdout drain delay before exit (default ~100, max 2000) |
+| `CURSOR_GOAL_DENY_SHELL` | When `1`/`true`/`yes`/`on`, refuse shell-mode validation (argv only) |
+| `CURSOR_GOAL_LOG_SECRETS` | When set, DEBUG may log full validation commands (default: never) |
 
 ## Harness Commands
 
@@ -59,10 +61,10 @@ Some Cursor plans only accept Task `model: "fast"`; specific model IDs work when
 | `…/run_goal.py manage …` | State lifecycle |
 | `…/run_goal.py eval validate` | Run `validation_command`; persist output |
 | `…/run_goal.py eval spawn-config` | JSON Task params for the evaluator |
-| `…/run_goal.py eval prompt\|parse-result\|signal\|check` | Evaluator harness |
+| `…/run_goal.py eval prompt\|parse-result\|signal\|check` | Evaluator harness (`parse-result --stdin` / `@file` preferred on Windows) |
 | `…/run_goal.py stop` / `stop_hook.py` | Cursor stop hook stdin/stdout JSON |
 
-State: `~/.cursor-goal/data/goal.json` (or `CURSOR_GOAL_DATA`). Treat that directory as **trusted-user state** — equivalent to shell trust. `validation_command` may be executed by `eval validate` (prefers argv; falls back to `shell=True` for metacharacters). Unix installers attempt `0600` on state files; Windows ACL hardening is not applied.
+State: `~/.cursor-goal/data/goal.json` (or `CURSOR_GOAL_DATA`). Treat that directory as **trusted-user state** — equivalent to shell trust. Create/validate refuse a group/world-writable data dir on Unix. `validation_command` may be executed by `eval validate` (prefers argv; falls back to `shell=True` / `COMSPEC` on Windows for metacharacters unless `CURSOR_GOAL_DENY_SHELL` is set). Unix installers attempt `0600` on state files; Windows ACL hardening is not applied.
 
 ## Subagent Invocation Pattern
 
@@ -72,16 +74,21 @@ EVAL_PROMPT=$(python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval prompt -
 SPAWN=$(python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval spawn-config)
 # Cursor Task: subagent_type / model / readonly from SPAWN JSON + prompt=$EVAL_PROMPT
 # Never use generalPurpose for evaluation.
-python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval parse-result "<response>"
+python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval parse-result --stdin <<'EOF'
+<subagent response>
+EOF
 # YES auto-records a YES-bound signal → manage done
 ```
+
+On Windows, pipe the response into `eval parse-result --stdin` (or use `@file`) — do not put long evaluator text on the command line.
 
 ## Security notes
 
 - `~/.cursor-goal/data` and `validation_command` are trusted-user local state. If an attacker can write `goal.json`, they can run commands as you.
-- Prefer `--test "..."` / simple argv-safe commands; compound shell snippets force `shell=True`.
+- Prefer `--test "..."` / simple argv-safe commands; compound shell snippets force `shell=True` (cmd.exe on Windows via `COMSPEC`, not PowerShell). Set `CURSOR_GOAL_DENY_SHELL=1` to refuse shell mode.
 - Eval signal is a protocol guard bound to the goal content hash with `verdict: YES` — not cryptographic attestation. `manage done --force` and `eval signal --force` exist for recovery and are logged.
 - Stop hook does **not** run validation (avoids 30s hook timeouts).
+- Turn budget is capped at 500; stop-hook drain is capped at 2000ms.
 
 ## Design notes
 

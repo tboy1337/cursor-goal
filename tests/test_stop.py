@@ -197,6 +197,13 @@ def test_drain_ms_invalid_falls_back(
     assert stop_mod._drain_ms() == stop_mod.DEFAULT_DRAIN_MS
 
 
+def test_drain_ms_clamps_huge_values(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CURSOR_GOAL_STOP_DRAIN_MS", "99999")
+    assert stop_mod._drain_ms() == stop_mod.MAX_DRAIN_MS
+
+
 def test_debug_writes_last_stop_response(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

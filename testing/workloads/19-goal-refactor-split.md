@@ -29,7 +29,7 @@ Break the monolith into separate modules by responsibility (users, email, loggin
 
 ## Verification Patterns
 
-- `goal-manage.sh create` with natural language condition
+- `run_goal.py manage create` with natural language condition
 - Multiple new .py files created from monolith
 - Each new file under 50 lines
 - Subagent "Evaluate goal completion" invoked

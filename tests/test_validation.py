@@ -141,4 +141,23 @@ def test_try_split_argv_windows_strips_quotes(
 
 def test_redact_command_hides_secrets() -> None:
     assert "<redacted>" in redact_command("run --token=supersecret")
+    assert "<redacted>" in redact_command("run --token supersecret")
+    assert "<redacted>" in redact_command("Authorization: Bearer abc.def")
     assert redact_command("x" * 250).endswith("…")
+
+
+def test_run_validation_oserror(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*_a: object, **_k: object) -> None:
+        raise FileNotFoundError("nope")
+
+    monkeypatch.setattr(subprocess, "run", boom)
+    result = run_validation("missing-binary-xyz")
+    assert result.exit_code == 127
+    assert "could not run" in result.output
+
+
+def test_run_validation_deny_shell(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CURSOR_GOAL_DENY_SHELL", "1")
+    result = run_validation("echo a && echo b")
+    assert result.exit_code == 1
+    assert "CURSOR_GOAL_DENY_SHELL" in result.output

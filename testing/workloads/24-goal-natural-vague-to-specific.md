@@ -30,7 +30,7 @@ The calculator in testing/scripts/calculator.py needs hardening.
 
 ## Verification Patterns
 
-- `goal-manage.sh create` with vague natural language condition
+- `run_goal.py manage create` with vague natural language condition
 - Agent interprets or clarifies "robust" before acting
 - Improvements to calculator.py (validation, error handling, etc.)
 - Subagent "Evaluate goal completion" invoked

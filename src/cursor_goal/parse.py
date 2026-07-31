@@ -8,6 +8,7 @@ import sys
 from typing import Any
 
 from cursor_goal.logging_config import get_logger
+from cursor_goal.state import MAX_TURN_BUDGET, clamp_turn_budget
 from cursor_goal.validation import redact_command
 
 logger = get_logger("cursor_goal.parse")
@@ -136,6 +137,9 @@ def parse_raw(raw: str) -> dict[str, Any]:
         raise ValueError(f"Could not extract a condition from: {raw}")
     if budget < 1:
         raise ValueError(f"Budget must be a positive integer, got {budget}")
+    if budget > MAX_TURN_BUDGET:
+        raise ValueError(f"Budget must be <= {MAX_TURN_BUDGET}, got {budget}")
+    budget = clamp_turn_budget(budget)
 
     result = {
         "subcommand": None,
@@ -157,7 +161,8 @@ def cmd_parse(argv: list[str]) -> int:
     if not argv:
         print('[goal-parse] Error: Usage: cursor-goal parse "<raw>"', file=sys.stderr)
         return 1
-    raw = argv[0]
+    # Join unquoted argv words so agents that forget shell quoting still work.
+    raw = " ".join(argv)
     try:
         payload = parse_raw(raw)
     except ValueError as exc:

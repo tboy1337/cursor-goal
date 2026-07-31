@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # install-goal.sh — Install /goal Python harness for Cursor (Unix/macOS/WSL/Git Bash)
 #
-# Usage (from a full clone or release tarball):
+# Usage (from a full clone or a GitHub source archive for a tagged release):
 #   ./scripts/install-goal.sh
 #   ./scripts/uninstall-goal.sh
 #
 # Do NOT pipe a lone curl of this file into bash — the installer needs the repo tree.
+# On native Windows Cursor, use install-goal.ps1 instead (this script refuses Git Bash).
 
 set -euo pipefail
 
@@ -21,11 +22,37 @@ DATA_DIR="${HOME}/.cursor-goal/data"
 CURSOR_HOOKS_FILE="${HOME}/.cursor/hooks.json"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+SKILL_BACKUP=""
 
 log_info()  { echo -e "${GREEN}[install-goal]${NC} $1"; }
 log_warn()  { echo -e "${YELLOW}[install-goal]${NC} $1"; }
 log_error() { echo -e "${RED}[install-goal]${NC} $1" >&2; }
 log_step()  { echo -e "${BLUE}==>${NC} $1"; }
+
+# Native Windows Cursor needs install-goal.ps1 (.cmd launcher). Refuse Git Bash /
+# MSYS / Cygwin, and WSL installs that write into a Windows USERPROFILE path.
+refuse_non_native_windows_install() {
+  local uname_s
+  uname_s="$(uname -s 2>/dev/null || true)"
+  case "$uname_s" in
+    MINGW*|MSYS*|CYGWIN*)
+      log_error "Git Bash / MSYS / Cygwin detected ($uname_s)."
+      log_error "Native Windows Cursor requires install-goal.ps1 (writes stop_hook.cmd)."
+      log_error "Run from PowerShell:"
+      log_error "  powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\install-goal.ps1"
+      exit 1
+      ;;
+  esac
+  if [ -n "${WSL_DISTRO_NAME:-}" ] || grep -qi microsoft /proc/version 2>/dev/null; then
+    case "${HOME}" in
+      /mnt/[a-zA-Z]/*)
+        log_error "WSL install targeting a Windows-mounted home ($HOME) is not supported."
+        log_error "Use install-goal.ps1 from native Windows PowerShell for Windows Cursor."
+        exit 1
+        ;;
+    esac
+  fi
+}
 
 # Resolve a Python 3.12+ interpreter to an absolute sys.executable path.
 detect_python() {
@@ -81,15 +108,15 @@ install_skill_files() {
   mkdir -p "$INSTALL_DIR/scripts" "$AGENTS_DIR" "$DATA_DIR"
 
   if [ -d "$INSTALL_DIR" ] && [ -f "${INSTALL_DIR}/SKILL.md" ]; then
-    local skill_bak
-    skill_bak="${INSTALL_DIR}.bak.$(date -u +%Y%m%dT%H%M%SZ)"
-    rm -rf "$skill_bak"
-    cp -R "$INSTALL_DIR" "$skill_bak"
-    log_info "Backed up previous skill install to $skill_bak"
+    SKILL_BACKUP="${INSTALL_DIR}.bak.$(date -u +%Y%m%dT%H%M%SZ)"
+    rm -rf "$SKILL_BACKUP"
+    cp -R "$INSTALL_DIR" "$SKILL_BACKUP"
+    log_info "Backed up previous skill install to $SKILL_BACKUP"
   fi
 
   rm -rf "${INSTALL_DIR}/cursor_goal"
   cp -R "$SOURCE_PKG" "${INSTALL_DIR}/cursor_goal"
+  find "${INSTALL_DIR}/cursor_goal" -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
   cp "${SOURCE_SKILL}/SKILL.md" "${INSTALL_DIR}/SKILL.md"
   cp "${SOURCE_SKILL}/scripts/stop_hook.py" "${INSTALL_DIR}/scripts/stop_hook.py"
   cp "${SOURCE_SKILL}/scripts/run_goal.py" "${INSTALL_DIR}/scripts/run_goal.py"
@@ -153,8 +180,14 @@ print("merged")
 PY
   then
     log_error "Failed to merge stop hook into hooks.json."
-    log_error "Skill files were installed under $INSTALL_DIR."
-    log_error "If a skill backup exists (${INSTALL_DIR}.bak.*), restore it manually."
+    if [ -n "$SKILL_BACKUP" ] && [ -d "$SKILL_BACKUP" ]; then
+      log_warn "Restoring skill files from $SKILL_BACKUP"
+      rm -rf "$INSTALL_DIR"
+      mv "$SKILL_BACKUP" "$INSTALL_DIR"
+      log_info "Restored previous skill install."
+    else
+      log_error "Skill files were installed under $INSTALL_DIR (no prior backup to restore)."
+    fi
     exit 1
   fi
   log_info "Merged/upgraded stop hook in hooks.json"
@@ -194,6 +227,7 @@ main() {
   echo -e "${BLUE}================================${NC}"
   echo ""
 
+  refuse_non_native_windows_install
   check_dependencies
   install_skill_files
   configure_stop_hook

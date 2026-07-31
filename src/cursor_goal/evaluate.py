@@ -6,13 +6,16 @@ import json
 import re
 import sys
 from collections.abc import Callable
+from pathlib import Path
 
 from cursor_goal.logging_config import get_logger
 from cursor_goal.models import spawn_config_dict
 from cursor_goal.state import (
-    clear_eval_signal,
+    GoalLockTimeoutError,
     has_eval_signal,
     load_goal,
+    record_parse_result,
+    refuse_if_data_dir_insecure,
     set_eval_signal,
     update_goal_fields,
 )
@@ -21,6 +24,7 @@ from cursor_goal.validation import redact_command, run_validation
 logger = get_logger("cursor_goal.eval")
 
 _VERDICT_LINE = re.compile(r"^(YES|NO):\s*(.*)$", re.IGNORECASE)
+MAX_PARSE_RESULT_BYTES = 2 * 1024 * 1024
 
 
 def cmd_prompt(argv: list[str]) -> int:
@@ -41,6 +45,9 @@ def cmd_prompt(argv: list[str]) -> int:
         else:
             i += 1
 
+    safe_cmd = (
+        redact_command(state.validation_command) if state.validation_command else ""
+    )
     if state.last_validation_output:
         exit_note = ""
         if state.last_validation_exit_code is not None:
@@ -50,13 +57,11 @@ def cmd_prompt(argv: list[str]) -> int:
                 f"({'passed' if passed else 'failed'})"
             )
         validation_section = (
-            f"Validation command: {state.validation_command}{exit_note}\n"
+            f"Validation command: {safe_cmd}{exit_note}\n"
             f"Output:\n{state.last_validation_output}"
         )
     elif state.validation_command:
-        validation_section = (
-            f"Validation command ({state.validation_command}) has not been run yet."
-        )
+        validation_section = f"Validation command ({safe_cmd}) has not been run yet."
     else:
         validation_section = "No validation command configured."
 
@@ -114,6 +119,11 @@ def _emit_prompt(prompt: str) -> None:
 
 def cmd_validate(_argv: list[str]) -> int:
     """Run the goal's validation command and persist output for eval prompts."""
+    insecure = refuse_if_data_dir_insecure()
+    if insecure is not None:
+        print(insecure.replace("[goal]", "[goal-eval]"), file=sys.stderr)
+        return 1
+
     state = load_goal()
     if state is None:
         print(
@@ -139,10 +149,14 @@ def cmd_validate(_argv: list[str]) -> int:
     if result.timed_out:
         output = f"[timed out]\n{output}".strip()
 
-    updated = update_goal_fields(
-        last_validation_output=output,
-        last_validation_exit_code=result.exit_code,
-    )
+    try:
+        updated = update_goal_fields(
+            last_validation_output=output,
+            last_validation_exit_code=result.exit_code,
+        )
+    except GoalLockTimeoutError as exc:
+        print(f"[goal-eval] Error: {exc}", file=sys.stderr)
+        return 1
     if updated is None:
         print(
             "[goal-eval] Error: Failed to persist validation output.", file=sys.stderr
@@ -174,7 +188,7 @@ def cmd_signal(argv: list[str]) -> int:
     if state.last_eval_verdict.upper() != "YES" and not force:
         print(
             "[goal-eval] Error: No YES verdict from parse-result. "
-            'Run: cursor-goal eval parse-result "YES: ..." '
+            "Run: cursor-goal eval parse-result --stdin "
             "(or use eval signal --force for recovery).",
             file=sys.stderr,
         )
@@ -186,7 +200,16 @@ def cmd_signal(argv: list[str]) -> int:
             "eval signal --force without YES parse-result "
             "(recovery bypass — not cryptographic attestation)"
         )
-    set_eval_signal(verdict="YES", reason=reason)
+        print(
+            "[goal-eval] Warning: --force bypasses maker≠checker protocol "
+            "(not cryptographic attestation).",
+            file=sys.stderr,
+        )
+    try:
+        set_eval_signal(verdict="YES", reason=reason)
+    except GoalLockTimeoutError as exc:
+        print(f"[goal-eval] Error: {exc}", file=sys.stderr)
+        return 1
     print("[goal-eval] Evaluator signal recorded.")
     return 0
 
@@ -224,26 +247,75 @@ def parse_result_text(result: str) -> tuple[str, str]:
     return verdict, reason
 
 
-def cmd_parse_result(argv: list[str]) -> int:
-    if not argv or not argv[0]:
+def _usage_parse_result() -> None:
+    print(
+        "[goal-eval] Error: Usage: "
+        'cursor-goal eval parse-result "<output>" | --stdin | @file',
+        file=sys.stderr,
+    )
+
+
+def _read_bytes_capped(path: Path) -> str | None:
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        print(f"[goal-eval] Error: could not read {path}: {exc}", file=sys.stderr)
+        return None
+    if len(data) > MAX_PARSE_RESULT_BYTES:
         print(
-            "[goal-eval] Error: Usage: "
-            'cursor-goal eval parse-result "<subagent output>"',
+            f"[goal-eval] Error: file exceeds {MAX_PARSE_RESULT_BYTES} bytes",
             file=sys.stderr,
         )
+        return None
+    return data.decode("utf-8", errors="replace")
+
+
+def _read_stdin_capped() -> str | None:
+    try:
+        raw = sys.stdin.read(MAX_PARSE_RESULT_BYTES + 1)
+    except OSError as exc:
+        print(f"[goal-eval] Error: failed to read stdin: {exc}", file=sys.stderr)
+        return None
+    if len(raw) > MAX_PARSE_RESULT_BYTES:
+        print(
+            f"[goal-eval] Error: stdin exceeds {MAX_PARSE_RESULT_BYTES} bytes",
+            file=sys.stderr,
+        )
+        return None
+    return raw
+
+
+def _read_parse_result_text(argv: list[str]) -> str | None:
+    """Resolve parse-result input from argv, --stdin, or @file.
+
+    Returns the text, or None after printing a usage error.
+    """
+    if not argv or not argv[0]:
+        _usage_parse_result()
+        return None
+    if argv[0] == "--stdin":
+        return _read_stdin_capped()
+    if argv[0].startswith("@") and len(argv[0]) > 1:
+        return _read_bytes_capped(Path(argv[0][1:]).expanduser())
+    return argv[0]
+
+
+def cmd_parse_result(argv: list[str]) -> int:
+    result = _read_parse_result_text(argv)
+    if result is None:
         return 1
 
-    result = argv[0]
     verdict, reason = parse_result_text(result)
     logger.info("parse-result verdict=%s reason=%r", verdict, reason)
 
-    if load_goal() is not None:
-        update_goal_fields(last_reason=reason, last_eval_verdict=verdict)
-        if verdict == "YES":
-            set_eval_signal(verdict="YES", reason=reason)
-            print("[goal-eval] YES signal recorded automatically.")
-        else:
-            clear_eval_signal()
+    try:
+        updated = record_parse_result(verdict, reason)
+    except GoalLockTimeoutError as exc:
+        print(f"[goal-eval] Error: {exc}", file=sys.stderr)
+        return 1
+
+    if updated is not None and verdict == "YES":
+        print("[goal-eval] YES signal recorded automatically.")
 
     print(f"VERDICT={verdict}")
     print(f"REASON={reason}")
@@ -268,6 +340,7 @@ def cmd_eval(argv: list[str]) -> int:
     }
     handler = dispatch.get(command)
     if handler is None:
+        print(f"[goal-eval] Error: unknown eval command: {command}", file=sys.stderr)
         _print_help()
         return 1
     return handler(rest)
@@ -286,7 +359,10 @@ def _print_help() -> int:
         "Record YES-bound signal (prefer parse-result)"
     )
     print("  check                             Verify evaluator ran (exit 0/1)")
-    print('  parse-result "<output>"           Parse YES/NO; auto-signal on YES')
+    print(
+        '  parse-result "<output>"|--stdin|@file  '
+        "Parse YES/NO; auto-signal on YES (prefer --stdin on Windows)"
+    )
     return 0
 
 

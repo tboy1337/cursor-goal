@@ -28,6 +28,19 @@ test -f "$HOME/.cursor/hooks.json"
 HOOK_CMD="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8"))["hooks"]["stop"][0]["command"])' "$HOME/.cursor/hooks.json")"
 echo "[install-smoke] Hook command: $HOOK_CMD"
 
+python3 - "$HOME/.cursor/hooks.json" <<'PY'
+import json, sys
+from pathlib import Path
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+stop = data["hooks"]["stop"]
+assert isinstance(stop, list) and stop, "stop hooks missing"
+entry = stop[0]
+assert entry.get("_cursor_goal") == "cursor_goal_stop_hook", entry
+assert entry.get("loop_limit") is None, entry
+assert "-u" in entry.get("command", ""), entry
+print("[install-smoke] Hook marker/loop_limit/-u OK")
+PY
+
 # First token (possibly quoted) must be an absolute path.
 first="$(python3 -c 'import shlex,sys; print(shlex.split(sys.argv[1])[0])' "$HOOK_CMD")"
 case "$first" in

@@ -32,3 +32,6 @@ NO: <one-sentence reason what remains>
 3. Do not invent unstated test or build results
 4. Keep the reason to 1–2 sentences
 5. You are readonly — do not edit files or change goal state
+
+The worker feeds your full response into `eval parse-result --stdin` (or `@file`).
+Keep the final line a clean `YES:` / `NO:` verdict so parsing stays reliable.

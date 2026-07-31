@@ -19,7 +19,7 @@ Unix / macOS / WSL:
 python3 -u ~/.cursor/skills/goal/scripts/run_goal.py <command> ...
 ```
 
-Windows (Python Launcher):
+Windows (PowerShell / Cursor Shell):
 
 ```powershell
 py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" <command> ...
@@ -32,7 +32,7 @@ py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" <command> ..
 | `eval validate` | Run `validation_command`; persist output for prompts |
 | `eval spawn-config` | JSON Task params for the evaluator (`goal-evaluator` + model) |
 | `eval prompt [--work-summary "..."]` | Generate evaluator prompt from goal.json |
-| `eval parse-result "<output>"` | Parse YES/NO; auto-record YES-bound signal |
+| `eval parse-result --stdin` / `@file` / `"<short>"` | Parse YES/NO; auto-record YES-bound signal (prefer `--stdin` on Windows) |
 | `eval signal [--force]` | Recovery-only signal (prefer parse-result) |
 | `eval check` | Verify YES-bound signal before marking done |
 
@@ -41,14 +41,15 @@ py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" <command> ..
 ```
 1. Do focused work
 2. If validation_command set: …/run_goal.py eval validate
-3. EVAL_PROMPT=$(…/run_goal.py eval prompt --work-summary "...")
-4. SPAWN=$(…/run_goal.py eval spawn-config)
-   → Task(subagent_type, model, readonly from SPAWN JSON, prompt=$EVAL_PROMPT)
+3. Capture eval prompt + spawn-config (OS-appropriate Shell; do not rely on bash-only $())
+4. Task(subagent_type, model, readonly from SPAWN JSON, prompt=EVAL_PROMPT)
    Never use generalPurpose for evaluation. Never omit spawn-config.
-5. …/run_goal.py eval parse-result "<response>"
+5. Pipe subagent response into: …/run_goal.py eval parse-result --stdin
    → YES: manage done
    → NO:  continue working (back to step 1)
 ```
+
+Do **not** put long evaluator responses on the Windows command line (argv length limits). Use `--stdin` or `@file`.
 
 ## Platform Notes (Cursor)
 
@@ -62,6 +63,7 @@ py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" <command> ..
 
 - `manage done` **rejects** unless a YES-bound evaluator signal exists (unless `--force`)
 - `parse-result` on YES records the signal automatically — do not skip it
-- Use `parse` and read JSON — do **not** `eval` shell strings from the parser
+- Use `parse` and read JSON — do **not** evaluate shell strings from the parser
 - Use `eval prompt` to generate prompts — do not manually template them
 - The stop hook handles auto-continuation between turns (safety net; evaluate in-turn first)
+- `--force` on `done` / `signal` is recovery only — not cryptographic attestation

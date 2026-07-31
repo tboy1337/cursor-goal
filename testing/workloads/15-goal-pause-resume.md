@@ -41,9 +41,9 @@ Then after a brief pause:
 
 ## Verification Patterns
 
-- `goal-manage.sh create` called with natural language condition
-- `/goal pause` or `goal-manage.sh pause` in transcript
-- `/goal resume` or `goal-manage.sh resume` in transcript
+- `run_goal.py manage create` called with natural language condition
+- `/goal pause` or `run_goal.py manage pause` in transcript
+- `/goal resume` or `run_goal.py manage resume` in transcript
 - `"status": "paused"` then back to `"pursuing"` in goal.json
 - Subagent "Evaluate goal completion" invoked after resume
 - `[goal] ✓ Goal achieved` on completion

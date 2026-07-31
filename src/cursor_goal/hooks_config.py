@@ -53,12 +53,41 @@ def build_stop_entry(command: str, *, timeout: int = 30) -> dict[str, Any]:
     }
 
 
+def normalize_stop_hooks(stop: object) -> list[Any]:
+    """Normalize hooks.stop to a list of dict entries.
+
+    A single object is wrapped as a one-element list. Non-list/non-dict values
+    become an empty list. Non-dict list items are skipped.
+    """
+    if stop is None:
+        return []
+    if isinstance(stop, dict):
+        logger.info("Normalized hooks.stop object to a single-element list")
+        return [stop]
+    if not isinstance(stop, list):
+        logger.warning(
+            "hooks.stop was %s; replacing with empty list",
+            type(stop).__name__,
+        )
+        return []
+    normalized: list[Any] = []
+    for item in stop:
+        if isinstance(item, dict):
+            normalized.append(item)
+        else:
+            logger.warning(
+                "Skipping non-object hooks.stop entry of type %s",
+                type(item).__name__,
+            )
+    return normalized
+
+
 def merge_stop_hook(data: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
     hooks = data.setdefault("hooks", {})
     if not isinstance(hooks, dict):
         hooks = {}
         data["hooks"] = hooks
-    stop = list(hooks.get("stop") or [])
+    stop = normalize_stop_hooks(hooks.get("stop"))
     stop = [item for item in stop if not is_goal_stop_hook(item)]
     stop.append(entry)
     hooks["stop"] = stop
@@ -70,7 +99,7 @@ def remove_stop_hooks(data: dict[str, Any]) -> dict[str, Any]:
     hooks = data.get("hooks")
     if not isinstance(hooks, dict):
         return data
-    stop = hooks.get("stop") or []
+    stop = normalize_stop_hooks(hooks.get("stop"))
     hooks["stop"] = [item for item in stop if not is_goal_stop_hook(item)]
     data["hooks"] = hooks
     return data
@@ -81,8 +110,16 @@ def write_hooks_file(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
     tmp = path.with_name(f"{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
-    tmp.write_text(payload, encoding="utf-8")
-    tmp.replace(path)
+    try:
+        tmp.write_text(payload, encoding="utf-8")
+        tmp.replace(path)
+    except Exception:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+        raise
 
 
 def read_hooks_file(path: Path) -> dict[str, Any]:

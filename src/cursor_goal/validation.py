@@ -15,7 +15,11 @@ logger = get_logger("cursor_goal.validation")
 DEFAULT_TIMEOUT_SEC = 25
 
 _SECRETISH = re.compile(
-    r"(?i)(password|passwd|secret|token|api[_-]?key|authorization)=(\S+)"
+    r"(?i)(?:"
+    r"(password|passwd|secret|token|api[_-]?key|authorization)=(\S+)"
+    r"|(--(?:password|passwd|secret|token|api[_-]?key))\s+(\S+)"
+    r"|(Bearer)\s+(\S+)"
+    r")"
 )
 
 
@@ -36,8 +40,18 @@ def _stream_to_text(stream: str | bytes | None) -> str:
 
 
 def redact_command(command: str) -> str:
-    """Redact likely secrets for INFO logs / followups; truncate long commands."""
-    redacted = _SECRETISH.sub(r"\1=<redacted>", command)
+    """Redact likely secrets for logs / prompts / status; truncate long commands."""
+
+    def _sub(match: re.Match[str]) -> str:
+        if match.group(1):
+            return f"{match.group(1)}=<redacted>"
+        if match.group(3):
+            return f"{match.group(3)} <redacted>"
+        if match.group(5):
+            return f"{match.group(5)} <redacted>"
+        return "<redacted>"
+
+    redacted = _SECRETISH.sub(_sub, command)
     if len(redacted) > 200:
         return redacted[:200] + "…"
     return redacted
@@ -45,6 +59,12 @@ def redact_command(command: str) -> str:
 
 # Back-compat alias for older call sites / tests.
 _redact_command = redact_command
+
+
+def deny_shell_enabled() -> bool:
+    """Return True when CURSOR_GOAL_DENY_SHELL requests argv-only validation."""
+    raw = os.environ.get("CURSOR_GOAL_DENY_SHELL", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 def try_split_argv(command: str) -> list[str] | None:
@@ -82,7 +102,10 @@ def run_validation(
     """Run a validation command via subprocess.
 
     Prefers ``shell=False`` with argv from :func:`try_split_argv`. Falls back to
-    ``shell=True`` for user/agent shell snippets (e.g. ``npm test && npm run lint``).
+    ``shell=True`` for user/agent shell snippets (e.g. ``npm test && npm run lint``)
+    unless ``CURSOR_GOAL_DENY_SHELL`` is set. On Windows, shell mode uses
+    ``COMSPEC`` (cmd.exe), not PowerShell.
+
     Shell mode is intentional but risky if an attacker controls goal.json.
     """
     stripped = command.strip()
@@ -100,12 +123,25 @@ def run_validation(
         run_args: str | list[str] = argv
         use_shell = False
     else:
+        if deny_shell_enabled():
+            logger.warning(
+                "Validation refused: shell metacharacters with CURSOR_GOAL_DENY_SHELL"
+            )
+            return ValidationResult(
+                exit_code=1,
+                output=(
+                    "[goal-eval] Error: validation command requires a shell, but "
+                    "CURSOR_GOAL_DENY_SHELL is set. Use a simple argv command or "
+                    "unset CURSOR_GOAL_DENY_SHELL."
+                ),
+            )
         mode = "shell"
         run_args = stripped
         use_shell = True
         logger.warning(
-            "Validation using shell=True (metacharacters or unsplittable; "
-            "trusted-user goal.json only) len=%s cmd=%r",
+            "Validation using shell=True via COMSPEC/sh "
+            "(metacharacters or unsplittable; trusted-user goal.json only) "
+            "len=%s cmd=%r",
             len(stripped),
             redact_command(stripped),
         )
@@ -118,7 +154,13 @@ def run_validation(
         len(command),
         redact_command(command),
     )
-    logger.debug("Validation full command: %r", command)
+    if os.environ.get("CURSOR_GOAL_LOG_SECRETS", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        logger.debug("Validation full command (secrets enabled): %r", command)
 
     try:
         completed = subprocess.run(
@@ -135,6 +177,12 @@ def run_validation(
         out = _stream_to_text(exc.stdout) + _stream_to_text(exc.stderr)
         logger.warning("Validation timed out after %ss", timeout_sec)
         return ValidationResult(exit_code=124, output=out[-4000:], timed_out=True)
+    except OSError as exc:
+        logger.error("Validation OSError: %s", exc)
+        return ValidationResult(
+            exit_code=127,
+            output=f"[goal-eval] Error: could not run validation command: {exc}",
+        )
 
     combined = (completed.stdout or "") + (completed.stderr or "")
     logger.info(

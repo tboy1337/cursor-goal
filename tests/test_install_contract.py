@@ -109,6 +109,27 @@ def test_write_hooks_file_atomic_utf8(tmp_path: Path) -> None:
     assert leftovers == []
 
 
+def test_normalize_stop_object_and_garbage() -> None:
+    from cursor_goal.hooks_config import normalize_stop_hooks
+
+    assert normalize_stop_hooks({"command": "./one.sh"}) == [{"command": "./one.sh"}]
+    assert normalize_stop_hooks("bad") == []
+    assert normalize_stop_hooks([{"command": "a"}, "skip", 1]) == [{"command": "a"}]
+
+
+def test_merge_stop_when_stop_is_object() -> None:
+    data = {
+        "version": 1,
+        "hooks": {"stop": {"command": "./legacy-single.sh", "timeout": 10}},
+    }
+    entry = build_stop_entry("python3 -u /abs/stop_hook.py")
+    merged = merge_stop_hook(data, entry)
+    stop = merged["hooks"]["stop"]
+    assert isinstance(stop, list)
+    assert any(item.get("command") == "./legacy-single.sh" for item in stop)
+    assert is_goal_stop_hook(stop[-1])
+
+
 def test_merge_hooks_at_path_existing(tmp_path: Path) -> None:
     from cursor_goal.hooks_config import merge_hooks_at_path
 

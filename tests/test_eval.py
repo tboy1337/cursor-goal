@@ -133,10 +133,56 @@ def test_parse_result_ignores_mid_prose_yes() -> None:
 def test_eval_help_and_unknown(goal_home: Path) -> None:
     assert run_cli("eval")[0] == 1
     assert run_cli("eval", "help")[0] == 0
-    code, out, _err = run_cli("eval", "nope")
+    code, out, err = run_cli("eval", "nope")
     assert code == 1
     assert "Usage:" in out
     assert "validate" in out
+    assert "unknown eval command" in err
+
+
+def test_eval_parse_result_stdin(goal_home: Path) -> None:
+    from tests.conftest import run_cli_stdin
+
+    run_cli("manage", "create", "g")
+    code, out, _err = run_cli_stdin(
+        "YES: evidence looks good\n",
+        "eval",
+        "parse-result",
+        "--stdin",
+    )
+    assert code == 0
+    assert "VERDICT=YES" in out
+    assert (goal_home / "goal-eval-done").is_file()
+
+
+def test_eval_parse_result_at_file(goal_home: Path, tmp_path: Path) -> None:
+    run_cli("manage", "create", "g")
+    path = tmp_path / "verdict.txt"
+    path.write_text("NO: more work\n", encoding="utf-8")
+    code, out, _err = run_cli("eval", "parse-result", f"@{path}")
+    assert code == 1
+    assert "VERDICT=NO" in out
+
+
+def test_eval_prompt_redacts_secrets(goal_home: Path) -> None:
+    run_cli(
+        "manage",
+        "create",
+        "g",
+        "--test",
+        "tool --token=supersecret",
+    )
+    code, out, _err = run_cli("eval", "prompt")
+    assert code == 0
+    assert "supersecret" not in out
+    assert "<redacted>" in out
+
+
+def test_eval_help_lists_spawn_config(goal_home: Path) -> None:
+    code, out, _err = run_cli("eval", "help")
+    assert code == 0
+    assert "spawn-config" in out
+    assert "--stdin" in out
 
 
 def test_eval_prompt_validation_not_run(goal_home: Path) -> None:
@@ -268,9 +314,3 @@ def test_eval_check_no_signal_and_ok(goal_home: Path) -> None:
     code2, out2, _err2 = run_cli("eval", "check")
     assert code2 == 0
     assert "OK" in out2
-
-
-def test_eval_help_lists_spawn_config(goal_home: Path) -> None:
-    code, out, _err = run_cli("eval", "help")
-    assert code == 0
-    assert "spawn-config" in out

@@ -28,7 +28,7 @@ Add Google-style docstrings to APIClient and all module-level functions.
 
 ## Verification Patterns
 
-- `goal-manage.sh create` with natural language condition
+- `run_goal.py manage create` with natural language condition
 - Docstrings added to APIClient class and all public methods
 - Docstrings added to build_url and parse_response
 - Subagent "Evaluate goal completion" invoked

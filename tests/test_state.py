@@ -342,3 +342,113 @@ def test_goal_lock_concurrent_multiprocess(goal_home: Path) -> None:
         proc.join(timeout=60)
         assert proc.exitcode == 0
     assert counter_path.read_text(encoding="utf-8") == str(workers * iterations)
+
+
+def test_active_string_false_is_corrupt(goal_home: Path) -> None:
+    (goal_home / "goal.json").write_text(
+        json.dumps(
+            {
+                "active": "false",
+                "condition": "c",
+                "turn_budget": 5,
+                "turns_used": 0,
+                "status": "pursuing",
+                "schema_version": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert load_goal() is None
+    from cursor_goal.state import CorruptGoalError
+
+    with pytest.raises(CorruptGoalError):
+        load_goal(raise_corrupt=True)
+
+
+def test_update_goal_fields_rejects_bad_types(goal_home: Path) -> None:
+    save_goal(GoalState(condition="c", created_at="t", status="pursuing"))
+    with pytest.raises(ValueError, match="boolean"):
+        update_goal_fields(active="false")
+
+
+def test_record_parse_result_atomic_vs_clear(goal_home: Path) -> None:
+    """YES signal must bind to the goal present under the same lock as write."""
+    from cursor_goal.state import create_goal_atomic, record_parse_result
+
+    state = GoalState(
+        condition="first",
+        created_at="t1",
+        status="pursuing",
+        active=True,
+    )
+    created, status = create_goal_atomic(state)
+    assert status == "ok"
+    assert created is not None
+    updated = record_parse_result("YES", "ok")
+    assert updated is not None
+    assert has_eval_signal() is True
+    # Clear + create new goal under lock clears prior signal semantics
+    second = GoalState(
+        condition="second",
+        created_at="t2",
+        status="pursuing",
+        active=True,
+    )
+    create_goal_atomic(second, force=True)
+    assert has_eval_signal() is False
+
+
+def test_create_goal_atomic_exists(goal_home: Path) -> None:
+    from cursor_goal.state import create_goal_atomic
+
+    first = GoalState(condition="a", created_at="t", status="pursuing", active=True)
+    assert create_goal_atomic(first)[1] == "ok"
+    second = GoalState(condition="b", created_at="t2", status="pursuing", active=True)
+    existing, status = create_goal_atomic(second)
+    assert status == "exists"
+    assert existing is not None
+    assert existing.condition == "a"
+
+
+def test_clamp_turn_budget_bounds() -> None:
+    from cursor_goal.state import clamp_turn_budget
+
+    assert clamp_turn_budget(20) == 20
+    assert clamp_turn_budget(999) == 500
+    with pytest.raises(ValueError):
+        clamp_turn_budget(0)
+
+
+def test_refuse_if_data_dir_insecure_message(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import state as state_mod
+
+    monkeypatch.setattr(state_mod, "data_dir_is_insecure", lambda path=None: True)
+    monkeypatch.setattr(state_mod, "data_dir", lambda check_writable=False: goal_home)
+    msg = state_mod.refuse_if_data_dir_insecure()
+    assert msg is not None
+    assert "writable" in msg
+
+    monkeypatch.setattr(state_mod, "data_dir_is_insecure", lambda path=None: False)
+    assert state_mod.refuse_if_data_dir_insecure() is None
+
+
+def test_data_dir_is_insecure_mode_bits(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import state as state_mod
+
+    class FakeStat:
+        st_mode = 0o777
+
+    monkeypatch.setattr(state_mod.os, "name", "posix")
+    monkeypatch.setattr(
+        type(goal_home),
+        "stat",
+        lambda self: FakeStat(),
+    )
+    assert state_mod.data_dir_is_insecure(goal_home) is True
+
+    monkeypatch.setattr(state_mod.os, "name", "nt")
+    assert state_mod.data_dir_is_insecure(goal_home) is False

@@ -34,7 +34,7 @@ Implement every TODO: priority validation, error handling, soft delete, sorting,
 
 ## Verification Patterns
 
-- `goal-manage.sh create` with natural language condition
+- `run_goal.py manage create` with natural language condition
 - All TODO comments addressed in todo_app.py
 - No remaining `# TODO:` comments in file
 - Subagent "Evaluate goal completion" invoked

@@ -32,7 +32,7 @@ Multiple test files are failing. Diagnose and fix all failures.
 
 ## Verification Patterns
 
-- `goal-manage.sh create` with natural language condition
+- `run_goal.py manage create` with natural language condition
 - `pytest testing/scripts/` executed multiple times
 - Failures diagnosed and fixed
 - Subagent "Evaluate goal completion" invoked

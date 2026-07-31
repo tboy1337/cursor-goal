@@ -30,7 +30,7 @@ Add missing tests for multiply, divide, power, and modulo in test_calculator.py.
 
 ## Verification Patterns
 
-- `goal-manage.sh create` with natural language condition
+- `run_goal.py manage create` with natural language condition
 - `pytest testing/scripts/test_calculator.py` executed
 - Tests added for multiply, divide, power, modulo
 - Subagent "Evaluate goal completion" invoked

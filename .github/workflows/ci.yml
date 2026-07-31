@@ -24,6 +24,8 @@ jobs:
           cache: pip
       - name: Install
         run: pip install -e ".[dev]"
+      - name: Version sync
+        run: python scripts/check_version_sync.py
       - name: Format (isort/black/pyproject-fmt)
         run: |
           isort --check-only --diff src tests scripts
@@ -83,3 +85,7 @@ jobs:
         shell: pwsh
         run: |
           powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-powershell-tests.ps1
+      - name: Windows install smoke
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-smoke.ps1

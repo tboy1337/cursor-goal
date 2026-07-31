@@ -1,7 +1,10 @@
 # install-goal.ps1 — Install /goal Python harness for Cursor on Windows
 #
-# Usage (from a full clone or release tarball):
+# Usage (from a full clone or a GitHub source archive for a tagged release):
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-goal.ps1
+#
+# Prefer this script on native Windows Cursor (writes stop_hook.cmd).
+# Do not use install-goal.sh from Git Bash against Windows Cursor.
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -122,6 +125,13 @@ exit /b %ERRORLEVEL%
 }
 
 function Merge-GoalStopHook {
+    <#
+    .SYNOPSIS
+    Legacy PowerShell hooks merge (kept for Pester unit tests).
+
+    Install/uninstall production paths use Python cursor_goal.hooks_config via
+    Invoke-GoalHooksConfigMerge so Windows and Unix stay in sync.
+    #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param(
@@ -255,6 +265,7 @@ function Invoke-GoalInstall {
     New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
 
     $targetPkg = Join-Path $installDir "cursor_goal"
+    $skillBak = $null
     if (Test-Path (Join-Path $installDir "SKILL.md")) {
         $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
         $skillBak = "$installDir.bak.$stamp"
@@ -264,6 +275,8 @@ function Invoke-GoalInstall {
     }
     if (Test-Path $targetPkg) { Remove-Item -Recurse -Force $targetPkg }
     Copy-Item -Recurse $sourcePkg $targetPkg
+    Get-ChildItem -Path $targetPkg -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     Copy-Item (Join-Path $sourceSkill "SKILL.md") (Join-Path $installDir "SKILL.md") -Force
     Copy-Item (Join-Path $sourceSkill "scripts\stop_hook.py") (Join-Path $installDir "scripts\stop_hook.py") -Force
     Copy-Item (Join-Path $sourceSkill "scripts\run_goal.py") (Join-Path $installDir "scripts\run_goal.py") -Force
@@ -319,7 +332,17 @@ print(__version__)
     $mergeCode = Invoke-GoalHooksConfigMerge -Python $Python -InstallDir $installDir -HooksFile $hooksFile -HookCommand $hookCommand
     if ($mergeCode -ne 0) {
         Write-GoalErr "Failed to merge stop hook via hooks_config (exit $mergeCode)."
-        Write-GoalErr "Skill files were installed under $installDir. Restore from $installDir.bak.* if needed."
+        if ($skillBak -and (Test-Path -LiteralPath $skillBak)) {
+            Write-GoalWarn "Restoring skill files from $skillBak"
+            if (Test-Path -LiteralPath $installDir) {
+                Remove-Item -Recurse -Force -LiteralPath $installDir
+            }
+            Move-Item -LiteralPath $skillBak -Destination $installDir
+            Write-GoalInfo "Restored previous skill install."
+        }
+        else {
+            Write-GoalErr "Skill files were installed under $installDir (no prior backup to restore)."
+        }
         return 1
     }
     Write-GoalInfo "Merged/upgraded stop hook in hooks.json"

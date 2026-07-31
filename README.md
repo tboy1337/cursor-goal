@@ -25,10 +25,22 @@ No `jq` dependency.
 
 ## Install
 
+**Agent install (explicit steps):**
+
+1. Clone `https://github.com/tboy1337/cursor-goal` (or download a tagged source archive from GitHub Releases).
+2. Run the OS installer from the repo root (`install-goal.sh` on Unix/macOS; `install-goal.ps1` on native Windows).
+3. Verify with `manage status` and `eval spawn-config` (commands below).
+
+Do **not** use Git Bash `install-goal.sh` against native Windows Cursor — the script refuses and redirects you to `install-goal.ps1` (required for `stop_hook.cmd`).
+
 Tell your agent:
 
 ```
-Install the /goal skill from https://github.com/tboy1337/cursor-goal
+Install the /goal skill from https://github.com/tboy1337/cursor-goal:
+1) git clone https://github.com/tboy1337/cursor-goal.git
+2) On Windows: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-goal.ps1
+   On Unix/macOS: ./scripts/install-goal.sh
+3) Verify with manage status
 ```
 
 Or from a local clone (the installer needs the package tree — do not curl only `scripts/install-goal.sh`):
@@ -48,6 +60,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-goal.ps1
 ```
 
 Uninstall: `./scripts/uninstall-goal.sh` or `.\scripts\uninstall-goal.ps1` (add `--purge-data` / `-PurgeData` to remove `~/.cursor-goal`).
+
+`pip install -e ".[dev]"` installs the `cursor-goal` CLI for development only — it does **not** register the Cursor skill, agents, or stop hook. Always run the installer for Cursor integration.
+
+Note: an unrelated npm package is also named `cursor-goal`; this project is the Python/AGPL harness at `tboy1337/cursor-goal`.
 
 Verify:
 

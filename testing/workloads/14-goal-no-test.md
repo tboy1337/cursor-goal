@@ -27,7 +27,7 @@ Add JSDoc comments to every exported function in the file.
 
 ## Verification Patterns
 
-- `goal-manage.sh create` without `--test`
+- `run_goal.py manage create` without `--test`
 - Subagent "Evaluate goal completion" invoked
 - `YES:` or `NO:` evaluation response
 - `[goal] ✓ Goal achieved` on completion

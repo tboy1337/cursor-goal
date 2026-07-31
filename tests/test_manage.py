@@ -86,9 +86,37 @@ def test_manage_done_force(goal_home: Path) -> None:
 def test_manage_pause_resume(goal_home: Path) -> None:
     run_cli("manage", "create", "test condition")
     assert run_cli("manage", "pause")[0] == 0
-    assert load_goal_json(goal_home)["status"] == "paused"
+    data = load_goal_json(goal_home)
+    assert data["status"] == "paused"
+    assert data["active"] is False
+    code, out, _err = run_cli("manage", "status")
+    assert code == 0
+    assert "Active: false" in out
     assert run_cli("manage", "resume")[0] == 0
     assert load_goal_json(goal_home)["status"] == "pursuing"
+    assert load_goal_json(goal_home)["active"] is True
+
+
+def test_manage_status_corrupt_goal(goal_home: Path) -> None:
+    (goal_home / "goal.json").write_text("{not-json", encoding="utf-8")
+    code, _out, err = run_cli("manage", "status")
+    assert code == 1
+    assert "corrupt" in err.lower() or "unreadable" in err.lower()
+
+
+def test_manage_create_rejects_huge_budget(goal_home: Path) -> None:
+    code, _out, err = run_cli("manage", "create", "x", "--budget", "501")
+    assert code == 1
+    assert "500" in err
+
+
+def test_manage_help_and_unknown(goal_home: Path) -> None:
+    assert run_cli("manage")[0] == 1
+    assert run_cli("manage", "help")[0] == 0
+    code, out, err = run_cli("manage", "nope")
+    assert code == 1
+    assert "Usage:" in out
+    assert "unknown manage command" in err
 
 
 def test_manage_clear_removes_signal(goal_home: Path) -> None:
@@ -191,11 +219,3 @@ def test_manage_clear_when_absent(goal_home: Path) -> None:
     code, out, _err = run_cli("manage", "clear")
     assert code == 0
     assert "No active goal" in out
-
-
-def test_manage_help_and_unknown(goal_home: Path) -> None:
-    assert run_cli("manage")[0] == 1
-    assert run_cli("manage", "help")[0] == 0
-    code, out, _err = run_cli("manage", "nope")
-    assert code == 1
-    assert "Usage:" in out

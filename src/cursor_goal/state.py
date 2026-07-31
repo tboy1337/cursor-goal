@@ -24,9 +24,42 @@ GOAL_FILE_NAME = "goal.json"
 LOCK_FILE_NAME = "goal.lock"
 SCHEMA_VERSION = 2
 SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2})
+MAX_TURN_BUDGET = 500
+ALLOWED_STATUSES = frozenset(
+    {
+        "pursuing",
+        "paused",
+        "achieved",
+        "budget-limited",
+        "unknown",
+    }
+)
+_UPDATABLE_FIELDS = frozenset(
+    {
+        "active",
+        "condition",
+        "validation_command",
+        "created_at",
+        "turn_budget",
+        "turns_used",
+        "status",
+        "last_reason",
+        "last_validation_output",
+        "last_validation_exit_code",
+        "last_eval_verdict",
+    }
+)
 
 
-def data_dir() -> Path:
+class CorruptGoalError(ValueError):
+    """Raised when goal.json exists but cannot be loaded as a valid GoalState."""
+
+
+class GoalLockTimeoutError(OSError):
+    """Raised when the exclusive goal.lock cannot be acquired in time."""
+
+
+def data_dir(*, check_writable: bool = True) -> Path:
     """Resolve the goal data directory (CURSOR_GOAL_DATA or ~/.cursor-goal/data)."""
     override = os.environ.get("CURSOR_GOAL_DATA")
     if override:
@@ -35,8 +68,34 @@ def data_dir() -> Path:
     else:
         path = (Path.home() / ".cursor-goal" / "data").resolve()
     path.mkdir(parents=True, exist_ok=True)
-    _warn_if_world_writable(path)
+    if check_writable:
+        _warn_if_world_writable(path)
     return path
+
+
+def data_dir_is_insecure(path: Path | None = None) -> bool:
+    """Return True when the data dir is group/world-writable (Unix only)."""
+    if os.name == "nt":
+        return False
+    target = path if path is not None else data_dir(check_writable=False)
+    try:
+        mode = target.stat().st_mode
+    except OSError as exc:
+        logger.debug("Could not stat data dir %s: %s", target, exc)
+        return False
+    return bool(mode & (stat.S_IWOTH | stat.S_IWGRP))
+
+
+def refuse_if_data_dir_insecure() -> str | None:
+    """Return an error message if the data dir is insecure, else None."""
+    if not data_dir_is_insecure():
+        return None
+    path = data_dir(check_writable=False)
+    return (
+        f"[goal] Error: data directory is group/world-writable ({path}). "
+        "Restrict permissions (e.g. chmod 700) or set CURSOR_GOAL_DATA to a "
+        "private directory before create/validate."
+    )
 
 
 def _warn_if_world_writable(path: Path) -> None:
@@ -48,9 +107,9 @@ def _warn_if_world_writable(path: Path) -> None:
     except OSError as exc:
         logger.debug("Could not stat data dir %s: %s", path, exc)
         return
-    if mode & stat.S_IWOTH:
+    if mode & (stat.S_IWOTH | stat.S_IWGRP):
         logger.warning(
-            "Goal data directory is world-writable (%s); "
+            "Goal data directory is group/world-writable (%s); "
             "treat goal.json as trusted-user state and restrict permissions",
             path,
         )
@@ -70,6 +129,18 @@ def lock_path() -> Path:
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def clamp_turn_budget(value: int) -> int:
+    """Clamp turn budget to [1, MAX_TURN_BUDGET]."""
+    if value < 1:
+        raise ValueError(f"Budget must be a positive integer, got {value}")
+    if value > MAX_TURN_BUDGET:
+        logger.warning(
+            "turn_budget %s exceeds max %s; clamping", value, MAX_TURN_BUDGET
+        )
+        return MAX_TURN_BUDGET
+    return value
 
 
 def _chmod_private(path: Path) -> None:
@@ -96,7 +167,13 @@ def _lock_acquire(handle: Any) -> None:
             handle.write(b"\0")
             handle.flush()
         handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        try:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        except OSError as exc:
+            raise GoalLockTimeoutError(
+                "Could not acquire goal.lock within ~10s; another process may "
+                "be holding it. Retry, or check for a stuck cursor-goal process."
+            ) from exc
     else:
         import fcntl  # isort: skip  # pylint: disable=import-outside-toplevel
 
@@ -135,6 +212,96 @@ def goal_lock() -> Iterator[None]:
             handle.close()
 
 
+def _parse_active(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    raise ValueError(
+        f"active must be a JSON boolean, got {type(value).__name__}: {value!r}"
+    )
+
+
+def _parse_status(value: Any) -> str:
+    status = str(value if value is not None else "unknown")
+    if status not in ALLOWED_STATUSES:
+        raise ValueError(
+            f"invalid status={status!r}; allowed={sorted(ALLOWED_STATUSES)}"
+        )
+    return status
+
+
+def _set_active(state: GoalState, value: Any) -> None:
+    state.active = _parse_active(value)
+
+
+def _set_condition(state: GoalState, value: Any) -> None:
+    state.condition = str(value)
+
+
+def _set_validation_command(state: GoalState, value: Any) -> None:
+    state.validation_command = str(value or "")
+
+
+def _set_created_at(state: GoalState, value: Any) -> None:
+    state.created_at = str(value)
+
+
+def _set_turn_budget(state: GoalState, value: Any) -> None:
+    state.turn_budget = clamp_turn_budget(int(value))
+
+
+def _set_turns_used(state: GoalState, value: Any) -> None:
+    turns = int(value)
+    if turns < 0:
+        raise ValueError(f"turns_used must be >= 0, got {turns}")
+    state.turns_used = turns
+
+
+def _set_status(state: GoalState, value: Any) -> None:
+    state.status = _parse_status(value)
+
+
+def _set_last_reason(state: GoalState, value: Any) -> None:
+    state.last_reason = str(value or "")
+
+
+def _set_last_validation_output(state: GoalState, value: Any) -> None:
+    state.last_validation_output = str(value or "")
+
+
+def _set_last_validation_exit_code(state: GoalState, value: Any) -> None:
+    if value is None or value == "":
+        state.last_validation_exit_code = None
+    else:
+        state.last_validation_exit_code = int(value)
+
+
+def _set_last_eval_verdict(state: GoalState, value: Any) -> None:
+    state.last_eval_verdict = str(value or "")
+
+
+_FIELD_SETTERS: dict[str, Callable[[GoalState, Any], None]] = {
+    "active": _set_active,
+    "condition": _set_condition,
+    "validation_command": _set_validation_command,
+    "created_at": _set_created_at,
+    "turn_budget": _set_turn_budget,
+    "turns_used": _set_turns_used,
+    "status": _set_status,
+    "last_reason": _set_last_reason,
+    "last_validation_output": _set_last_validation_output,
+    "last_validation_exit_code": _set_last_validation_exit_code,
+    "last_eval_verdict": _set_last_eval_verdict,
+}
+
+
+def _apply_field(state: GoalState, key: str, value: Any) -> None:
+    """Validate and assign a single updatable field."""
+    setter = _FIELD_SETTERS.get(key)
+    if setter is None:
+        raise ValueError(f"unknown goal field: {key}")
+    setter(state, value)
+
+
 @dataclass
 class GoalState:
     active: bool = True
@@ -158,11 +325,13 @@ class GoalState:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> GoalState:
         try:
-            turn_budget = int(data.get("turn_budget", 20))
+            turn_budget = clamp_turn_budget(int(data.get("turn_budget", 20)))
             turns_used = int(data.get("turns_used", 0))
             schema_version = int(data.get("schema_version", 1))
         except (TypeError, ValueError) as exc:
             raise ValueError(f"invalid goal.json numeric fields: {exc}") from exc
+        if turns_used < 0:
+            raise ValueError(f"turns_used must be >= 0, got {turns_used}")
         if schema_version not in SUPPORTED_SCHEMA_VERSIONS:
             raise ValueError(
                 f"unsupported schema_version={schema_version}; "
@@ -177,14 +346,20 @@ class GoalState:
                 exit_code = int(exit_raw)
             except (TypeError, ValueError) as exc:
                 raise ValueError(f"invalid last_validation_exit_code: {exc}") from exc
+        active_raw = data.get("active", False)
+        try:
+            active = _parse_active(active_raw)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        status = _parse_status(data.get("status", "unknown"))
         return cls(
-            active=bool(data.get("active", False)),
+            active=active,
             condition=str(data.get("condition", "")),
             validation_command=str(data.get("validation_command") or ""),
             created_at=str(data.get("created_at", "")),
             turn_budget=turn_budget,
             turns_used=turns_used,
-            status=str(data.get("status", "unknown")),
+            status=status,
             last_reason=str(data.get("last_reason") or ""),
             last_validation_output=str(data.get("last_validation_output") or ""),
             last_validation_exit_code=exit_code,
@@ -200,7 +375,13 @@ class GoalState:
         return hashlib.sha256(payload).hexdigest()[:32]
 
 
-def load_goal() -> GoalState | None:
+def load_goal(*, raise_corrupt: bool = False) -> GoalState | None:
+    """Load goal.json.
+
+    Returns None when the file is missing. When *raise_corrupt* is True,
+    corrupt/unsupported content raises :class:`CorruptGoalError`; otherwise
+    logs and returns None (legacy callers / stop-hook fail-open).
+    """
     path = goal_path()
     if not path.is_file():
         return None
@@ -208,14 +389,20 @@ def load_goal() -> GoalState | None:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         logger.error("Failed to read goal.json: %s", exc)
+        if raise_corrupt:
+            raise CorruptGoalError(f"goal.json unreadable: {exc}") from exc
         return None
     if not isinstance(raw, dict):
         logger.error("goal.json is not an object")
+        if raise_corrupt:
+            raise CorruptGoalError("goal.json is not an object")
         return None
     try:
         return GoalState.from_dict(raw)
     except ValueError as exc:
         logger.error("Corrupt goal.json fields: %s", exc)
+        if raise_corrupt:
+            raise CorruptGoalError(f"goal.json corrupt: {exc}") from exc
         return None
 
 
@@ -228,8 +415,16 @@ def _save_goal_unlocked(state: GoalState) -> None:
     path = goal_path()
     tmp = path.with_name(f"goal.{os.getpid()}.{secrets.token_hex(4)}.tmp")
     payload = json.dumps(state.to_dict(), indent=2, ensure_ascii=False) + "\n"
-    tmp.write_text(payload, encoding="utf-8")
-    tmp.replace(path)
+    try:
+        tmp.write_text(payload, encoding="utf-8")
+        tmp.replace(path)
+    except Exception:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+        raise
     _chmod_private(path)
     logger.info("Saved goal state status=%s turns=%s", state.status, state.turns_used)
 
@@ -301,6 +496,34 @@ def mark_goal_achieved(*, require_signal: bool = True) -> tuple[GoalState | None
         return state, status
 
 
+def _write_eval_signal_unlocked(state: GoalState, *, reason: str) -> None:
+    """Atomically write YES-bound eval signal for *state* (caller holds lock)."""
+    data_dir()
+    flag = eval_flag_path()
+    payload = {
+        "condition_hash": state.content_hash(),
+        "created_at": now_iso(),
+        "verdict": "YES",
+        "reason": reason,
+    }
+    tmp = flag.with_name(f"{EVAL_FLAG_NAME}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+    try:
+        tmp.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        tmp.replace(flag)
+    except Exception:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+        raise
+    _chmod_private(flag)
+    logger.info("Recorded evaluator signal hash=%s", payload["condition_hash"])
+
+
 def set_eval_signal(*, verdict: str = "YES", reason: str = "") -> None:
     """Record a YES-bound evaluator signal for the active goal."""
     with goal_lock():
@@ -311,22 +534,9 @@ def set_eval_signal(*, verdict: str = "YES", reason: str = "") -> None:
         if verdict.upper() != "YES":
             logger.warning("Refusing eval signal with non-YES verdict=%s", verdict)
             return
-        data_dir()
-        flag = eval_flag_path()
-        payload = {
-            "condition_hash": state.content_hash(),
-            "created_at": now_iso(),
-            "verdict": "YES",
-            "reason": reason,
-        }
-        flag.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-        _chmod_private(flag)
         state.last_eval_verdict = "YES"
+        _write_eval_signal_unlocked(state, reason=reason)
         _save_goal_unlocked(state)
-        logger.info("Recorded evaluator signal hash=%s", payload["condition_hash"])
 
 
 def has_eval_signal() -> bool:
@@ -374,7 +584,51 @@ def update_goal_fields(**fields: Any) -> GoalState | None:
         if state is None:
             return None
         for key, value in fields.items():
-            if hasattr(state, key):
-                setattr(state, key, value)
+            if key not in _UPDATABLE_FIELDS:
+                logger.debug("Ignoring unknown goal field update: %s", key)
+                continue
+            _apply_field(state, key, value)
+        _save_goal_unlocked(state)
+        return state
+
+
+def create_goal_atomic(
+    state: GoalState,
+    *,
+    force: bool = False,
+) -> tuple[GoalState | None, str]:
+    """Create (or overwrite) a goal and clear eval signal under one lock.
+
+    Returns ``(state, status)`` where status is ``ok`` or ``exists``.
+    """
+    with goal_lock():
+        existing = load_goal()
+        if (
+            existing is not None
+            and existing.active
+            and existing.status == "pursuing"
+            and not force
+        ):
+            return existing, "exists"
+        _clear_eval_signal_unlocked()
+        _save_goal_unlocked(state)
+        return state, "ok"
+
+
+def record_parse_result(verdict: str, reason: str) -> GoalState | None:
+    """Persist eval verdict/reason and YES signal under one lock.
+
+    Returns the updated goal, or None if no goal was present.
+    """
+    with goal_lock():
+        state = load_goal()
+        if state is None:
+            return None
+        state.last_reason = reason
+        state.last_eval_verdict = verdict
+        if verdict == "YES":
+            _write_eval_signal_unlocked(state, reason=reason)
+        else:
+            _clear_eval_signal_unlocked()
         _save_goal_unlocked(state)
         return state

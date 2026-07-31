@@ -31,7 +31,7 @@ Implement Stack, Queue, and LinkedList methods to pass test_data_structures.py.
 
 ## Verification Patterns
 
-- `goal-manage.sh create` with natural language condition
+- `run_goal.py manage create` with natural language condition
 - Multiple `NO:` responses before final `YES:`
 - `pytest testing/scripts/test_data_structures.py` executed repeatedly
 - `[GOAL] Turn N/8` in followup messages

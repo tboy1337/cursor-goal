@@ -29,7 +29,7 @@ Migrate testing/scripts/user_service.js and related files from legacy_api.js to 
 
 ## Verification Patterns
 
-- `goal-manage.sh create` without `--test` or `--budget`
+- `run_goal.py manage create` without `--test` or `--budget`
 - Natural language condition in goal create command
 - Subagent "Evaluate goal completion" invoked
 - `YES:` or `NO:` evaluation response

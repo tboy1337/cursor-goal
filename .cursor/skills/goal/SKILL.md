@@ -9,19 +9,21 @@ Set a persistent objective. Work toward it across turns until it is met.
 
 ## Harness (Python)
 
-Prefer the installed skill runner:
+Prefer the installed skill runner. Use the interpreter that matches the host OS:
+
+**Unix / macOS / WSL:**
 
 ```bash
-python -u ~/.cursor/skills/goal/scripts/run_goal.py <command> ...
+python3 -u ~/.cursor/skills/goal/scripts/run_goal.py <command> ...
 ```
 
-On Windows (Python Launcher):
+**Windows (PowerShell / Cursor Shell):**
 
 ```powershell
 py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" <command> ...
 ```
 
-If the package is installed editable (`pip install -e .`), `python -m cursor_goal` and `cursor-goal` also work.
+If the package is installed editable (`pip install -e .`), `python -m cursor_goal` and `cursor-goal` also work — but editable install does **not** register the Cursor skill, agents, or stop hook. Use the installer for that.
 
 | Command | Purpose |
 |---------|---------|
@@ -32,17 +34,34 @@ If the package is installed editable (`pip install -e .`), `python -m cursor_goa
 
 State file: `~/.cursor-goal/data/goal.json` (override with `CURSOR_GOAL_DATA`).
 
-`validation_command` is trusted-user local state (executed by `eval validate` / agent Shell). Prefer `--test "..."` for compound commands. Treat `~/.cursor-goal/data` as shell-equivalent trust.
+`validation_command` is trusted-user local state (executed by `eval validate` / agent Shell). Prefer `--test "..."` for compound commands. Treat `~/.cursor-goal/data` as shell-equivalent trust. Set `CURSOR_GOAL_DENY_SHELL=1` to refuse shell-mode validation.
 
 ## Setting a Goal
 
-When the user says `/goal`, parse then act — do **not** `eval` shell strings from the parser:
+When the user says `/goal`, parse then act — do **not** evaluate shell strings from the parser output.
+
+**Unix / macOS / WSL:**
 
 ```bash
-PARSE=$(python -u ~/.cursor/skills/goal/scripts/run_goal.py parse "<raw user input after /goal>")
-# PARSE is JSON, e.g.:
-# {"subcommand":null,"action":"create","condition":"all tests pass","test_cmd":"npm test","budget":20}
-# or {"subcommand":"status","action":"status","condition":null,"test_cmd":null,"budget":null}
+PARSE=$(python3 -u ~/.cursor/skills/goal/scripts/run_goal.py parse "<raw user input after /goal>")
+```
+
+**Windows (PowerShell):**
+
+```powershell
+$PARSE = py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" parse "<raw user input after /goal>"
+```
+
+`$PARSE` / `PARSE` is JSON, e.g.:
+
+```json
+{"subcommand":null,"action":"create","condition":"all tests pass","test_cmd":"npm test","budget":20}
+```
+
+or a subcommand:
+
+```json
+{"subcommand":"status","action":"status","condition":null,"test_cmd":null,"budget":null}
 ```
 
 Then:
@@ -73,10 +92,19 @@ Aliases for clear: `stop`, `off`, `reset`, `cancel`
 
 Always resolve Task params from the harness:
 
+**Unix:**
+
 ```bash
-SPAWN=$(python -u ~/.cursor/skills/goal/scripts/run_goal.py eval spawn-config)
-# {"subagent_type":"goal-evaluator","model":"fast","readonly":true}
+SPAWN=$(python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval spawn-config)
 ```
+
+**Windows:**
+
+```powershell
+$SPAWN = py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" eval spawn-config
+```
+
+Example: `{"subagent_type":"goal-evaluator","model":"fast","readonly":true}`
 
 Never evaluate with `generalPurpose` or the same Task call as the worker. Some Cursor plans only accept Task `model: "fast"`; override with a specific slug only when your plan allows it.
 
@@ -91,39 +119,37 @@ While the goal is active (`status: "pursuing"`), repeat:
 
 ### Evaluation via Subagent
 
-When a validation command is configured:
+When a validation command is configured, run `eval validate` first.
+
+Then generate the prompt and spawn config (capture into variables with the OS-appropriate Shell syntax above), and spawn **Task** with `subagent_type`, `model`, and `readonly` from the spawn-config JSON, plus `prompt` set to the eval prompt text.
+
+Parse the result. **Prefer `--stdin` (especially on Windows)** so long evaluator text never hits argv length limits:
+
+**Unix:**
 
 ```bash
-python -u ~/.cursor/skills/goal/scripts/run_goal.py eval validate
+python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval parse-result --stdin <<'EOF'
+<subagent response>
+EOF
 ```
 
-Then:
+**Windows (PowerShell):**
 
-```bash
-EVAL_PROMPT=$(python -u ~/.cursor/skills/goal/scripts/run_goal.py eval prompt --work-summary "what you just did")
-SPAWN=$(python -u ~/.cursor/skills/goal/scripts/run_goal.py eval spawn-config)
+```powershell
+@'
+<subagent response>
+'@ | py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" eval parse-result --stdin
 ```
 
-Spawn **Task** with `subagent_type`, `model`, and `readonly` from `$SPAWN`, plus `prompt=$EVAL_PROMPT`.
+Alternatively: `eval parse-result @path\to\file.txt` or (short output only) `eval parse-result "YES: …"`.
 
-Parse the result:
+On YES: automatically records a YES-bound evaluator signal (exit 0). On NO/UNCLEAR: exit 1.
 
-```bash
-python -u ~/.cursor/skills/goal/scripts/run_goal.py eval parse-result "<subagent response>"
-# Prints VERDICT=YES|NO|UNCLEAR and REASON=...
-# On YES: automatically records a YES-bound evaluator signal
-# Exit 0 for YES, 1 for NO/UNCLEAR
-```
-
-**If YES** (exit 0):
-
-```bash
-python -u ~/.cursor/skills/goal/scripts/run_goal.py manage done
-```
+**If YES** (exit 0): run `manage done`.
 
 **If NO** (exit 1): read REASON, continue working, evaluate again after more progress.
 
-`eval signal` is only for recovery (`eval signal --force` after a YES parse if the signal file was cleared). Prefer `parse-result` auto-signal.
+`eval signal` is only for recovery (`eval signal --force` after a YES parse if the signal file was cleared). Prefer `parse-result` auto-signal. `--force` is not cryptographic attestation.
 
 ### When to Evaluate
 
@@ -141,7 +167,7 @@ When you see a `[GOAL]` prefix, resume working toward the condition immediately.
 
 ## Turn Budget
 
-Default budget is 20 turns. Customize with `--budget N` or natural language (`stop after 10 turns`). When exhausted, status becomes `budget-limited` and you wrap up.
+Default budget is 20 turns (max 500). Customize with `--budget N` or natural language (`stop after 10 turns`). When exhausted, status becomes `budget-limited` and you wrap up.
 
 ## Writing Good Conditions
 

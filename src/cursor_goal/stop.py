@@ -17,6 +17,7 @@ logger = get_logger("cursor_goal.stop")
 
 MAX_STDIN_BYTES = 1 * 1024 * 1024
 DEFAULT_DRAIN_MS = 100
+MAX_DRAIN_MS = 2000
 LAST_STOP_RESPONSE_NAME = "last-stop-response.json"
 
 
@@ -32,7 +33,17 @@ def _drain_ms() -> int:
             DEFAULT_DRAIN_MS,
         )
         return DEFAULT_DRAIN_MS
-    return max(0, value)
+    if value < 0:
+        return 0
+    if value > MAX_DRAIN_MS:
+        logger.warning(
+            "CURSOR_GOAL_STOP_DRAIN_MS=%s exceeds max %s; clamping "
+            "(hook timeout is typically 30s)",
+            value,
+            MAX_DRAIN_MS,
+        )
+        return MAX_DRAIN_MS
+    return value
 
 
 def _fsync_stdout() -> None:

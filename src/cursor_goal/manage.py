@@ -8,14 +8,18 @@ from dataclasses import dataclass
 
 from cursor_goal.logging_config import get_logger
 from cursor_goal.state import (
+    MAX_TURN_BUDGET,
+    CorruptGoalError,
+    GoalLockTimeoutError,
     GoalState,
-    clear_eval_signal,
+    clamp_turn_budget,
     clear_goal_files,
+    create_goal_atomic,
     load_goal,
     mark_goal_achieved,
     mutate_goal,
     now_iso,
-    save_goal,
+    refuse_if_data_dir_insecure,
 )
 from cursor_goal.validation import redact_command
 
@@ -37,6 +41,8 @@ def _parse_budget(raw: str) -> int:
         raise ValueError(f"Budget must be a positive integer, got {raw!r}") from exc
     if value < 1:
         raise ValueError(f"Budget must be a positive integer, got {value}")
+    if value > MAX_TURN_BUDGET:
+        raise ValueError(f"Budget must be <= {MAX_TURN_BUDGET}, got {value}")
     return value
 
 
@@ -87,18 +93,9 @@ def _validate_create(args: _CreateArgs) -> str | None:
             f"[goal] Error: condition exceeds 4000 character limit "
             f"({len(args.condition)} chars)"
         )
-    existing = load_goal()
-    if (
-        existing is not None
-        and existing.active
-        and existing.status == "pursuing"
-        and not args.force
-    ):
-        return (
-            "[goal] Error: an active pursuing goal already exists. "
-            "Use --force to overwrite, or clear/pause first.\n"
-            f"[goal] Existing condition: {existing.condition}"
-        )
+    insecure = refuse_if_data_dir_insecure()
+    if insecure is not None:
+        return insecure
     return None
 
 
@@ -119,7 +116,7 @@ def cmd_create(argv: list[str]) -> int:
         condition=args.condition,
         validation_command=args.test_cmd,
         created_at=now_iso(),
-        turn_budget=args.budget,
+        turn_budget=clamp_turn_budget(args.budget),
         turns_used=0,
         status="pursuing",
         last_reason="",
@@ -127,8 +124,20 @@ def cmd_create(argv: list[str]) -> int:
         last_validation_exit_code=None,
         last_eval_verdict="",
     )
-    save_goal(state)
-    clear_eval_signal()
+    try:
+        created, status = create_goal_atomic(state, force=args.force)
+    except GoalLockTimeoutError as exc:
+        print(f"[goal] Error: {exc}", file=sys.stderr)
+        return 1
+    if status == "exists" and created is not None:
+        print(
+            "[goal] Error: an active pursuing goal already exists. "
+            "Use --force to overwrite, or clear/pause first.",
+            file=sys.stderr,
+        )
+        print(f"[goal] Existing condition: {created.condition}", file=sys.stderr)
+        return 1
+
     logger.info(
         "Created goal condition=%r budget=%s validation=%r",
         args.condition,
@@ -139,25 +148,40 @@ def cmd_create(argv: list[str]) -> int:
     print("[goal] Goal created:")
     print(f"  Condition: {args.condition}")
     if args.test_cmd:
-        print(f"  Validation: {args.test_cmd}")
+        print(f"  Validation: {redact_command(args.test_cmd)}")
     print(f"  Budget: {args.budget} turns")
     print("  Status: pursuing")
     return 0
 
 
 def cmd_status(_argv: list[str]) -> int:
-    state = load_goal()
+    try:
+        state = load_goal(raise_corrupt=True)
+    except CorruptGoalError as exc:
+        print(f"[goal] Error: {exc}", file=sys.stderr)
+        print(
+            "[goal] Fix or remove ~/.cursor-goal/data/goal.json "
+            "(or CURSOR_GOAL_DATA), then retry.",
+            file=sys.stderr,
+        )
+        return 1
+    except GoalLockTimeoutError as exc:
+        print(f"[goal] Error: {exc}", file=sys.stderr)
+        return 1
+
     if state is None:
         print("[goal] No active goal.")
         return 0
 
+    # Derive displayed activity from pursuing status so paused goals are clear.
+    display_active = state.active and state.status == "pursuing"
     print("[goal] Status Report")
-    print(f"  Active: {str(state.active).lower()}")
+    print(f"  Active: {str(display_active).lower()}")
     print(f"  Status: {state.status}")
     print(f"  Condition: {state.condition}")
     print(f"  Progress: {state.turns_used} / {state.turn_budget} turns")
     if state.validation_command:
-        print(f"  Validation: {state.validation_command}")
+        print(f"  Validation: {redact_command(state.validation_command)}")
         if state.last_validation_exit_code is not None:
             print(f"  Last validation exit: {state.last_validation_exit_code}")
     if state.last_reason:
@@ -173,11 +197,15 @@ def cmd_pause(_argv: list[str]) -> int:
         if state.status != "pursuing":
             raise ValueError(f"Cannot pause: goal is '{state.status}', not 'pursuing'.")
         state.status = "paused"
+        state.active = False
 
     try:
         result = mutate_goal(mutator)
     except ValueError as exc:
         print(f"[goal] {exc}")
+        return 1
+    except GoalLockTimeoutError as exc:
+        print(f"[goal] Error: {exc}", file=sys.stderr)
         return 1
     if result is None:
         print("[goal] No active goal to pause.")
@@ -201,6 +229,9 @@ def cmd_resume(_argv: list[str]) -> int:
     except ValueError as exc:
         print(f"[goal] {exc}")
         return 1
+    except GoalLockTimeoutError as exc:
+        print(f"[goal] Error: {exc}", file=sys.stderr)
+        return 1
     if result is None:
         print("[goal] No goal to resume.")
         return 1
@@ -210,7 +241,11 @@ def cmd_resume(_argv: list[str]) -> int:
 
 def cmd_done(argv: list[str]) -> int:
     force = "--force" in argv
-    state, status = mark_goal_achieved(require_signal=not force)
+    try:
+        state, status = mark_goal_achieved(require_signal=not force)
+    except GoalLockTimeoutError as exc:
+        print(f"[goal] Error: {exc}", file=sys.stderr)
+        return 1
     if status == "missing":
         print("[goal] No active goal to mark done.")
         return 1
@@ -220,8 +255,8 @@ def cmd_done(argv: list[str]) -> int:
             file=sys.stderr,
         )
         print(
-            '[goal] Run: cursor-goal eval parse-result "YES: <reason>" '
-            "(after spawning an evaluator subagent)",
+            "[goal] Run: cursor-goal eval parse-result --stdin "
+            '(or parse-result "YES: <reason>") after spawning an evaluator.',
             file=sys.stderr,
         )
         print("[goal] Then retry: cursor-goal manage done", file=sys.stderr)
@@ -229,7 +264,7 @@ def cmd_done(argv: list[str]) -> int:
     if status == "forced":
         print(
             "[goal] --force flag set, proceeding anyway "
-            "(protocol violation logged).",
+            "(protocol violation — not cryptographic attestation).",
             file=sys.stderr,
         )
         logger.warning("done --force without evaluator signal")
@@ -241,7 +276,11 @@ def cmd_done(argv: list[str]) -> int:
 
 
 def cmd_clear(_argv: list[str]) -> int:
-    existed = clear_goal_files()
+    try:
+        existed = clear_goal_files()
+    except GoalLockTimeoutError as exc:
+        print(f"[goal] Error: {exc}", file=sys.stderr)
+        return 1
     if existed:
         print("[goal] Goal cleared.")
     else:
@@ -267,6 +306,7 @@ def cmd_manage(argv: list[str]) -> int:
     }
     handler = dispatch.get(command)
     if handler is None:
+        print(f"[goal] Error: unknown manage command: {command}", file=sys.stderr)
         _print_help()
         return 1
     return handler(rest)

@@ -32,5 +32,21 @@ def run_cli(*args: str) -> tuple[int, str, str]:
     return code, out.getvalue(), err.getvalue()
 
 
+def run_cli_stdin(stdin_text: str, *args: str) -> tuple[int, str, str]:
+    """Like run_cli but feeds *stdin_text* to sys.stdin for --stdin commands."""
+    import sys
+    from unittest.mock import patch
+
+    out = io.StringIO()
+    err = io.StringIO()
+    with (
+        patch.object(sys, "stdin", io.StringIO(stdin_text)),
+        redirect_stdout(out),
+        redirect_stderr(err),
+    ):
+        code = main(list(args))
+    return code, out.getvalue(), err.getvalue()
+
+
 def load_goal_json(data_dir: Path) -> dict:
     return json.loads((data_dir / "goal.json").read_text(encoding="utf-8"))
