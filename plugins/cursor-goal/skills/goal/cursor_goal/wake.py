@@ -164,11 +164,20 @@ def _read_pid_record() -> (  # pylint: disable=too-many-return-statements
         data = json.loads(raw)
     except json.JSONDecodeError:
         try:
-            return {"pid": int(raw), "token": "", "started_at": ""}
+            # Legacy plain-int pid files have no ownership token.
+            return {
+                "pid": int(raw),
+                "token": str(),
+                "started_at": str(),
+            }
         except ValueError:
             return None
     if isinstance(data, int):
-        return {"pid": int(data), "token": "", "started_at": ""}
+        return {
+            "pid": int(data),
+            "token": str(),
+            "started_at": str(),
+        }
     if isinstance(data, dict) and "pid" in data:
         try:
             return {
@@ -200,9 +209,9 @@ def _write_pid_record(pid: int, token: str) -> None:
     )
 
 
-def _write_pid(pid: int, token: str = "") -> None:
+def _write_pid(pid: int, token: str | None = None) -> None:
     """Write pid ownership record (tests may omit token)."""
-    _write_pid_record(pid, token or secrets.token_hex(8))
+    _write_pid_record(pid, token if token else secrets.token_hex(8))
 
 
 def _clear_pid(
