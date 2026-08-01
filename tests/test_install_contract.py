@@ -212,6 +212,27 @@ def test_sync_plugin_tree_check() -> None:
     assert completed.returncode == 0, completed.stderr
 
 
+def test_compare_file_ignores_crlf_vs_lf(tmp_path: Path) -> None:
+    """Windows write_text CRLF must not false-drift against LF checkouts."""
+    root = Path(__file__).resolve().parents[1]
+    script = root / "scripts" / "sync-plugin-tree.py"
+    spec = importlib.util.spec_from_file_location("sync_plugin_tree", script)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    left = tmp_path / "left" / "VERSION"
+    right = tmp_path / "right" / "VERSION"
+    left.parent.mkdir()
+    right.parent.mkdir()
+    left.write_bytes(b"2.1.0\n")
+    right.write_bytes(b"2.1.0\r\n")
+    assert mod._compare_file(left, right, Path("VERSION")) is None
+
+    right.write_bytes(b"9.9.9\r\n")
+    assert mod._compare_file(left, right, Path("VERSION")) == "drift: VERSION"
+
+
 def test_sync_plugin_tree_check_detects_vendored_drift(tmp_path: Path) -> None:
     """Isolated fake repo: vendored package drift must fail --check (no live-tree mutation)."""
     root = Path(__file__).resolve().parents[1]

@@ -127,7 +127,10 @@ def write_plugin(root: Path) -> Path:
         newline="\n",
     )
     _copy_tree(pkg_src, skill_dest / "cursor_goal")
-    (skill_dest / "VERSION").write_text(version + "\n", encoding="utf-8")
+    # newline="\n" forces LF on Windows so --check matches git (eol=lf).
+    (skill_dest / "VERSION").write_text(
+        version + "\n", encoding="utf-8", newline="\n"
+    )
 
     shutil.copy2(agents_src / "goalKeeper.md", agents_dest / "goalKeeper.md")
     shutil.copy2(agents_src / "goal-evaluator.md", agents_dest / "goal-evaluator.md")
@@ -157,7 +160,7 @@ def write_plugin(root: Path) -> Path:
         },
     }
     (hooks_dest / "hooks.json").write_text(
-        json.dumps(hooks, indent=2) + "\n", encoding="utf-8"
+        json.dumps(hooks, indent=2) + "\n", encoding="utf-8", newline="\n"
     )
 
     plugin_manifest = {
@@ -177,7 +180,9 @@ def write_plugin(root: Path) -> Path:
         "hooks": "./hooks/hooks.json",
     }
     (manifest_dir / "plugin.json").write_text(
-        json.dumps(plugin_manifest, indent=2) + "\n", encoding="utf-8"
+        json.dumps(plugin_manifest, indent=2) + "\n",
+        encoding="utf-8",
+        newline="\n",
     )
 
     market_dir = root / ".cursor-plugin"
@@ -202,7 +207,9 @@ def write_plugin(root: Path) -> Path:
         ],
     }
     (market_dir / "marketplace.json").write_text(
-        json.dumps(marketplace, indent=2) + "\n", encoding="utf-8"
+        json.dumps(marketplace, indent=2) + "\n",
+        encoding="utf-8",
+        newline="\n",
     )
 
     readme = plugin_root / "README.md"
@@ -220,6 +227,7 @@ def write_plugin(root: Path) -> Path:
         "stop-hook stdout. In-turn evaluation remains primary; the stop hook "
         "is a safety net.\n",
         encoding="utf-8",
+        newline="\n",
     )
     return plugin_root
 
@@ -259,6 +267,11 @@ def _iter_vendored_files(pkg_root: Path) -> list[Path]:
     return files
 
 
+def _normalize_newlines(text: str) -> str:
+    """Normalize CRLF/CR to LF for cross-platform text comparison."""
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def _compare_file(left: Path, right: Path, rel_key: Path) -> str | None:
     """Return a mismatch label, or None when files match."""
     if not right.is_file():
@@ -269,7 +282,15 @@ def _compare_file(left: Path, right: Path, rel_key: Path) -> str | None:
         if left_data != right_data:
             return f"drift: {rel_key.as_posix()}"
         return None
-    if not filecmp.cmp(left, right, shallow=False):
+    # .cmd embeds CRLF payloads intentionally — compare raw bytes.
+    if left.suffix.lower() == ".cmd":
+        if not filecmp.cmp(left, right, shallow=False):
+            return f"drift: {rel_key.as_posix()}"
+        return None
+    # Text: ignore CRLF vs LF so Windows runners do not false-positive.
+    left_text = _normalize_newlines(left.read_text(encoding="utf-8"))
+    right_text = _normalize_newlines(right.read_text(encoding="utf-8"))
+    if left_text != right_text:
         return f"drift: {rel_key.as_posix()}"
     return None
 

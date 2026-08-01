@@ -539,6 +539,11 @@ def test_force_create_disarms_prior_wake(
 def test_windows_kill_refuses_unowned(
     wake_on: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    del wake_on
+    # Avoid data_dir()/Path.resolve() after os.name monkeypatch: on macOS,
+    # pathlib may call a flavour realpath that is aliased to abspath and
+    # rejects strict= (TypeError). Ownership refusal does not need pid files.
+    monkeypatch.setattr(wake_mod, "_read_pid_record", lambda: None)
     monkeypatch.setattr(wake_mod, "_pid_alive", lambda _pid: True)
     monkeypatch.setattr(wake_mod.os, "name", "nt")
     monkeypatch.setattr(wake_mod, "_windows_pid_looks_owned", lambda _pid: False)
@@ -745,6 +750,9 @@ def test_run_loop_token_replaced(
 
 
 def test_taskkill_oserror(wake_on: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    del wake_on
+    # See test_windows_kill_refuses_unowned: skip pid-path resolve under os.name=nt.
+    monkeypatch.setattr(wake_mod, "_read_pid_record", lambda: None)
     monkeypatch.setattr(wake_mod, "_pid_alive", lambda _p: True)
     monkeypatch.setattr(wake_mod.os, "name", "nt")
     monkeypatch.setattr(wake_mod, "_windows_pid_looks_owned", lambda _p: True)

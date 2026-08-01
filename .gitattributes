@@ -1,6 +1,9 @@
 # Normalize line endings for cross-platform (Windows / macOS / Linux) development.
 * text=auto eol=lf
 
+# Plugin VERSION stamp (no extension) must stay LF for sync --check.
+**/skills/goal/VERSION text eol=lf
+
 # --- Source & config (explicit LF) ---
 *.py      text eol=lf diff=python
 *.pyi     text eol=lf
