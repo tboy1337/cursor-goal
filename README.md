@@ -177,7 +177,7 @@ py -3 scripts/verify.py --fix   # apply isort/black, then verify
 
 ## Releases
 
-User-facing notes: [CHANGELOG.md](CHANGELOG.md). Maintainer checklist: [docs/release.md](docs/release.md).
+Maintainer checklist: [docs/release.md](docs/release.md).
 
 ## License
 

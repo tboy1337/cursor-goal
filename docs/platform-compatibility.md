@@ -4,7 +4,7 @@ cursor-goal targets **Cursor IDE only**. The harness is a **Python 3.12+** packa
 
 **Install:** `./scripts/install-goal.sh` or `.\scripts\install-goal.ps1` from a full clone (see [install.md](install.md)).
 
-Also: [known-limitations.md](known-limitations.md) · [troubleshooting.md](troubleshooting.md) · [CHANGELOG.md](../CHANGELOG.md)
+Also: [known-limitations.md](known-limitations.md) · [troubleshooting.md](troubleshooting.md)
 
 ## Compatibility Matrix
 

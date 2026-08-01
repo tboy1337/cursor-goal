@@ -15,7 +15,6 @@ Tagging `v2.4.0` is the first public 2.x release (GitHub Latest was previously v
    - [`src/cursor_goal/__init__.py`](../src/cursor_goal/__init__.py) (`__version__`)
    - [`pyproject.toml`](../pyproject.toml) (`[project].version`)
    - Update tagged-clone pins in [`docs/install.md`](install.md) and [`README.md`](../README.md) to `vX.Y.Z`
-   - Add a matching section at the top of [`CHANGELOG.md`](../CHANGELOG.md)
 
 2. **Regenerate the plugin / marketplace tree**
 
@@ -39,7 +38,7 @@ Tagging `v2.4.0` is the first public 2.x release (GitHub Latest was previously v
    powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-smoke.ps1
    ```
 
-4. **Commit** the version bump, plugin sync, CHANGELOG, and docs pins.
+4. **Commit** the version bump, plugin sync, and docs pins.
 
 5. **Tag and push** (tag must equal `v` + package version exactly)
 

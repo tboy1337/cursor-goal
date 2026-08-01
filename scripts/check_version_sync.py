@@ -5,7 +5,6 @@ Checks:
   - pyproject.toml ``version`` == ``cursor_goal.__version__``
   - docs/install.md tagged clone pin ``vX.Y.Z`` matches (when present)
   - README.md tagged clone pin ``vX.Y.Z`` matches (when present)
-  - CHANGELOG.md top ``## [X.Y.Z]`` heading matches (when present)
   - plugins/cursor-goal/.cursor-plugin/plugin.json ``version`` matches (when present)
   - .cursor-plugin/marketplace.json plugin entry version matches (when present)
 """
@@ -91,19 +90,6 @@ def _read_marketplace_version(root: Path) -> str | None:
     return next(iter(versions))
 
 
-def _read_changelog_version(root: Path) -> str | None:
-    """Return the first ``## [X.Y.Z]`` version heading from CHANGELOG.md."""
-    path = root / "CHANGELOG.md"
-    if not path.is_file():
-        return None
-    match = re.search(
-        r"^## \[(\d+\.\d+\.\d+)\]", path.read_text(encoding="utf-8"), re.M
-    )
-    if match is None:
-        raise ValueError("CHANGELOG.md has no ## [X.Y.Z] heading")
-    return match.group(1)
-
-
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
     errors: list[str] = []
@@ -149,14 +135,6 @@ def main() -> int:
     if market is not None and market != proj:
         errors.append(f"marketplace={market} != package {proj}")
 
-    try:
-        changelog = _read_changelog_version(root)
-    except ValueError as exc:
-        errors.append(str(exc))
-        changelog = None
-    if changelog is not None and changelog != proj:
-        errors.append(f"CHANGELOG={changelog} != package {proj}")
-
     if errors:
         print("version mismatch:", file=sys.stderr)
         for item in errors:
@@ -172,8 +150,6 @@ def main() -> int:
         extras.append(f"plugin={plugin}")
     if market is not None:
         extras.append(f"marketplace={market}")
-    if changelog is not None:
-        extras.append(f"CHANGELOG={changelog}")
     suffix = f" ({', '.join(extras)})" if extras else ""
     print(f"version OK {proj}{suffix}")
     return 0
