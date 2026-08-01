@@ -128,6 +128,13 @@ install_skill_files() {
   cp "${SOURCE_SKILL}/SKILL.md" "${INSTALL_DIR}/SKILL.md"
   cp "${SOURCE_SKILL}/scripts/stop_hook.py" "${INSTALL_DIR}/scripts/stop_hook.py"
   cp "${SOURCE_SKILL}/scripts/run_goal.py" "${INSTALL_DIR}/scripts/run_goal.py"
+  if [ -f "${SOURCE_SKILL}/scripts/wake_loop.sh" ]; then
+    cp "${SOURCE_SKILL}/scripts/wake_loop.sh" "${INSTALL_DIR}/scripts/wake_loop.sh"
+    chmod +x "${INSTALL_DIR}/scripts/wake_loop.sh" || true
+  fi
+  if [ -f "${SOURCE_SKILL}/scripts/wake_loop.cmd" ]; then
+    cp "${SOURCE_SKILL}/scripts/wake_loop.cmd" "${INSTALL_DIR}/scripts/wake_loop.cmd"
+  fi
 
   "$PYTHON_BIN" - "$INSTALL_DIR" <<'PY'
 import sys

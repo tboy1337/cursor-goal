@@ -10,12 +10,19 @@ After `.\scripts\install-goal.ps1`:
 py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" manage create "smoke continue" --budget 5
 ```
 
-4. In Cursor Agent, do a tiny edit and let the turn complete (`status=completed`).
-5. Expect a `[GOAL]` followup. If missing:
+4. Expect create output to mention wake armed. Start the wake loop in a **background** Cursor Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE`:
+
+```powershell
+py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" wake loop
+```
+
+5. In Cursor Agent, do a tiny edit and let the turn complete (`status=completed`).
+6. Expect a `[GOAL]` followup **or** an `AGENT_GOAL_WAKE` notification. If stop followup is missing:
    - View → Output → Hooks — look for stop exit 0 and JSON body
-   - Set `$env:CURSOR_GOAL_LOG='DEBUG'`, re-trigger; check
-     `%USERPROFILE%\.cursor-goal\data\last-stop-response.json` for `followup_message`
-6. Clear:
+   - Check `%USERPROFILE%\.cursor-goal\data\last-stop-response.json` for `payload.followup_message`
+   - If the file has `followup_message` but Hooks shows `{}`, that is the Cursor capture race ([research](cursor-windows-stop-hook-race.md))
+   - Wake sentinel should still fire within `CURSOR_GOAL_WAKE_INTERVAL_S` (default 45s)
+7. Clear:
 
 ```powershell
 py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" manage clear
@@ -29,9 +36,18 @@ $payload = '{"status":"completed","loop_count":0}'
 $payload | cmd /c "$env:USERPROFILE\.cursor\skills\goal\scripts\stop_hook.cmd"
 ```
 
-Expect a JSON line with `followup_message` (or `{}` if no pursuing goal).
+Expect a JSON line with `followup_message` (or `{}` if no pursuing goal) and a written `last-stop-response.json`.
+
+Wake tick check:
+
+```powershell
+py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" manage create "wake smoke" --budget 3
+py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" wake tick
+# Expect: AGENT_GOAL_WAKE {"prompt":"[GOAL] ..."}
+py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" manage clear
+```
 
 ## Residual risk
 
 Cursor may still drop fast-hook stdout on some Windows builds despite `.cmd` + drain delay.
-Prefer in-turn evaluation (`eval spawn-config` + Task `goal-evaluator`). Treat followups as a safety net, not the primary completion path.
+Prefer in-turn evaluation (`eval spawn-config` + Task `goal-evaluator`). Treat stop followups as a safety net; treat the wake watchdog as the race-immune backup.

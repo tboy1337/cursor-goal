@@ -54,7 +54,7 @@ On upgrade, a previous skill tree is copied to `~/.cursor/skills/goal.bak.<UTC>`
 ### Install from a tagged release
 
 ```bash
-git clone --branch v1.3.0 https://github.com/tboy1337/cursor-goal.git
+git clone --branch v1.4.0 https://github.com/tboy1337/cursor-goal.git
 cd cursor-goal
 ./scripts/install-goal.sh   # or install-goal.ps1 on Windows
 ```
@@ -113,7 +113,7 @@ License remains **AGPL-3.0-only** for both distribution paths.
 | Platform | Install notes |
 |----------|----------------|
 | Cursor IDE (Unix/macOS) | Fully supported |
-| Cursor IDE (Windows) | Use `install-goal.ps1` only. Writes `stop_hook.cmd` (absolute Python baked in) plus a ~100ms stdout drain delay to mitigate Cursor’s capture race. Prefer in-turn evaluation; set `CURSOR_GOAL_LOG=DEBUG` to write `last-stop-response.json` if diagnosing followups. Re-run the installer after moving/upgrading Python. `install-goal.sh` from Git Bash is refused. |
+| Cursor IDE (Windows) | Use `install-goal.ps1` only. Writes `stop_hook.cmd` (absolute Python baked in) plus a ~250ms stdout drain delay to mitigate Cursor’s capture race. Always writes `last-stop-response.json`. Prefer in-turn evaluation; arm `wake loop` with `notify_on_output` for race-immune continuation (see [cursor-windows-stop-hook-race.md](cursor-windows-stop-hook-race.md)). Re-run the installer after moving/upgrading Python. `install-goal.sh` from Git Bash is refused. |
 | Teams marketplace | Import this repo; plugin stop hook uses `python3` on PATH (Unix/Teams-oriented). On native Windows prefer `install-goal.ps1` instead of relying on the marketplace stop hook. |
 | WSL | Use `./scripts/install-goal.sh` inside WSL with a WSL home for WSL Cursor. Do not point `$HOME` at `/mnt/c/...` for native Windows Cursor — use `install-goal.ps1` instead. |
 

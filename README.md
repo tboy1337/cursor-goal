@@ -10,7 +10,7 @@
 Autonomous `/goal` loop for Cursor IDE: persist an objective, work across turns, and stop only when the condition is actually true.
 
 **Primary loop:** in-turn subagent evaluation (worker ≠ evaluator model) via the Python harness.  
-**Safety net:** Cursor `stop` hook auto-continuation (`followup_message`).
+**Safety nets:** Cursor `stop` hook (`followup_message`) plus a wake watchdog (`AGENT_GOAL_WAKE`) that does not depend on hook stdout capture.
 
 ```text
 /goal all tests in test/auth pass and the lint step is clean
@@ -30,7 +30,7 @@ Three supported paths:
 | Path | Who | How |
 |------|-----|-----|
 | **Clone + installer** | Individuals | Full clone or GitHub Release archive → `install-goal.sh` / `install-goal.ps1` |
-| **Tagged release** | Individuals | `git clone --branch v1.3.0 …` then installer (see [docs/install.md](docs/install.md)) |
+| **Tagged release** | Individuals | `git clone --branch v1.4.0 …` then installer (see [docs/install.md](docs/install.md)) |
 | **Teams marketplace** | Teams/Enterprise | Import this repo in Cursor Dashboard → Plugins (see `.cursor-plugin/marketplace.json`) |
 
 **Agent install (explicit steps):**
@@ -129,6 +129,7 @@ Then `eval spawn-config` prints the resolved Task parameters. Some Cursor plans 
 | `eval spawn-config` | JSON Task params for the evaluator (model + subagent) |
 | `eval` | Evaluator prompt, YES-bound signal, YES/NO parse |
 | `stop` | Cursor stop hook: turn++, budget, `followup_message` (no validation subprocess) |
+| `wake` | Race-immune wake watchdog (`arm`/`loop`/`tick`/`disarm`) via shell notify |
 | `SKILL.md` / `goalKeeper.md` / `goal-evaluator.md` | Agent protocol |
 
 CLI (after install):
@@ -148,9 +149,9 @@ Developers can also `pip install -e ".[dev]"` and use `cursor-goal` / `python -m
 | Platform | Status |
 |----------|--------|
 | Cursor IDE (Unix) | Reference — harness unit-tested; stop hook verified on Unix |
-| Cursor IDE (Windows) | Harness works; stop hook uses `stop_hook.cmd` + stdout drain delay to mitigate [Cursor capture race](https://forum.cursor.com/t/race-condition-silently-disables-hooks-that-exit-quickly/165818) — still prefer in-turn eval |
+| Cursor IDE (Windows) | Harness works; `stop_hook.cmd` + drain mitigate the [Cursor capture race](https://forum.cursor.com/t/race-condition-silently-disables-hooks-that-exit-quickly/165818); wake watchdog continues when followups drop |
 
-See [docs/platform-compatibility.md](docs/platform-compatibility.md) and [docs/install.md](docs/install.md).
+See [docs/platform-compatibility.md](docs/platform-compatibility.md), [docs/cursor-windows-stop-hook-race.md](docs/cursor-windows-stop-hook-race.md), and [docs/install.md](docs/install.md).
 
 ## Testing
 

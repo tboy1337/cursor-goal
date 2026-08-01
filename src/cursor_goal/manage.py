@@ -23,6 +23,9 @@ from cursor_goal.state import (
     snapshot_goal,
 )
 from cursor_goal.validation import redact_command
+from cursor_goal.wake import arm as wake_arm
+from cursor_goal.wake import disarm as wake_disarm
+from cursor_goal.wake import wake_enabled
 
 logger = get_logger("cursor_goal.manage")
 
@@ -157,6 +160,7 @@ def cmd_create(argv: list[str]) -> int:
         print(f"  Validation: {redact_command(args.test_cmd)}")
     print(f"  Budget: {args.budget} turns")
     print("  Status: pursuing")
+    _maybe_arm_wake()
     return 0
 
 
@@ -217,6 +221,7 @@ def cmd_pause(_argv: list[str]) -> int:
     if result is None:
         print("[goal] No active goal to pause.")
         return 1
+    wake_disarm(kill_loop=True)
     print(
         "[goal] Goal paused. Auto-continuation disabled. "
         "Use 'cursor-goal manage resume' to continue."
@@ -243,6 +248,7 @@ def cmd_resume(_argv: list[str]) -> int:
         print("[goal] No goal to resume.")
         return 1
     print(f"[goal] Goal resumed. Continuing toward: {result.condition}")
+    _maybe_arm_wake()
     return 0
 
 
@@ -278,6 +284,7 @@ def cmd_done(argv: list[str]) -> int:
     if state is None:
         print("[goal] No active goal to mark done.")
         return 1
+    wake_disarm(kill_loop=True)
     print(f"[goal] Goal achieved in {state.turns_used} turns: {state.condition}")
     return 0
 
@@ -288,11 +295,30 @@ def cmd_clear(_argv: list[str]) -> int:
     except GoalLockTimeoutError as exc:
         print(f"[goal] Error: {exc}", file=sys.stderr)
         return 1
+    wake_disarm(kill_loop=True)
     if existed:
         print("[goal] Goal cleared.")
     else:
         print("[goal] No active goal.")
     return 0
+
+
+def _maybe_arm_wake() -> None:
+    """Arm wake.json after create/resume; agent must start ``wake loop``."""
+    if not wake_enabled():
+        return
+    try:
+        config = wake_arm()
+    except OSError as exc:
+        logger.warning("Could not arm wake watchdog: %s", exc)
+        return
+    if not config:
+        return
+    print(
+        f"[goal] Wake armed (every {config['interval_s']}s). "
+        "Start `wake loop` in background with notify_on_output "
+        f"matching {config['notify_pattern']}."
+    )
 
 
 def cmd_manage(argv: list[str]) -> int:

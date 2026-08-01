@@ -11,6 +11,7 @@ from cursor_goal.logging_config import get_logger
 from cursor_goal.manage import cmd_manage
 from cursor_goal.parse import cmd_parse
 from cursor_goal.stop import cmd_stop
+from cursor_goal.wake import cmd_wake
 
 logger = get_logger("cursor_goal.cli")
 
@@ -32,6 +33,7 @@ def main(argv: list[str] | None = None) -> int:
         "manage": cmd_manage,
         "eval": cmd_eval,
         "stop": cmd_stop,
+        "wake": cmd_wake,
     }
     handler = dispatch.get(command)
     if handler is None:
@@ -59,6 +61,7 @@ def _print_help() -> None:
     print(
         "  stop                          Cursor stop hook (stdin JSON -> stdout JSON)"
     )
+    print("  wake <arm|tick|disarm|status|loop>  Goal wake watchdog")
     print("  --version                     Print package version")
 
 

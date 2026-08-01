@@ -292,6 +292,10 @@ function Invoke-GoalInstall {
     Copy-Item (Join-Path $sourceSkill "SKILL.md") (Join-Path $installDir "SKILL.md") -Force
     Copy-Item (Join-Path $sourceSkill "scripts\stop_hook.py") (Join-Path $installDir "scripts\stop_hook.py") -Force
     Copy-Item (Join-Path $sourceSkill "scripts\run_goal.py") (Join-Path $installDir "scripts\run_goal.py") -Force
+    Copy-Item (Join-Path $sourceSkill "scripts\wake_loop.cmd") (Join-Path $installDir "scripts\wake_loop.cmd") -Force
+    if (Test-Path (Join-Path $sourceSkill "scripts\wake_loop.sh")) {
+        Copy-Item (Join-Path $sourceSkill "scripts\wake_loop.sh") (Join-Path $installDir "scripts\wake_loop.sh") -Force
+    }
 
     $stopScript = Join-Path $installDir "scripts\stop_hook.py"
     $stopCmd = Join-Path $installDir "scripts\stop_hook.cmd"
@@ -370,7 +374,8 @@ print(__version__)
     Write-Host "Verify:"
     Write-Host ("  {0} -u {1} manage status" -f $Python.Exe, (Join-Path $installDir "scripts\run_goal.py"))
     Write-GoalInfo "Windows stop hook uses stop_hook.cmd + stdout drain delay (Cursor capture race mitigation)."
-    Write-GoalWarn "If followups still drop, keep evaluating in-turn; set CURSOR_GOAL_LOG=DEBUG to write last-stop-response.json."
+    Write-GoalInfo "Wake watchdog: after create/resume, start wake loop with notify_on_output on ^AGENT_GOAL_WAKE."
+    Write-GoalWarn "If stop followups still drop, wake continues the goal; last-stop-response.json is always written."
     Write-GoalWarn "Re-run the installer after moving/upgrading Python (stop_hook.cmd bakes an absolute interpreter path)."
     Write-Host ""
     return 0

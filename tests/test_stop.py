@@ -194,7 +194,7 @@ def test_drain_ms_invalid_falls_back(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("CURSOR_GOAL_STOP_DRAIN_MS", "nope")
-    assert stop_mod._drain_ms() == stop_mod.DEFAULT_DRAIN_MS
+    assert stop_mod._drain_ms() == stop_mod._default_drain_ms()
 
 
 def test_drain_ms_clamps_huge_values(
@@ -204,20 +204,37 @@ def test_drain_ms_clamps_huge_values(
     assert stop_mod._drain_ms() == stop_mod.MAX_DRAIN_MS
 
 
-def test_debug_writes_last_stop_response(
+def test_default_drain_ms_windows(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CURSOR_GOAL_STOP_DRAIN_MS", raising=False)
+    monkeypatch.setattr(stop_mod.os, "name", "nt")
+    assert stop_mod._default_drain_ms() == stop_mod.DEFAULT_DRAIN_MS_WINDOWS
+    assert stop_mod._drain_ms() == stop_mod.DEFAULT_DRAIN_MS_WINDOWS
+
+
+def test_default_drain_ms_posix(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CURSOR_GOAL_STOP_DRAIN_MS", raising=False)
+    monkeypatch.setattr(stop_mod.os, "name", "posix")
+    assert stop_mod._default_drain_ms() == stop_mod.DEFAULT_DRAIN_MS
+    assert stop_mod._drain_ms() == stop_mod.DEFAULT_DRAIN_MS
+
+
+def test_emit_always_writes_last_stop_response(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("CURSOR_GOAL_STOP_DRAIN_MS", "0")
-    monkeypatch.setenv("CURSOR_GOAL_LOG", "DEBUG")
-    # Reconfigure logger level for this process
-    stop_mod.logger.setLevel(10)  # DEBUG
     out = io.StringIO()
     with redirect_stdout(out):
         stop_mod.emit({"followup_message": "[GOAL] test"})
     path = goal_home / "last-stop-response.json"
     assert path.is_file()
     data = json.loads(path.read_text(encoding="utf-8"))
-    assert data["followup_message"] == "[GOAL] test"
+    assert data["payload"]["followup_message"] == "[GOAL] test"
+    assert "ts" in data
+    assert "pid" in data
 
 
 def test_fsync_stdout_swallows_oserror(
@@ -242,11 +259,10 @@ def test_fsync_stdout_swallows_oserror(
     stop_mod.emit({})
 
 
-def test_debug_write_oserror_is_swallowed(
+def test_last_stop_write_oserror_is_swallowed(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("CURSOR_GOAL_STOP_DRAIN_MS", "0")
-    stop_mod.logger.setLevel(10)
 
     class BoomPath:
         def write_text(self, *_a: object, **_k: object) -> None:

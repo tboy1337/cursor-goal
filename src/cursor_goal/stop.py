@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 from cursor_goal.logging_config import get_logger
@@ -17,22 +17,33 @@ logger = get_logger("cursor_goal.stop")
 
 MAX_STDIN_BYTES = 1 * 1024 * 1024
 DEFAULT_DRAIN_MS = 100
+DEFAULT_DRAIN_MS_WINDOWS = 250
 MAX_DRAIN_MS = 2000
 LAST_STOP_RESPONSE_NAME = "last-stop-response.json"
 
 
+def _default_drain_ms() -> int:
+    """Platform default drain before exit so Cursor can capture stdout."""
+    if os.name == "nt":
+        return DEFAULT_DRAIN_MS_WINDOWS
+    return DEFAULT_DRAIN_MS
+
+
 def _drain_ms() -> int:
     """Milliseconds to wait after flush so Cursor can capture stdout."""
-    raw = os.environ.get("CURSOR_GOAL_STOP_DRAIN_MS", str(DEFAULT_DRAIN_MS))
+    raw = os.environ.get("CURSOR_GOAL_STOP_DRAIN_MS")
+    if raw is None or raw == "":
+        return _default_drain_ms()
     try:
         value = int(raw)
     except ValueError:
+        default = _default_drain_ms()
         logger.warning(
             "Invalid CURSOR_GOAL_STOP_DRAIN_MS=%r; using %s",
             raw,
-            DEFAULT_DRAIN_MS,
+            default,
         )
-        return DEFAULT_DRAIN_MS
+        return default
     if value < 0:
         return 0
     if value > MAX_DRAIN_MS:
@@ -58,14 +69,17 @@ def _fsync_stdout() -> None:
         pass
 
 
-def _maybe_write_debug_response(payload: dict[str, Any]) -> None:
-    """When DEBUG logging is on, persist last stop response for Windows diagnosis."""
-    if logger.getEffectiveLevel() > logging.DEBUG:
-        return
+def _write_last_stop_response(payload: dict[str, Any]) -> None:
+    """Persist last stop response for diagnosis (always on)."""
     try:
         path = data_dir() / LAST_STOP_RESPONSE_NAME
+        envelope = {
+            "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "pid": os.getpid(),
+            "payload": payload,
+        }
         path.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+            json.dumps(envelope, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
     except OSError as exc:
@@ -77,7 +91,7 @@ def emit(payload: dict[str, Any]) -> None:
     sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
     sys.stdout.flush()
     _fsync_stdout()
-    _maybe_write_debug_response(payload)
+    _write_last_stop_response(payload)
     drain = _drain_ms()
     if drain > 0:
         time.sleep(drain / 1000.0)

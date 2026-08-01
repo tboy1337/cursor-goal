@@ -83,6 +83,10 @@ def write_plugin(root: Path) -> Path:
     shutil.copy2(
         skill_src / "scripts" / "stop_hook.py", skill_dest / "scripts" / "stop_hook.py"
     )
+    for wake_name in ("wake_loop.sh", "wake_loop.cmd"):
+        wake_src = skill_src / "scripts" / wake_name
+        if wake_src.is_file():
+            shutil.copy2(wake_src, skill_dest / "scripts" / wake_name)
     # PATH-based Windows launcher (no absolute Python bake) for plugin installs.
     (skill_dest / "scripts" / "stop_hook.cmd").write_text(
         "\r\n".join(
@@ -197,6 +201,8 @@ def write_plugin(root: Path) -> Path:
         "Stop hook uses `${CURSOR_PLUGIN_ROOT}` and `python3` on PATH "
         "(Unix/Teams-oriented). On native Windows prefer `install-goal.ps1`, "
         "which writes `stop_hook.cmd` with an absolute interpreter. "
+        "Also ships a wake watchdog (`wake loop` / `AGENT_GOAL_WAKE`) for "
+        "continuation when Cursor drops stop-hook stdout. "
         "In-turn evaluation remains primary; the stop hook is a safety net.\n",
         encoding="utf-8",
     )
@@ -211,6 +217,7 @@ def _files_to_compare(plugin_root: Path) -> list[Path]:
         "skills/goal/scripts/run_goal.py",
         "skills/goal/scripts/stop_hook.py",
         "skills/goal/scripts/stop_hook.cmd",
+        "skills/goal/scripts/wake_loop.cmd",
         "skills/goal/VERSION",
         "agents/goalKeeper.md",
         "agents/goal-evaluator.md",

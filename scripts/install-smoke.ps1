@@ -30,6 +30,8 @@ try {
     }
     if (-not (Test-Path $runGoal)) { throw "Missing run_goal.py" }
     if (-not (Test-Path $stopCmd)) { throw "Missing stop_hook.cmd" }
+    $wakeCmd = Join-Path $installDir "scripts\wake_loop.cmd"
+    if (-not (Test-Path $wakeCmd)) { throw "Missing wake_loop.cmd" }
     if (-not (Test-Path $hooksFile)) { throw "Missing hooks.json" }
     $versionFile = Join-Path $installDir "VERSION"
     if (-not (Test-Path $versionFile)) { throw "Missing VERSION stamp" }

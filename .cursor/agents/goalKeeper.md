@@ -35,6 +35,7 @@ py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" <command> ..
 | `eval parse-result --stdin` / `@file` / `"<short>"` | Parse YES/NO; auto-record YES-bound signal (prefer `--stdin` on Windows) |
 | `eval signal [--force]` | Recovery-only signal (prefer parse-result) |
 | `eval check` | Verify YES-bound signal before marking done |
+| `wake arm\|tick\|disarm\|status\|loop` | Wake watchdog (race-immune continuation) |
 
 ## Work Cycle
 
@@ -57,6 +58,7 @@ Do **not** put long evaluator responses on the Windows command line (argv length
 - **Evaluator model:** from `eval spawn-config` (default `fast`; override with `CURSOR_GOAL_EVAL_MODEL`).
 - **Subagent tool:** `Task` — spawn `goal-evaluator` with spawn-config params.
 - **Stop hook:** Cursor `hooks.json` → `stop_hook.py` (Unix) or `stop_hook.cmd` (Windows) returns `followup_message` (safety net). Prefer in-turn evaluation. Windows uses a cmd launcher + stdout drain delay to mitigate Cursor’s capture race.
+- **Wake watchdog:** After `manage create` / `resume`, start `wake loop` in background with `notify_on_output` on `^AGENT_GOAL_WAKE`. Continues even when Cursor drops stop-hook stdout. Disarmed on done/pause/clear. Disable with `CURSOR_GOAL_WAKE=0`.
 - **No idle while pursuing:** do not end a turn without `manage done` or a completed evaluate→NO cycle with the next action started.
 
 ## Rules
@@ -65,5 +67,6 @@ Do **not** put long evaluator responses on the Windows command line (argv length
 - `parse-result` on YES records the signal automatically — do not skip it
 - Use `parse` and read JSON — do **not** evaluate shell strings from the parser
 - Use `eval prompt` to generate prompts — do not manually template them
-- The stop hook handles auto-continuation between turns (safety net; evaluate in-turn first)
+- Stop hook + wake watchdog handle auto-continuation between turns (evaluate in-turn first)
+- On `AGENT_GOAL_WAKE`, check `manage status` then continue if still pursuing
 - `--force` on `done` / `signal` is recovery only — not cryptographic attestation

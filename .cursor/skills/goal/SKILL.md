@@ -31,6 +31,7 @@ If the package is installed editable (`pip install -e .`), `python -m cursor_goa
 | `manage create\|status\|pause\|resume\|done\|clear` | Goal state lifecycle |
 | `eval validate\|spawn-config\|prompt\|parse-result\|signal\|check` | Evaluator harness |
 | `stop` | Stop hook (stdin JSON → stdout JSON) |
+| `wake arm\|tick\|disarm\|status\|loop` | Wake watchdog (shell notify sentinel) |
 
 State file: `~/.cursor-goal/data/goal.json` (override with `CURSOR_GOAL_DATA`).
 
@@ -161,9 +162,31 @@ Evaluate after validation results, logical units of work, or changes that could 
 
 The stop hook (`scripts/stop_hook.py`, Windows: `scripts/stop_hook.cmd`) fires when your turn ends. If the goal is still active, it returns a `followup_message` that auto-continues you.
 
-**Do not rely on the stop hook as the primary evaluator.** In-turn subagent evaluation is primary. On Windows the installer uses a `.cmd` launcher plus a short stdout drain delay to mitigate Cursor’s capture race; if a followup still drops, keep evaluating inside the turn. With `CURSOR_GOAL_LOG=DEBUG`, the last stop JSON is also written to `~/.cursor-goal/data/last-stop-response.json`.
+**Do not rely on the stop hook as the primary evaluator.** In-turn subagent evaluation is primary. On Windows the installer uses a `.cmd` launcher plus a stdout drain delay to mitigate Cursor’s capture race; if a followup still drops, use the wake watchdog. Every stop emit writes `~/.cursor-goal/data/last-stop-response.json` (`ts`, `pid`, `payload`).
 
 When you see a `[GOAL]` prefix, resume working toward the condition immediately.
+
+## Wake Watchdog (race-immune continuation)
+
+Cursor may drop stop-hook stdout (see repo `docs/cursor-windows-stop-hook-race.md`). `manage create` / `resume` arms wake state. After creating or resuming a goal:
+
+1. Start `wake loop` in a **background** Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE`.
+2. On wake: read the sentinel JSON `prompt`, check `manage status`, continue if still `pursuing`.
+3. `manage done` / `pause` / `clear` disarms automatically. Disable with `CURSOR_GOAL_WAKE=0`.
+
+**Unix:**
+
+```bash
+python3 -u ~/.cursor/skills/goal/scripts/run_goal.py wake loop
+```
+
+**Windows:**
+
+```powershell
+py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" wake loop
+```
+
+Interval: `CURSOR_GOAL_WAKE_INTERVAL_S` (default 45, min 5, max 600).
 
 ## Turn Budget
 
