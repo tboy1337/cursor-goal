@@ -32,6 +32,17 @@ try {
     if (-not (Test-Path $stopCmd)) { throw "Missing stop_hook.cmd" }
     $wakeCmd = Join-Path $installDir "scripts\wake_loop.cmd"
     if (-not (Test-Path $wakeCmd)) { throw "Missing wake_loop.cmd" }
+    $wakeBody = Get-Content -Raw -LiteralPath $wakeCmd
+    if ($wakeBody -notmatch 'wake loop') {
+        throw "wake_loop.cmd should invoke wake loop"
+    }
+    if ($wakeBody -notmatch 'PYTHONUNBUFFERED=1') {
+        throw "wake_loop.cmd should set PYTHONUNBUFFERED"
+    }
+    # Classic install bakes absolute Python (not PATH discovery).
+    if ($wakeBody -match 'where py') {
+        throw "Installed wake_loop.cmd should bake absolute Python (not PATH where)"
+    }
     if (-not (Test-Path $hooksFile)) { throw "Missing hooks.json" }
     $versionFile = Join-Path $installDir "VERSION"
     if (-not (Test-Path $versionFile)) { throw "Missing VERSION stamp" }

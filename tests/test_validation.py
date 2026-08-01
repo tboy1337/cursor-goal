@@ -148,7 +148,50 @@ def test_redact_command_hides_secrets() -> None:
     assert "<redacted>" in redact_command("run --token=supersecret")
     assert "<redacted>" in redact_command("run --token supersecret")
     assert "<redacted>" in redact_command("Authorization: Bearer abc.def")
+    assert "<redacted>" in redact_command('{"apiKey":"supersecret"}')
     assert redact_command("x" * 250).endswith("…")
+
+
+def test_scrubbed_validation_env_drops_secrets() -> None:
+    from cursor_goal.validation import scrubbed_validation_env
+
+    source = {
+        "PATH": "/usr/bin",
+        "HOME": "/home/tboy1337",
+        "OPENAI_API_KEY": "sk-secret",
+        "AWS_SECRET_ACCESS_KEY": "aws-secret",
+        "CURSOR_GOAL_DATA": "/tmp/data",
+        "CURSOR_GOAL_LOG_SECRETS": "1",
+        "LANG": "C",
+    }
+    scrubbed = scrubbed_validation_env(source)
+    assert scrubbed["PATH"] == "/usr/bin"
+    assert scrubbed["CURSOR_GOAL_DATA"] == "/tmp/data"
+    assert "OPENAI_API_KEY" not in scrubbed
+    assert "AWS_SECRET_ACCESS_KEY" not in scrubbed
+    assert "CURSOR_GOAL_LOG_SECRETS" not in scrubbed
+
+
+def test_run_validation_uses_scrubbed_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, str] = {}
+
+    def fake_run(*_a: object, **kwargs: object) -> object:
+        env = kwargs.get("env")
+        assert isinstance(env, dict)
+        seen.update(env)
+
+        class Result:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setenv("LEAK_TOKEN", "should-not-pass")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = run_validation("echo hi")
+    assert result.exit_code == 0
+    assert "LEAK_TOKEN" not in seen
 
 
 def test_run_validation_oserror(monkeypatch: pytest.MonkeyPatch) -> None:

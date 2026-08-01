@@ -124,6 +124,32 @@ exit /b %ERRORLEVEL%
     Write-Utf8NoBomFile -Path $StopScriptCmd -Content $content
 }
 
+function Write-GoalWakeLoopCmd {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Python,
+        [Parameter(Mandatory = $true)][string]$RunGoalPy,
+        [Parameter(Mandatory = $true)][string]$WakeLoopCmd
+    )
+    $pyExe = $Python.Exe
+    $prefix = @($Python.PrefixArgs)
+    $prefixPart = if ($prefix.Count -gt 0) {
+        (($prefix | ForEach-Object {
+                    if ($_ -match '\s') { '"' + $_ + '"' } else { $_ }
+                }) -join ' ') + ' '
+    }
+    else { '' }
+    $content = @"
+@echo off
+REM Classic Windows install: absolute interpreter baked by install-goal.ps1.
+setlocal
+set PYTHONUNBUFFERED=1
+"$pyExe" $prefixPart-u "$RunGoalPy" wake loop %*
+exit /b %ERRORLEVEL%
+"@
+    Write-Utf8NoBomFile -Path $WakeLoopCmd -Content $content
+}
+
 function Merge-GoalStopHook {
     <#
     .SYNOPSIS
@@ -292,7 +318,6 @@ function Invoke-GoalInstall {
     Copy-Item (Join-Path $sourceSkill "SKILL.md") (Join-Path $installDir "SKILL.md") -Force
     Copy-Item (Join-Path $sourceSkill "scripts\stop_hook.py") (Join-Path $installDir "scripts\stop_hook.py") -Force
     Copy-Item (Join-Path $sourceSkill "scripts\run_goal.py") (Join-Path $installDir "scripts\run_goal.py") -Force
-    Copy-Item (Join-Path $sourceSkill "scripts\wake_loop.cmd") (Join-Path $installDir "scripts\wake_loop.cmd") -Force
     if (Test-Path (Join-Path $sourceSkill "scripts\wake_loop.sh")) {
         Copy-Item (Join-Path $sourceSkill "scripts\wake_loop.sh") (Join-Path $installDir "scripts\wake_loop.sh") -Force
     }
@@ -300,6 +325,9 @@ function Invoke-GoalInstall {
     $stopScript = Join-Path $installDir "scripts\stop_hook.py"
     $stopCmd = Join-Path $installDir "scripts\stop_hook.cmd"
     Write-GoalStopHookCmd -Python $Python -StopScriptPy $stopScript -StopScriptCmd $stopCmd
+    $runGoal = Join-Path $installDir "scripts\run_goal.py"
+    $wakeCmd = Join-Path $installDir "scripts\wake_loop.cmd"
+    Write-GoalWakeLoopCmd -Python $Python -RunGoalPy $runGoal -WakeLoopCmd $wakeCmd
     $hookCommand = Get-GoalHookCommand -Python $Python -StopScript $stopScript
 
     $tmpVer = Join-Path ([IO.Path]::GetTempPath()) ("cg-ver-" + [guid]::NewGuid().ToString('N') + ".py")
@@ -389,7 +417,7 @@ print(__version__)
     Write-GoalInfo "Windows stop hook uses stop_hook.cmd + stdout drain delay (Cursor capture race mitigation)."
     Write-GoalInfo "Wake watchdog: after create/resume, start wake loop with notify_on_output on ^AGENT_GOAL_WAKE."
     Write-GoalWarn "If stop followups still drop, wake continues the goal; last-stop-response.json is always written."
-    Write-GoalWarn "Re-run the installer after moving/upgrading Python (stop_hook.cmd bakes an absolute interpreter path)."
+    Write-GoalWarn "Re-run the installer after moving/upgrading Python (stop_hook.cmd and wake_loop.cmd bake absolute interpreter paths)."
     Write-Host ""
     return 0
 }

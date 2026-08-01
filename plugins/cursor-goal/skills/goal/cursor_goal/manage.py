@@ -16,6 +16,7 @@ from cursor_goal.state import (
     CorruptGoalError,
     GoalLockTimeoutError,
     GoalState,
+    acl_harden_failure_message,
     clamp_turn_budget,
     clamp_wake_budget,
     clear_goal_files,
@@ -283,6 +284,11 @@ def cmd_status(_argv: list[str]) -> int:
 
 
 def cmd_pause(_argv: list[str]) -> int:
+    insecure = refuse_if_data_dir_insecure()
+    if insecure is not None:
+        print(insecure, file=sys.stderr)
+        return 1
+
     def mutator(state: GoalState) -> None:
         if state.status != "pursuing":
             raise ValueError(f"Cannot pause: goal is '{state.status}', not 'pursuing'.")
@@ -309,6 +315,11 @@ def cmd_pause(_argv: list[str]) -> int:
 
 
 def cmd_resume(_argv: list[str]) -> int:
+    insecure = refuse_if_data_dir_insecure()
+    if insecure is not None:
+        print(insecure, file=sys.stderr)
+        return 1
+
     def mutator(state: GoalState) -> None:
         if state.status != "paused":
             raise ValueError(f"Cannot resume: goal is '{state.status}', not 'paused'.")
@@ -332,7 +343,20 @@ def cmd_resume(_argv: list[str]) -> int:
 
 
 def cmd_done(argv: list[str]) -> int:
+    insecure = refuse_if_data_dir_insecure()
+    if insecure is not None:
+        print(insecure, file=sys.stderr)
+        return 1
     force = "--force" in argv
+    if force:
+        logger.warning(
+            "manage done --force (recovery bypass — not cryptographic attestation)"
+        )
+        print(
+            "[goal] Warning: --force bypasses maker≠checker protocol "
+            "(not cryptographic attestation).",
+            file=sys.stderr,
+        )
     try:
         state, status = mark_goal_achieved(require_signal=not force)
     except GoalLockTimeoutError as exc:
@@ -369,6 +393,10 @@ def cmd_done(argv: list[str]) -> int:
 
 
 def cmd_clear(_argv: list[str]) -> int:
+    insecure = refuse_if_data_dir_insecure()
+    if insecure is not None:
+        print(insecure, file=sys.stderr)
+        return 1
     try:
         existed = clear_goal_files()
     except GoalLockTimeoutError as exc:
@@ -422,9 +450,14 @@ def cmd_doctor(_argv: list[str]) -> int:
 
     if ddir is not None and data_dir_is_insecure(ddir):
         hard_fails.append(
-            f"Data directory is group/world-writable ({ddir}). "
-            "Run chmod 700 or set CURSOR_GOAL_DATA to a private path."
+            f"Data directory is insecure ({ddir}). "
+            "It must not be a symlink, must be owned by you, and must not be "
+            "group/world-writable. Run chmod 700 or set CURSOR_GOAL_DATA."
         )
+
+    acl_fail = acl_harden_failure_message(ddir) if ddir is not None else None
+    if acl_fail is not None:
+        hard_fails.append(acl_fail)
 
     hooks_state = _hooks_look_configured()
     if hooks_state is True:
@@ -505,6 +538,18 @@ def cmd_doctor(_argv: list[str]) -> int:
             "No last-stop-response.json yet (normal before first stop emit)"
         )
 
+    fail_open = (ddir / "stop-failopen-continues") if ddir is not None else None
+    if fail_open is not None and fail_open.is_file():
+        try:
+            count = int(fail_open.read_text(encoding="utf-8").strip() or "0")
+        except (OSError, ValueError):
+            count = -1
+        if count > 0:
+            warnings.append(
+                f"Stop fail-open continue counter is {count} "
+                "(persist failures while pursuing — wake should still continue)"
+            )
+
     if os.environ.get("CURSOR_GOAL_LOG_SECRETS", "").strip().lower() in {
         "1",
         "true",
@@ -512,6 +557,10 @@ def cmd_doctor(_argv: list[str]) -> int:
         "on",
     }:
         warnings.append("CURSOR_GOAL_LOG_SECRETS is enabled")
+
+    log_file = os.environ.get("CURSOR_GOAL_LOG_FILE", "").strip()
+    if log_file:
+        print(f"  Durable log: CURSOR_GOAL_LOG_FILE={log_file}")
 
     for item in warnings:
         print(f"  Warning: {item}")

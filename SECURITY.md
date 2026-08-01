@@ -27,9 +27,9 @@ If another user or process can write your goal data directory, they can cause co
 - Field length limits enforced on load and update (`MAX_FIELD_CHARS`).
 - Turn budget and wake budget are independent counters (schema v3).
 - `manage done --force` and `eval signal --force` are recovery escapes and are logged; they are not attestation.
-- Secret-ish tokens in validation commands are redacted in logs/status/prompts (heuristic; incomplete by design). `CURSOR_GOAL_LOG_SECRETS=1` may log full commands at DEBUG.
-- `last-stop-response.json` stores a redacted payload with private file mode when the OS allows.
-- `manage doctor` reports insecure dirs, hook presence, wake health, and shell mode.
+- Secret-ish tokens in validation commands are redacted in logs/status/prompts (heuristic; incomplete by design). Validation subprocesses receive a scrubbed environment (PATH/home/locale/`CURSOR_GOAL_*`, not ambient API keys). `CURSOR_GOAL_LOG_SECRETS=1` may log full commands at DEBUG.
+- `last-stop-response.json` stores a redacted payload (condition text after `Goal:` / `toward:` stripped) with private file mode when the OS allows. Optional durable logs: `CURSOR_GOAL_LOG_FILE=1` (or a path).
+- `manage doctor` reports insecure dirs (symlink/ownership/mode on Unix), Windows ACL harden failures, hook presence, wake health, fail-open continue counter, and shell mode.
 
 ## Reporting a vulnerability
 

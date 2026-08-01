@@ -57,6 +57,18 @@ def test_cli_keyboard_interrupt(
     assert "Interrupted" in err
 
 
+def test_cli_unhandled_exception(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(_argv: list[str]) -> int:
+        raise RuntimeError("unexpected boom")
+
+    monkeypatch.setattr(cli_mod, "cmd_parse", boom)
+    code, _out, err = run_cli("parse", "x")
+    assert code == 1
+    assert "unexpected boom" in err
+
+
 def test_python_m_cursor_goal_help(goal_home: Path) -> None:
     env = os.environ.copy()
     env["CURSOR_GOAL_DATA"] = str(goal_home)

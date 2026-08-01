@@ -25,11 +25,12 @@ from typing import Any
 from cursor_goal.logging_config import get_logger
 from cursor_goal.state import (
     GoalState,
-    _chmod_private,
+    atomic_write_text,
     budgets_exhausted,
     data_dir,
-    load_goal,
+    goal_lock,
     mutate_goal,
+    snapshot_goal,
 )
 
 logger = get_logger("cursor_goal.wake")
@@ -97,19 +98,7 @@ def _now_iso() -> str:
 
 def _atomic_write_text(path: Path, text: str) -> None:
     """Write text via temp file + replace; apply private mode bits."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f"{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
-    try:
-        tmp.write_text(text, encoding="utf-8")
-        tmp.replace(path)
-    except Exception:
-        if tmp.exists():
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
-        raise
-    _chmod_private(path)
+    atomic_write_text(path, text)
 
 
 def _read_wake_config() -> dict[str, Any] | None:
@@ -203,10 +192,11 @@ def _write_pid_record(pid: int, token: str) -> None:
         "token": token,
         "started_at": _now_iso(),
     }
-    _atomic_write_text(
-        wake_pid_path(),
-        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-    )
+    with goal_lock():
+        _atomic_write_text(
+            wake_pid_path(),
+            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        )
 
 
 def _write_pid(pid: int, token: str | None = None) -> None:
@@ -336,14 +326,14 @@ def _kill_existing_loop() -> None:
 
 
 def _goal_is_pursuing() -> bool:
-    state = load_goal()
+    state = snapshot_goal()
     if state is None:
         return False
     return bool(state.active and state.status == "pursuing")
 
 
 def _followup_prompt() -> str:
-    state = load_goal()
+    state = snapshot_goal()
     if state is None:
         return (
             "[GOAL] Resume working toward the active goal. "
@@ -388,10 +378,10 @@ def _record_wake_tick() -> GoalState | None:
     try:
         return mutate_goal(mutator)
     except ValueError:
-        return load_goal()
+        return snapshot_goal()
     except OSError as exc:
         logger.error("Failed to persist wake_ticks: %s", exc)
-        return load_goal()
+        return snapshot_goal()
 
 
 def emit_wake_line(prompt: str | None = None) -> None:
@@ -405,14 +395,15 @@ def emit_wake_line(prompt: str | None = None) -> None:
 
 def _touch_last_emit() -> None:
     """Record last_emit_at on wake.json when armed."""
-    config = _read_wake_config()
-    if config is None:
-        return
-    config["last_emit_at"] = _now_iso()
-    try:
-        _write_wake_config(config)
-    except OSError as exc:
-        logger.debug("Could not update wake last_emit_at: %s", exc)
+    with goal_lock():
+        config = _read_wake_config()
+        if config is None:
+            return
+        config["last_emit_at"] = _now_iso()
+        try:
+            _write_wake_config(config)
+        except OSError as exc:
+            logger.debug("Could not update wake last_emit_at: %s", exc)
 
 
 def arm(*, interval: int | None = None) -> dict[str, Any]:
@@ -432,27 +423,32 @@ def arm(*, interval: int | None = None) -> dict[str, Any]:
         "notify_pattern": f"^{SENTINEL_PREFIX}",
         "token": token,
     }
-    _write_wake_config(config)
+    with goal_lock():
+        _write_wake_config(config)
     logger.info("Wake armed interval_s=%s token=%s", seconds, token[:8])
     return config
 
 
 def disarm(*, kill_loop: bool = True) -> bool:
     """Remove wake state; optionally signal the loop process. Returns True if armed."""
-    existed = wake_json_path().is_file() or wake_pid_path().is_file()
-    # Clear config first so a running loop exits on next slice check.
-    try:
-        wake_json_path().unlink(missing_ok=True)
-    except OSError as exc:
-        logger.debug("Could not remove wake.json: %s", exc)
+    with goal_lock():
+        existed = wake_json_path().is_file() or wake_pid_path().is_file()
+        # Clear config first so a running loop exits on next slice check.
+        try:
+            wake_json_path().unlink(missing_ok=True)
+        except OSError as exc:
+            logger.debug("Could not remove wake.json: %s", exc)
+        record = _read_pid_record() if kill_loop else None
+        if not kill_loop:
+            _clear_pid()
     if kill_loop:
-        record = _read_pid_record()
         if record is not None:
             _kill_pid(
                 int(record["pid"]),
                 token=str(record.get("token") or "") or None,
             )
-    _clear_pid()
+        with goal_lock():
+            _clear_pid()
     if existed:
         logger.info("Wake disarmed")
     return existed
@@ -493,16 +489,21 @@ def status_report() -> dict[str, Any]:
     record = _read_pid_record()
     pid = int(record["pid"]) if record is not None else None
     token = str((record or {}).get("token") or (config or {}).get("token") or "")
-    state = load_goal()
+    state = snapshot_goal()
     wake_remaining = None
     if state is not None:
         wake_remaining = max(0, int(state.wake_budget) - int(state.wake_ticks))
+    # Do not expose full generation token in status JSON (prefix only).
     return {
         "enabled": wake_enabled(),
         "armed": config is not None,
-        "config": config,
+        "config": (
+            {**config, "token": (token[:8] + "…") if token else None}
+            if config is not None
+            else None
+        ),
         "pid": pid,
-        "token": token or None,
+        "token": (token[:8] + "…") if token else None,
         "token_prefix": token[:8] if token else None,
         "pid_alive": _pid_alive(pid) if pid is not None else False,
         "goal_pursuing": _goal_is_pursuing(),

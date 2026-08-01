@@ -237,6 +237,37 @@ def test_emit_always_writes_last_stop_response(
     assert "pid" in data
 
 
+def test_last_stop_redacts_toward_and_goal_conditions(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CURSOR_GOAL_STOP_DRAIN_MS", "0")
+    cases = (
+        (
+            "[GOAL] Continue working toward: secret-customer-name",
+            "toward: <redacted>",
+        ),
+        (
+            "[GOAL] Run validation. Goal: secret-customer-name",
+            "Goal: <redacted>",
+        ),
+        (
+            "[GOAL BUDGET] summarize progress toward: secret-customer-name",
+            "progress toward: <redacted>",
+        ),
+    )
+    for message, expected_tail in cases:
+        out = io.StringIO()
+        with redirect_stdout(out):
+            stop_mod.emit({"followup_message": message})
+        data = json.loads(
+            (goal_home / "last-stop-response.json").read_text(encoding="utf-8")
+        )
+        stored = data["payload"]["followup_message"]
+        assert "secret-customer-name" not in stored
+        assert expected_tail in stored
+        assert "secret-customer-name" in out.getvalue()
+
+
 def test_fsync_stdout_swallows_oserror(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -264,15 +295,10 @@ def test_last_stop_write_oserror_is_swallowed(
 ) -> None:
     monkeypatch.setenv("CURSOR_GOAL_STOP_DRAIN_MS", "0")
 
-    class BoomPath:
-        def write_text(self, *_a: object, **_k: object) -> None:
-            raise OSError("readonly")
+    def boom(_path: object, _text: str) -> None:
+        raise OSError("readonly")
 
-    class BoomDir:
-        def __truediv__(self, _name: object) -> BoomPath:
-            return BoomPath()
-
-    monkeypatch.setattr(stop_mod, "data_dir", lambda: BoomDir())
+    monkeypatch.setattr(stop_mod, "atomic_write_text", boom)
     out = io.StringIO()
     with redirect_stdout(out):
         stop_mod.emit({"followup_message": "x"})
@@ -286,7 +312,7 @@ def test_handle_stop_mutate_oserror_inactive(
         raise OSError("disk full")
 
     monkeypatch.setattr(stop_mod, "mutate_goal", boom)
-    monkeypatch.setattr(stop_mod, "load_goal", lambda: None)
+    monkeypatch.setattr(stop_mod, "snapshot_goal", lambda: None)
     assert handle_stop({"status": "completed", "loop_count": 0}) == {}
 
 
@@ -344,11 +370,10 @@ def test_fail_open_counter_corrupt(goal_home: Path) -> None:
 def test_fail_open_write_oserror(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    class Boom:
-        def write_text(self, *_a: object, **_k: object) -> None:
-            raise OSError("readonly")
+    def boom(_path: object, _text: str) -> None:
+        raise OSError("readonly")
 
-    monkeypatch.setattr(stop_mod, "_fail_open_continue_count_path", lambda: Boom())
+    monkeypatch.setattr(stop_mod, "atomic_write_text", boom)
     stop_mod._write_fail_open_continues(1)
 
 

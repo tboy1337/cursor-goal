@@ -103,11 +103,66 @@ print("hooks cleaned")
             }
         }
         if (-not $cleaned) {
-            $data = Get-Content -Raw -Path $hooksFile | ConvertFrom-Json
-            $data = Select-GoalStopHooksRemaining -Data $data -Marker $script:HookMarker
-            Write-UninstallUtf8NoBom -Path $hooksFile -Content (($data | ConvertTo-Json -Depth 10) + "`n")
+            # Package unavailable — still prefer Python JSON rewrite over ConvertTo-Json.
+            $py = $null
+            $pyArgs = @()
+            if (Get-Command py -ErrorAction SilentlyContinue) {
+                $py = "py"
+                $pyArgs = @("-3")
+            }
+            elseif (Get-Command python -ErrorAction SilentlyContinue) {
+                $py = "python"
+                $pyArgs = @()
+            }
+            if ($py) {
+                $tmpPy = Join-Path ([IO.Path]::GetTempPath()) ("cg-unhooks2-" + [guid]::NewGuid().ToString('N') + ".py")
+                $script = @'
+import json
+import os
+import secrets
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+hooks = data.get("hooks") or {}
+stop = hooks.get("stop") or []
+
+def is_goal_hook(item):
+    if not isinstance(item, dict):
+        return False
+    cmd = str(item.get("command", ""))
+    return (
+        item.get("_cursor_goal") == "cursor_goal_stop_hook"
+        or "stop_hook.py" in cmd
+        or "stop_hook.cmd" in cmd
+        or "cursor_goal stop" in cmd
+        or "cursor-goal stop" in cmd
+    )
+
+hooks["stop"] = [item for item in stop if not is_goal_hook(item)]
+data["hooks"] = hooks
+tmp = path.with_name(f"{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+tmp.replace(path)
+print("hooks cleaned")
+'@
+                try {
+                    Write-UninstallUtf8NoBom -Path $tmpPy -Content $script
+                    $null = & $py @($pyArgs + @($tmpPy, $hooksFile)) 2>&1
+                    if ($LASTEXITCODE -eq 0) { $cleaned = $true }
+                }
+                finally {
+                    Remove-Item -Force $tmpPy -ErrorAction SilentlyContinue
+                }
+            }
         }
-        Write-Host "[uninstall-goal] Removed stop hook entries from hooks.json"
+        if (-not $cleaned) {
+            Write-Host "[uninstall-goal] Warning: could not clean hooks via Python; leaving hooks.json unchanged. Remove stop hook entries manually if needed."
+        }
+        else {
+            Write-Host "[uninstall-goal] Removed stop hook entries from hooks.json"
+        }
     }
 
     Write-Host "[uninstall-goal] Removing skill at $installDir"

@@ -57,6 +57,12 @@ def redact_command(command: str) -> str:
         return "<redacted>"
 
     redacted = _SECRETISH.sub(_sub, command)
+    # Also redact common JSON-ish "apiKey":"…" / 'token':'…' forms.
+    redacted = re.sub(
+        r'(?i)(["\']?(?:api[_-]?key|token|password|secret)["\']?\s*[:=]\s*["\'])([^"\']+)',
+        r"\1<redacted>",
+        redacted,
+    )
     if len(redacted) > 200:
         return redacted[:200] + "…"
     return redacted
@@ -64,6 +70,74 @@ def redact_command(command: str) -> str:
 
 # Back-compat alias for older call sites / tests.
 _redact_command = redact_command
+
+
+_ENV_ALLOWLIST_EXACT = frozenset(
+    {
+        "PATH",
+        "PATHEXT",
+        "HOME",
+        "USERPROFILE",
+        "USERNAME",
+        "USER",
+        "LOGNAME",
+        "TMP",
+        "TEMP",
+        "TMPDIR",
+        "SystemRoot",
+        "SYSTEMROOT",
+        "windir",
+        "COMSPEC",
+        "ComSpec",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LANGUAGE",
+        "TERM",
+        "TZ",
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "PYTHONUTF8",
+        "PYTHONIOENCODING",
+        "PYTHONUNBUFFERED",
+        "VIRTUAL_ENV",
+        "NUMBER_OF_PROCESSORS",
+        "PROCESSOR_ARCHITECTURE",
+        "OS",
+        "HOMEBREW_PREFIX",
+    }
+)
+
+_ENV_ALLOWLIST_PREFIXES = (
+    "CURSOR_GOAL_",
+    "LC_",
+)
+
+
+def scrubbed_validation_env(
+    source: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Return a reduced environment for validation subprocesses.
+
+    Keeps PATH/home/locale/shell basics and ``CURSOR_GOAL_*`` (except log-secret
+    toggles). Drops ambient API tokens and unrelated secrets from the parent.
+    """
+    env_in = os.environ if source is None else source
+    out: dict[str, str] = {}
+    for key, value in env_in.items():
+        if key in _ENV_ALLOWLIST_EXACT:
+            out[key] = value
+            continue
+        if key.startswith(_ENV_ALLOWLIST_PREFIXES):
+            if key.upper() in {"CURSOR_GOAL_LOG_SECRETS"}:
+                continue
+            out[key] = value
+    # Ensure COMSPEC exists on Windows for shell=True.
+    if os.name == "nt" and "COMSPEC" not in out and "ComSpec" not in out:
+        comspec = env_in.get("COMSPEC") or env_in.get("ComSpec")
+        if comspec:
+            out["COMSPEC"] = comspec
+    return out
 
 
 def deny_shell_enabled() -> bool:
@@ -130,7 +204,7 @@ def run_validation(
         )
 
     argv = try_split_argv(stripped)
-    env = os.environ.copy()
+    env = scrubbed_validation_env()
     if argv is not None:
         mode = "argv"
         run_args: str | list[str] = argv

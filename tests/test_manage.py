@@ -191,7 +191,49 @@ def test_manage_doctor_insecure_dir(
     monkeypatch.setattr(manage_mod, "_hooks_look_configured", lambda: True)
     code, _out, err = run_cli("manage", "doctor")
     assert code == 1
-    assert "world-writable" in err or "FAIL" in err
+    assert "insecure" in err or "FAIL" in err
+
+
+def test_manage_mutators_refuse_insecure(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    run_cli("manage", "create", "secure check")
+    monkeypatch.setattr(
+        manage_mod,
+        "refuse_if_data_dir_insecure",
+        lambda: "[goal] Error: data directory is insecure (/tmp)",
+    )
+    for args in (
+        ("manage", "pause"),
+        ("manage", "resume"),
+        ("manage", "done"),
+        ("manage", "clear"),
+    ):
+        code, _out, err = run_cli(*args)
+        assert code == 1
+        assert "insecure" in err
+
+
+def test_manage_doctor_fail_open_and_acl(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    (goal_home / "stop-failopen-continues").write_text("2\n", encoding="utf-8")
+    monkeypatch.setattr(manage_mod, "_hooks_look_configured", lambda: True)
+    monkeypatch.setattr(
+        manage_mod,
+        "acl_harden_failure_message",
+        lambda _p=None: "Windows ACL harden failed for /x: grant failed",
+    )
+    monkeypatch.setenv("CURSOR_GOAL_LOG_FILE", "1")
+    code, out, err = run_cli("manage", "doctor")
+    assert code == 1
+    assert "fail-open" in out.lower() or "Fail-open" in out or "fail-open" in err
+    assert "ACL" in err or "ACL" in out
+    assert "Durable log" in out
 
 
 def test_hooks_look_configured_read_oserror(

@@ -71,7 +71,7 @@ def write_plugin(root: Path) -> Path:
     manifest_dir = plugin_root / ".cursor-plugin"
 
     skill_dest.mkdir(parents=True, exist_ok=True)
-    (skill_dest / "scripts").mkdir(parents=True, exist_ok=True)
+    _clear_dir(skill_dest / "scripts")
     agents_dest.mkdir(parents=True, exist_ok=True)
     hooks_dest.mkdir(parents=True, exist_ok=True)
     manifest_dir.mkdir(parents=True, exist_ok=True)
@@ -145,7 +145,7 @@ def write_plugin(root: Path) -> Path:
                     "_cursor_goal": MARKER,
                 },
                 {
-                    "command": (f"python3 -u {plugin_root_var}/stop_hook.py"),
+                    "command": (f'python3 -u "{plugin_root_var}/stop_hook.py"'),
                     "loop_limit": None,
                     "timeout": 30,
                     "_cursor_goal": MARKER,
@@ -215,8 +215,10 @@ def write_plugin(root: Path) -> Path:
         "from a full clone or GitHub Release.\n\n"
         f"Version: **{version}** (AGPL-3.0-only).\n\n"
         "Marketplace stop hooks register both `stop_hook.cmd` (Windows) and "
-        "`python3 …/stop_hook.py` (Unix). A singleflight lock ensures only one "
-        "emits `followup_message`. Also ships a wake watchdog "
+        '`python3 -u "…/stop_hook.py"` (Unix). On each OS one entry typically '
+        "fails (cmd missing on Unix / python3 often missing on Windows); a "
+        "singleflight lock ensures only one emits `followup_message`. Also "
+        "ships a wake watchdog "
         "(`wake loop` / `AGENT_GOAL_WAKE`) for continuation when Cursor drops "
         "stop-hook stdout. In-turn evaluation remains primary; the stop hook "
         "is a safety net.\n",

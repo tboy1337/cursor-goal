@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import secrets
 import shutil
 import stat
@@ -32,6 +33,10 @@ MAX_FIELD_CHARS = 4000
 LOCK_TIMEOUT_SEC = 10.0
 WAKE_BUDGET_MULTIPLIER = 10
 _HARDENED_PATHS: set[str] = set()
+# Paths where Windows ACL harden failed in a way that should fail doctor.
+_ACL_HARDEN_FAILURES: dict[str, str] = {}
+# Windows DOMAIN\user or local user for icacls — reject metacharacters.
+_WINDOWS_USERNAME_RE = re.compile(r"^[A-Za-z0-9._$\\-]+$")
 ALLOWED_STATUSES = frozenset(
     {
         "pursuing",
@@ -87,16 +92,37 @@ def data_dir(*, check_writable: bool = True) -> Path:
 
 
 def data_dir_is_insecure(path: Path | None = None) -> bool:
-    """Return True when the data dir is group/world-writable (Unix only)."""
+    """Return True when the data dir is unsafe to trust (Unix only).
+
+    Unsafe means: symlink, not owned by the current user, or group/world-writable.
+    """
     if os.name == "nt":
         return False
     target = path if path is not None else data_dir(check_writable=False)
     try:
-        mode = target.stat().st_mode
+        if target.is_symlink():
+            logger.warning("Goal data directory is a symlink (%s)", target)
+            return True
+        st = target.lstat()
     except OSError as exc:
-        logger.debug("Could not stat data dir %s: %s", target, exc)
+        logger.debug("Could not lstat data dir %s: %s", target, exc)
         return False
-    return bool(mode & (stat.S_IWOTH | stat.S_IWGRP))
+    try:
+        getuid = getattr(os, "getuid", None)
+        if getuid is None:  # pragma: no cover — Windows
+            return bool(st.st_mode & (stat.S_IWOTH | stat.S_IWGRP))
+        uid = int(getuid())
+    except OSError:  # pragma: no cover
+        return bool(st.st_mode & (stat.S_IWOTH | stat.S_IWGRP))
+    if st.st_uid != uid and uid != 0:
+        logger.warning(
+            "Goal data directory not owned by current user (%s uid=%s owner=%s)",
+            target,
+            uid,
+            st.st_uid,
+        )
+        return True
+    return bool(st.st_mode & (stat.S_IWOTH | stat.S_IWGRP))
 
 
 def refuse_if_data_dir_insecure() -> str | None:
@@ -105,10 +131,49 @@ def refuse_if_data_dir_insecure() -> str | None:
         return None
     path = data_dir(check_writable=False)
     return (
-        f"[goal] Error: data directory is group/world-writable ({path}). "
-        "Restrict permissions (e.g. chmod 700) or set CURSOR_GOAL_DATA to a "
-        "private directory before create/validate."
+        f"[goal] Error: data directory is insecure ({path}). "
+        "It must not be a symlink, must be owned by you, and must not be "
+        "group/world-writable. Restrict permissions (e.g. chmod 700) or set "
+        "CURSOR_GOAL_DATA to a private directory."
     )
+
+
+def acl_harden_failure_message(path: Path | None = None) -> str | None:
+    """Return doctor FAIL text when Windows ACL harden failed for *path*."""
+    if os.name != "nt":
+        return None
+    target = path if path is not None else data_dir(check_writable=False)
+    reason = _ACL_HARDEN_FAILURES.get(str(target))
+    if not reason:
+        return None
+    return (
+        f"Windows ACL harden failed for {target}: {reason}. "
+        "Verify only you can access the data directory, or set "
+        "CURSOR_GOAL_SKIP_ACL=1 after manually locking down the path."
+    )
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    """Write *text* via temp file + replace; prefer private mode bits."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+    try:
+        if os.name != "nt":
+            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+            fd = os.open(tmp, flags, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(text)
+        else:
+            tmp.write_text(text, encoding="utf-8")
+        tmp.replace(path)
+    except Exception:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+        raise
+    _chmod_private(path)
 
 
 def _warn_if_world_writable(path: Path) -> None:
@@ -220,15 +285,29 @@ def _chmod_dir_private(path: Path) -> None:
 
 
 def _windows_username() -> str | None:
-    """Best-effort current Windows username for icacls grants."""
+    """Best-effort current Windows username for icacls grants.
+
+    Rejects values with characters that could alter icacls grant syntax.
+    """
+    candidates: list[str] = []
     for key in ("USERNAME", "USER"):
         value = os.environ.get(key, "").strip()
         if value:
-            return value
+            candidates.append(value)
     try:
-        return os.getlogin()
+        login = os.getlogin()
+        if login:
+            candidates.append(login.strip())
     except OSError:
-        return None
+        pass
+    for user in candidates:
+        if _WINDOWS_USERNAME_RE.fullmatch(user):
+            return user
+        logger.warning(
+            "Ignoring unsafe Windows username for ACL harden: %r",
+            user[:64],
+        )
+    return None
 
 
 def _acl_harden_disabled() -> bool:
@@ -237,13 +316,18 @@ def _acl_harden_disabled() -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _record_acl_failure(path: Path, reason: str) -> None:
+    key = str(path)
+    _ACL_HARDEN_FAILURES[key] = reason
+    logger.error("Windows ACL harden failure for %s: %s", path, reason)
+
+
 def _harden_windows_acl(path: Path) -> None:
     """Best-effort private ACL via icacls (no hard deps).
 
     Tries ``/inheritance:r`` then grants the current user full control. If the
-    grant fails after inheritance was stripped, logs a loud warning (path may
-    still be reachable via remaining explicit ACEs). Skip with
-    ``CURSOR_GOAL_SKIP_ACL=1``.
+    grant fails after inheritance was stripped, records a doctor hard-fail and
+    logs loudly. Skip with ``CURSOR_GOAL_SKIP_ACL=1``.
     """
     if os.name != "nt" or _acl_harden_disabled():
         return
@@ -252,13 +336,11 @@ def _harden_windows_acl(path: Path) -> None:
         return
     user = _windows_username()
     if not user:
-        logger.warning(
-            "Could not determine Windows username for ACL harden on %s", path
-        )
+        _record_acl_failure(path, "could not determine a safe Windows username")
         return
     icacls = shutil.which("icacls")
     if not icacls:
-        logger.warning("icacls not found on PATH; skip Windows ACL harden for %s", path)
+        _record_acl_failure(path, "icacls not found on PATH")
         return
     grant = f"{user}:(OI)(CI)F" if path.is_dir() else f"{user}:F"
     inheritance_stripped = False
@@ -288,29 +370,26 @@ def _harden_windows_acl(path: Path) -> None:
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        logger.warning("Windows ACL harden failed for %s: %s", path, exc)
         if inheritance_stripped:
-            logger.error(
-                "ACL inheritance was stripped but grant failed for %s; "
-                "verify you can still access the data directory",
+            _record_acl_failure(
                 path,
+                f"inheritance stripped but grant raised: {exc}",
             )
+        else:
+            _record_acl_failure(path, f"icacls failed: {exc}")
         return
     if completed.returncode != 0:
         err = (completed.stderr or completed.stdout or "").strip()
-        logger.warning(
-            "Windows ACL harden icacls exit=%s for %s: %s",
-            completed.returncode,
-            path,
-            err[:200] or "(no output)",
-        )
+        detail = err[:200] or f"exit={completed.returncode}"
         if inheritance_stripped:
-            logger.error(
-                "ACL inheritance was stripped but grant failed for %s; "
-                "verify you can still access the data directory",
+            _record_acl_failure(
                 path,
+                f"inheritance stripped but grant failed ({detail})",
             )
+        else:
+            _record_acl_failure(path, f"grant failed ({detail})")
         return
+    _ACL_HARDEN_FAILURES.pop(key, None)
     _HARDENED_PATHS.add(key)
     logger.debug(
         "Windows ACL hardened path=%s user=%s inheritance_stripped=%s",
@@ -726,19 +805,8 @@ def save_goal(state: GoalState) -> None:
 
 def _save_goal_unlocked(state: GoalState) -> None:
     path = goal_path()
-    tmp = path.with_name(f"goal.{os.getpid()}.{secrets.token_hex(4)}.tmp")
     payload = json.dumps(state.to_dict(), indent=2, ensure_ascii=False) + "\n"
-    try:
-        tmp.write_text(payload, encoding="utf-8")
-        tmp.replace(path)
-    except Exception:
-        if tmp.exists():
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
-        raise
-    _chmod_private(path)
+    atomic_write_text(path, payload)
     logger.info("Saved goal state status=%s turns=%s", state.status, state.turns_used)
 
 

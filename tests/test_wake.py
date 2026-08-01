@@ -727,7 +727,7 @@ def test_record_wake_tick_errors(
         raise ValueError("inactive")
 
     monkeypatch.setattr(wake_mod, "mutate_goal", boom)
-    monkeypatch.setattr(wake_mod, "load_goal", lambda: None)
+    monkeypatch.setattr(wake_mod, "snapshot_goal", lambda: None)
     assert wake_mod._record_wake_tick() is None
 
     def boom_os(_m: object) -> None:

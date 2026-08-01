@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import os
@@ -450,10 +451,26 @@ def test_refuse_if_data_dir_insecure_message(
     monkeypatch.setattr(state_mod, "data_dir", lambda check_writable=False: goal_home)
     msg = state_mod.refuse_if_data_dir_insecure()
     assert msg is not None
-    assert "writable" in msg
+    assert "insecure" in msg
 
     monkeypatch.setattr(state_mod, "data_dir_is_insecure", lambda path=None: False)
     assert state_mod.refuse_if_data_dir_insecure() is None
+
+
+def test_data_dir_is_insecure_symlink_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cursor_goal import state as state_mod
+
+    class Fake:
+        def is_symlink(self) -> bool:
+            return True
+
+        def lstat(self) -> object:
+            raise AssertionError("lstat should not run for symlink")
+
+    monkeypatch.setattr(state_mod.os, "name", "posix")
+    assert state_mod.data_dir_is_insecure(Fake()) is True  # type: ignore[arg-type]
 
 
 def test_data_dir_is_insecure_mode_bits(
@@ -463,14 +480,195 @@ def test_data_dir_is_insecure_mode_bits(
 
     class FakeStat:
         st_mode = 0o777
+        st_uid = 0
 
     monkeypatch.setattr(state_mod.os, "name", "posix")
-    monkeypatch.setattr(
-        type(goal_home),
-        "stat",
-        lambda self: FakeStat(),
-    )
+    monkeypatch.setattr(state_mod.os, "getuid", lambda: 1, raising=False)
+    monkeypatch.setattr(type(goal_home), "is_symlink", lambda self: False)
+    monkeypatch.setattr(type(goal_home), "lstat", lambda self: FakeStat())
+    # Not owned by uid 1 → insecure
+    assert state_mod.data_dir_is_insecure(goal_home) is True
+
+    FakeStat.st_uid = 1
+    assert state_mod.data_dir_is_insecure(goal_home) is True  # still world-writable
+
+    FakeStat.st_mode = 0o700
+    assert state_mod.data_dir_is_insecure(goal_home) is False
+
+    monkeypatch.setattr(type(goal_home), "is_symlink", lambda self: True)
     assert state_mod.data_dir_is_insecure(goal_home) is True
 
     monkeypatch.setattr(state_mod.os, "name", "nt")
     assert state_mod.data_dir_is_insecure(goal_home) is False
+
+
+def test_get_logger_invalid_level_and_log_file(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import logging
+
+    from cursor_goal import logging_config as log_mod
+
+    monkeypatch.setenv("CURSOR_GOAL_LOG", "NOTALEVEL")
+    monkeypatch.setenv("CURSOR_GOAL_LOG_FILE", str(tmp_path / "cg.log"))
+    name = f"cursor_goal.test_log_{os.getpid()}"
+    # Clear any prior logger
+    existing = logging.getLogger(name)
+    existing.handlers.clear()
+    logger = log_mod.get_logger(name)
+    assert logger.level == logging.WARNING
+    logger.warning("hello durable")
+    log_path = tmp_path / "cg.log"
+    assert log_path.is_file()
+    assert "hello durable" in log_path.read_text(encoding="utf-8")
+
+    # Default data-dir log path via CURSOR_GOAL_LOG_FILE=1
+    existing2 = logging.getLogger(name + "_b")
+    existing2.handlers.clear()
+    monkeypatch.setenv("CURSOR_GOAL_LOG_FILE", "1")
+    monkeypatch.setenv("CURSOR_GOAL_DATA", str(goal_home))
+    log_mod.get_logger(name + "_b").error("via data dir")
+    assert (goal_home / "cursor-goal.log").is_file()
+
+
+def test_get_logger_log_file_oserror(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import logging
+
+    from cursor_goal import logging_config as log_mod
+
+    bad = tmp_path / "missing" / "nested" / "x.log"
+    # Parent cannot be created if we point at a file-as-directory.
+    blocker = tmp_path / "missing"
+    blocker.write_text("not a dir", encoding="utf-8")
+    monkeypatch.setenv("CURSOR_GOAL_LOG_FILE", str(bad))
+    name = f"cursor_goal.test_log_fail_{os.getpid()}"
+    logging.getLogger(name).handlers.clear()
+    logger = log_mod.get_logger(name)
+    assert logger.handlers  # stderr still attached
+
+
+def test_default_log_path_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from cursor_goal import logging_config as log_mod
+
+    monkeypatch.delenv("CURSOR_GOAL_DATA", raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    path = log_mod._default_log_path()
+    assert path.name == "cursor-goal.log"
+    assert str(home) in str(path) or "cursor-goal" in str(path)
+
+
+def test_maybe_chmod_log_file_paths(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from cursor_goal import logging_config as log_mod
+
+    path = tmp_path / "x.log"
+    path.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(log_mod.os, "name", "nt")
+    log_mod._maybe_chmod_log_file(path)  # no-op on Windows name
+
+    monkeypatch.setattr(log_mod.os, "name", "posix")
+
+    def boom(_p: object, _m: int) -> None:
+        raise OSError("denied")
+
+    monkeypatch.setattr(log_mod.os, "chmod", boom)
+    log_mod._maybe_chmod_log_file(path)  # swallows OSError
+
+    called: list[int] = []
+
+    def ok(_p: object, mode: int) -> None:
+        called.append(mode)
+
+    monkeypatch.setattr(log_mod.os, "chmod", ok)
+    log_mod._maybe_chmod_log_file(path)
+    assert called == [0o600]
+
+
+def test_atomic_write_text_roundtrip(goal_home: Path) -> None:
+    from cursor_goal.state import atomic_write_text
+
+    path = goal_home / "atomic.txt"
+    atomic_write_text(path, "payload\n")
+    assert path.read_text(encoding="utf-8") == "payload\n"
+
+
+def test_atomic_write_cleans_tmp_on_failure(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import state as state_mod
+
+    path = goal_home / "atomic-fail.txt"
+    real_replace = Path.replace
+
+    def boom_replace(self: Path, target: Path) -> Path:
+        if self.suffix == ".tmp" or str(self).endswith(".tmp"):
+            raise OSError("replace failed")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", boom_replace)
+    with pytest.raises(OSError):
+        state_mod.atomic_write_text(path, "x")
+    assert list(goal_home.glob("atomic-fail.txt.*.tmp")) == []
+
+
+def test_atomic_write_posix_branch_and_unlink_oserror(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import state as state_mod
+
+    path = goal_home / "atomic-posix.txt"
+    monkeypatch.setattr(state_mod.os, "name", "posix")
+    state_mod.atomic_write_text(path, "posix-mode\n")
+    assert path.read_text(encoding="utf-8") == "posix-mode\n"
+
+    def boom_replace(self: Path, target: Path) -> Path:
+        raise OSError("replace failed")
+
+    def boom_unlink(self: Path, missing_ok: bool = False) -> None:
+        raise OSError("busy")
+
+    monkeypatch.setattr(Path, "replace", boom_replace)
+    monkeypatch.setattr(Path, "unlink", boom_unlink)
+    with pytest.raises(OSError):
+        state_mod.atomic_write_text(goal_home / "atomic-posix2.txt", "y")
+
+
+def test_stop_skips_last_response_when_insecure(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import cursor_goal.stop as stop_mod
+
+    monkeypatch.setenv("CURSOR_GOAL_STOP_DRAIN_MS", "0")
+    monkeypatch.setattr(
+        stop_mod, "refuse_if_data_dir_insecure", lambda: "[goal] Error: insecure"
+    )
+    out = io.StringIO()
+    from contextlib import redirect_stdout
+
+    with redirect_stdout(out):
+        stop_mod.emit({"followup_message": "x"})
+    assert not (goal_home / "last-stop-response.json").is_file()
+
+
+def test_scrubbed_env_adds_comspec_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cursor_goal import validation as val_mod
+
+    monkeypatch.setattr(val_mod.os, "name", "nt")
+    scrubbed = val_mod.scrubbed_validation_env(
+        {"PATH": "C:\\Windows", "ComSpec": "C:\\Windows\\system32\\cmd.exe"}
+    )
+    assert scrubbed.get("COMSPEC") == "C:\\Windows\\system32\\cmd.exe" or scrubbed.get(
+        "ComSpec"
+    )
+
+
+def test_stop_redact_without_condition_marker() -> None:
+    from cursor_goal.stop import _redact_followup_for_disk
+
+    assert _redact_followup_for_disk("[GOAL] keep me") == "[GOAL] keep me"

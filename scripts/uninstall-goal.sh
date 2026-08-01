@@ -13,10 +13,12 @@ detect_python() {
   local cand abs
   for cand in python3 python; do
     if command -v "$cand" >/dev/null 2>&1; then
-      abs="$("$cand" -c 'import sys; print(sys.executable)' 2>/dev/null || true)"
-      if [ -n "$abs" ]; then
-        echo "$abs"
-        return 0
+      if "$cand" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' >/dev/null 2>&1; then
+        abs="$("$cand" -c 'import sys; print(sys.executable)' 2>/dev/null || true)"
+        if [ -n "$abs" ]; then
+          echo "$abs"
+          return 0
+        fi
       fi
     fi
   done

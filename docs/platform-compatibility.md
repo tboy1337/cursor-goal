@@ -49,7 +49,8 @@ Some Cursor plans only accept Task `model: "fast"`; specific model IDs work when
 |----------|---------|
 | `CURSOR_GOAL_DATA` | Absolute override for `~/.cursor-goal/data` |
 | `CURSOR_GOAL_EVAL_MODEL` | Evaluator model slug for `eval spawn-config` (default `fast`) |
-| `CURSOR_GOAL_LOG` | Log level (`WARNING` default). `last-stop-response.json` is always written on stop emit (redacted) |
+| `CURSOR_GOAL_LOG` | Log level (`WARNING` default; invalid values fall back to WARNING). `last-stop-response.json` is always written on stop emit (redacted) |
+| `CURSOR_GOAL_LOG_FILE` | Optional durable log path, or `1`/`.` for `cursor-goal.log` under the data dir |
 | `CURSOR_GOAL_STOP_DRAIN_MS` | Stop-hook stdout drain delay before exit (default ~250 on Windows, ~100 elsewhere; max 2000) |
 | `CURSOR_GOAL_WAKE` | When `0`/`false`/`off`, disable wake watchdog arming |
 | `CURSOR_GOAL_WAKE_INTERVAL_S` | Wake loop interval seconds (default 15, min 5, max 600) |

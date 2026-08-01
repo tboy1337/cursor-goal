@@ -113,6 +113,27 @@ Describe 'Write-GoalStopHookCmd' {
     }
 }
 
+Describe 'Write-GoalWakeLoopCmd' {
+    It 'bakes absolute python and wake loop invocation' {
+        $dir = Join-Path ([IO.Path]::GetTempPath()) ("cg-wwake-" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        try {
+            $runGoal = Join-Path $dir 'run_goal.py'
+            $cmdFile = Join-Path $dir 'wake_loop.cmd'
+            $python = @{ Exe = 'C:\Python\python.exe'; PrefixArgs = @() }
+            Write-GoalWakeLoopCmd -Python $python -RunGoalPy $runGoal -WakeLoopCmd $cmdFile
+            $body = Get-Content -Raw -LiteralPath $cmdFile
+            $body | Should -Match 'PYTHONUNBUFFERED=1'
+            $body | Should -Match 'wake loop'
+            $body.Contains($runGoal) | Should -BeTrue
+            $body | Should -Not -Match 'where py'
+        }
+        finally {
+            Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 Describe 'Merge-GoalStopHook' {
     It 'replaces legacy goal hooks and keeps unrelated entries' {
         $data = [pscustomobject]@{
@@ -396,12 +417,12 @@ Describe 'Invoke-GoalHooksConfigMerge failure' {
 }
 
 Describe 'Invoke-GoalUninstall python fallback' {
-    It 'uses Select-GoalStopHooksRemaining when package hooks_config cannot run' {
+    It 'uses inline Python JSON cleanup when package hooks_config cannot run' {
         $TempHome = Join-Path ([IO.Path]::GetTempPath()) ("cg-psun-" + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Force -Path $TempHome | Out-Null
         try {
             $null = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $RepoRoot -Python (Find-GoalPython)
-            # Remove package so hooks_config path is unavailable; force PS cleanup.
+            # Remove package so hooks_config path is unavailable; force inline Python cleanup.
             Remove-Item -Recurse -Force (Join-Path $TempHome '.cursor\skills\goal\cursor_goal')
             $code = Invoke-GoalUninstall -HomeDir $TempHome
             $code | Should -Be 0

@@ -100,6 +100,8 @@ jobs:
           cache: pip
       - name: Install
         run: pip install -e ".[dev]"
+      - name: Plugin tree sync
+        run: python scripts/sync-plugin-tree.py --check
       - name: Pytest
         run: pytest tests -q --tb=short
 

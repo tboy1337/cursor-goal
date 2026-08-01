@@ -1,7 +1,7 @@
 @echo off
-REM Goal wake watchdog launcher for Windows (optional convenience wrapper).
-REM Prefer: py -3 -u "%~dp0run_goal.py" wake loop
-REM Installer may rewrite CURSOR_GOAL_PYTHON; fallback uses py/python on PATH.
+REM Source PATH template for wake_loop.cmd (marketplace / non-baked installs).
+REM Classic Windows install-goal.ps1 overwrites this with an absolute-Python bake.
+REM Do not expect this file to match the installed classic launcher.
 setlocal
 set PYTHONUNBUFFERED=1
 set "RUN_GOAL=%~dp0run_goal.py"

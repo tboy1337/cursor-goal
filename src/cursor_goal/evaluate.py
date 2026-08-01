@@ -14,7 +14,6 @@ from cursor_goal.state import (
     GoalLockTimeoutError,
     data_dir,
     has_eval_signal,
-    load_goal,
     record_parse_result,
     refuse_if_data_dir_insecure,
     set_eval_signal,
@@ -30,7 +29,7 @@ MAX_PARSE_RESULT_BYTES = 2 * 1024 * 1024
 
 
 def cmd_prompt(argv: list[str]) -> int:
-    state = load_goal()
+    state = snapshot_goal()
     if state is None:
         print(
             "[goal-eval] Error: No active goal. Run cursor-goal manage create first.",
@@ -182,7 +181,7 @@ def cmd_signal(argv: list[str]) -> int:
 
     Prefer parse-result auto-signal; use --force for recovery.
     """
-    state = load_goal()
+    state = snapshot_goal()
     if state is None:
         print(
             "[goal-eval] Error: No active goal. Run cursor-goal manage create first.",
@@ -256,7 +255,8 @@ def parse_result_text(result: str) -> tuple[str, str]:
 def _usage_parse_result() -> None:
     print(
         "[goal-eval] Error: Usage: "
-        'cursor-goal eval parse-result "<output>" | --stdin | @file',
+        'cursor-goal eval parse-result "<output>" | --stdin | @file '
+        "[--allow-cwd]",
         file=sys.stderr,
     )
 
@@ -270,22 +270,23 @@ def _path_is_under(path: Path, root: Path) -> bool:
         return False
 
 
-def _resolve_parse_result_path(raw: str) -> Path | None:
-    """Resolve @file path; allow only under data dir or cwd (agent-facing jail)."""
+def _resolve_parse_result_path(raw: str, *, allow_cwd: bool = False) -> Path | None:
+    """Resolve @file path; allow only under data dir unless --allow-cwd."""
     try:
         path = Path(raw).expanduser().resolve()
     except OSError as exc:
         print(f"[goal-eval] Error: could not resolve path: {exc}", file=sys.stderr)
         return None
-    allowed = (
-        data_dir(check_writable=False).resolve(),
-        Path.cwd().resolve(),
-    )
+    allowed: list[Path] = [data_dir(check_writable=False).resolve()]
+    if allow_cwd:
+        allowed.append(Path.cwd().resolve())
     if any(_path_is_under(path, root) for root in allowed):
         return path
+    where = "the goal data directory"
+    if allow_cwd:
+        where = "the goal data directory or the current working directory"
     print(
-        "[goal-eval] Error: @file path must be under the goal data directory "
-        "or the current working directory.",
+        f"[goal-eval] Error: @file path must be under {where}.",
         file=sys.stderr,
     )
     return None
@@ -326,17 +327,19 @@ def _read_parse_result_text(argv: list[str]) -> str | None:
 
     Returns the text, or None after printing a usage error.
     """
-    if not argv or not argv[0]:
+    allow_cwd = "--allow-cwd" in argv
+    filtered = [a for a in argv if a != "--allow-cwd"]
+    if not filtered or not filtered[0]:
         _usage_parse_result()
         return None
-    if argv[0] == "--stdin":
+    if filtered[0] == "--stdin":
         return _read_stdin_capped()
-    if argv[0].startswith("@") and len(argv[0]) > 1:
-        path = _resolve_parse_result_path(argv[0][1:])
+    if filtered[0].startswith("@") and len(filtered[0]) > 1:
+        path = _resolve_parse_result_path(filtered[0][1:], allow_cwd=allow_cwd)
         if path is None:
             return None
         return _read_bytes_capped(path)
-    return argv[0]
+    return filtered[0]
 
 
 def cmd_parse_result(argv: list[str]) -> int:
@@ -345,7 +348,8 @@ def cmd_parse_result(argv: list[str]) -> int:
         return 1
 
     verdict, reason = parse_result_text(result)
-    logger.info("parse-result verdict=%s reason=%r", verdict, reason)
+    # Avoid logging raw evaluator reasons at INFO (may contain secrets).
+    logger.info("parse-result verdict=%s reason_len=%s", verdict, len(reason))
 
     try:
         updated = record_parse_result(verdict, reason)
@@ -399,7 +403,7 @@ def _print_help() -> int:
     )
     print("  check                             Verify evaluator ran (exit 0/1)")
     print(
-        '  parse-result "<output>"|--stdin|@file  '
+        '  parse-result "<output>"|--stdin|@file [--allow-cwd]  '
         "Parse YES/NO; auto-signal on YES (prefer --stdin on Windows)"
     )
     return 0

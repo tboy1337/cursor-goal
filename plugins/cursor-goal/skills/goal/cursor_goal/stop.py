@@ -14,12 +14,13 @@ from cursor_goal.logging_config import get_logger
 from cursor_goal.state import (
     LAST_STOP_RESPONSE_NAME,
     GoalState,
-    _chmod_private,
+    atomic_write_text,
     budgets_exhausted,
     data_dir,
     goal_lock,
-    load_goal,
     mutate_goal,
+    refuse_if_data_dir_insecure,
+    snapshot_goal,
 )
 from cursor_goal.validation import redact_command
 from cursor_goal.wake import disarm as wake_disarm
@@ -33,6 +34,7 @@ MAX_DRAIN_MS = 2000
 STOP_SINGLEFLIGHT_NAME = "stop-emit.lock"
 _FAIL_OPEN_CONTINUE_NAME = "stop-failopen-continues"
 MAX_FAIL_OPEN_CONTINUES = 3
+_FOLLOWUP_CONDITION_MARKERS = ("toward:", "Goal:", "progress toward:")
 
 
 def _default_drain_ms() -> int:
@@ -82,31 +84,51 @@ def _fsync_stdout() -> None:
         pass
 
 
+def _redact_followup_for_disk(msg: str) -> str:
+    """Strip trailing goal-condition text from followup messages for disk storage."""
+    lowered = msg.lower()
+    best_idx: int | None = None
+    best_len = 0
+    for marker in _FOLLOWUP_CONDITION_MARKERS:
+        idx = lowered.rfind(marker.lower())
+        if idx < 0:
+            continue
+        if best_idx is None or idx < best_idx:
+            best_idx = idx
+            best_len = len(marker)
+    if best_idx is None:
+        return msg
+    original_slice = msg[best_idx : best_idx + best_len]
+    return msg[:best_idx] + original_slice + " <redacted>"
+
+
 def _redact_payload_for_disk(payload: dict[str, Any]) -> dict[str, Any]:
     """Copy payload and redact goal-condition text inside followup messages."""
     safe = dict(payload)
     msg = safe.get("followup_message")
-    if isinstance(msg, str) and "toward:" in msg:
-        # Keep structure; drop trailing condition detail that may be sensitive.
-        head, _sep, _tail = msg.partition("toward:")
-        safe["followup_message"] = head + "toward: <redacted>"
+    if isinstance(msg, str):
+        safe["followup_message"] = _redact_followup_for_disk(msg)
+        safe["has_followup"] = bool(msg.strip())
     return safe
 
 
 def _write_last_stop_response(payload: dict[str, Any]) -> None:
     """Persist last stop response for diagnosis (always on; redacted)."""
     try:
+        insecure = refuse_if_data_dir_insecure()
+        if insecure is not None:
+            logger.warning("Skip last-stop-response write: %s", insecure)
+            return
         path = data_dir() / LAST_STOP_RESPONSE_NAME
         envelope = {
             "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "pid": os.getpid(),
             "payload": _redact_payload_for_disk(payload),
         }
-        path.write_text(
+        atomic_write_text(
+            path,
             json.dumps(envelope, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
         )
-        _chmod_private(path)
     except OSError as exc:
         logger.debug("Could not write %s: %s", LAST_STOP_RESPONSE_NAME, exc)
 
@@ -223,8 +245,7 @@ def _read_fail_open_continues() -> int:
 def _write_fail_open_continues(value: int) -> None:
     path = _fail_open_continue_count_path()
     try:
-        path.write_text(f"{value}\n", encoding="utf-8")
-        _chmod_private(path)
+        atomic_write_text(path, f"{value}\n")
     except OSError as exc:
         logger.debug("Could not write fail-open continue counter: %s", exc)
 
@@ -305,7 +326,7 @@ def handle_stop(
                 MAX_FAIL_OPEN_CONTINUES,
             )
             return {}
-        state = load_goal()
+        state = snapshot_goal()
         if state is None or not state.active or state.status != "pursuing":
             return {}
         remaining = max(0, state.turn_budget - state.turns_used)

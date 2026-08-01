@@ -459,12 +459,27 @@ def test_harden_windows_acl_cached(
     monkeypatch.setenv("USERNAME", "tester")
     monkeypatch.delenv("CURSOR_GOAL_SKIP_ACL", raising=False)
     state_mod._HARDENED_PATHS.clear()
+    state_mod._ACL_HARDEN_FAILURES.clear()
     state_mod._harden_windows_acl(goal_home)
     state_mod._harden_windows_acl(goal_home)
     # First harden: inheritance strip + grant; second is cached (no more calls).
     assert len(calls) == 2
     assert any("/inheritance:r" in c for c in calls)
     assert any("/grant:r" in c for c in calls)
+    assert state_mod.acl_harden_failure_message(goal_home) is None
+
+
+def test_windows_username_rejects_metacharacters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cursor_goal import state as state_mod
+
+    monkeypatch.setenv("USERNAME", "evil;user")
+    monkeypatch.setenv("USER", "also*bad")
+    monkeypatch.setattr(
+        state_mod.os, "getlogin", lambda: (_ for _ in ()).throw(OSError("no"))
+    )
+    assert state_mod._windows_username() is None
 
 
 def test_parse_result_path_jail_rejects_outside(
@@ -472,13 +487,21 @@ def test_parse_result_path_jail_rejects_outside(
 ) -> None:
     outside = tmp_path / "outside.txt"
     outside.write_text("YES: ok", encoding="utf-8")
-    # Absolute path under tmp_path parent sibling — not data dir / cwd.
     code, _out, err = run_cli("eval", "parse-result", f"@{outside}")
-    # May fail jail or succeed if tmp happens to be under cwd; accept jail msg.
-    if code == 1 and "must be under" in err:
-        return
-    # If pytest cwd contains tmp_path, path is allowed — then YES succeeds.
-    assert code in {0, 1}
+    assert code == 1
+    assert "must be under" in err
+
+
+def test_parse_result_allow_cwd(
+    goal_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    outside = tmp_path / "cwd_verdict.txt"
+    outside.write_text("YES: ok via cwd\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    run_cli("manage", "create", "jail allow cwd")
+    code, out, _err = run_cli("eval", "parse-result", f"@{outside}", "--allow-cwd")
+    assert code == 0
+    assert "VERDICT=YES" in out
 
 
 def test_write_hooks_write_text_fail(
@@ -535,6 +558,7 @@ def test_harden_windows_acl_strip_then_grant(
     monkeypatch.setenv("USERNAME", "tester")
     monkeypatch.delenv("CURSOR_GOAL_SKIP_ACL", raising=False)
     state_mod._HARDENED_PATHS.clear()
+    state_mod._ACL_HARDEN_FAILURES.clear()
     state_mod._harden_windows_acl(goal_home)
     assert len(calls) == 2
     assert calls[0][2] == "/inheritance:r"
@@ -563,6 +587,7 @@ def test_harden_windows_acl_skip_env(
     monkeypatch.setattr(state_mod.subprocess, "run", fake_run)
     monkeypatch.setenv("CURSOR_GOAL_SKIP_ACL", "1")
     state_mod._HARDENED_PATHS.clear()
+    state_mod._ACL_HARDEN_FAILURES.clear()
     state_mod._harden_windows_acl(goal_home)
     assert calls == []
 
@@ -593,8 +618,10 @@ def test_harden_windows_acl_grant_fails_after_strip(
     monkeypatch.setenv("USERNAME", "tester")
     monkeypatch.delenv("CURSOR_GOAL_SKIP_ACL", raising=False)
     state_mod._HARDENED_PATHS.clear()
+    state_mod._ACL_HARDEN_FAILURES.clear()
     state_mod._harden_windows_acl(goal_home)
     assert str(goal_home) not in state_mod._HARDENED_PATHS
+    assert state_mod.acl_harden_failure_message(goal_home) is not None
 
 
 def test_harden_windows_acl_strip_fails_grant_ok(
@@ -623,6 +650,7 @@ def test_harden_windows_acl_strip_fails_grant_ok(
     monkeypatch.setenv("USERNAME", "tester")
     monkeypatch.delenv("CURSOR_GOAL_SKIP_ACL", raising=False)
     state_mod._HARDENED_PATHS.clear()
+    state_mod._ACL_HARDEN_FAILURES.clear()
     state_mod._harden_windows_acl(goal_home)
     assert str(goal_home) in state_mod._HARDENED_PATHS
 
@@ -724,6 +752,7 @@ def test_harden_acl_oserror_after_strip(
     monkeypatch.setenv("USERNAME", "tester")
     monkeypatch.delenv("CURSOR_GOAL_SKIP_ACL", raising=False)
     state_mod._HARDENED_PATHS.clear()
+    state_mod._ACL_HARDEN_FAILURES.clear()
     state_mod._harden_windows_acl(goal_home)
     assert str(goal_home) not in state_mod._HARDENED_PATHS
 
@@ -743,6 +772,7 @@ def test_harden_windows_acl_failures(
 
     monkeypatch.setattr(state_mod.os, "getlogin", boom_login)
     state_mod._HARDENED_PATHS.clear()
+    state_mod._ACL_HARDEN_FAILURES.clear()
     state_mod._harden_windows_acl(goal_home)  # no username
 
     monkeypatch.setenv("USERNAME", "tester")
@@ -754,6 +784,7 @@ def test_harden_windows_acl_failures(
         raise OSError("no icacls")
 
     state_mod._HARDENED_PATHS.clear()
+    state_mod._ACL_HARDEN_FAILURES.clear()
     monkeypatch.setattr(state_mod.subprocess, "run", boom_run)
     state_mod._harden_windows_acl(goal_home)
 
@@ -766,6 +797,7 @@ def test_harden_windows_acl_failures(
         return Result()
 
     state_mod._HARDENED_PATHS.clear()
+    state_mod._ACL_HARDEN_FAILURES.clear()
     monkeypatch.setattr(state_mod.subprocess, "run", bad_exit)
     state_mod._harden_windows_acl(goal_home)
     assert str(goal_home) not in state_mod._HARDENED_PATHS
@@ -781,6 +813,7 @@ def test_harden_windows_acl_missing_icacls(
     monkeypatch.setenv("USERNAME", "tester")
     monkeypatch.setattr(state_mod.shutil, "which", lambda _n: None)
     state_mod._HARDENED_PATHS.clear()
+    state_mod._ACL_HARDEN_FAILURES.clear()
     state_mod._harden_windows_acl(goal_home)
     assert str(goal_home) not in state_mod._HARDENED_PATHS
 
@@ -812,9 +845,13 @@ def test_data_dir_is_insecure_stat_oserror(
     from cursor_goal import state as state_mod
 
     class Fake:
-        def stat(self) -> object:
+        def is_symlink(self) -> bool:
+            return False
+
+        def lstat(self) -> object:
             raise OSError("stat failed")
 
+    monkeypatch.setattr(state_mod.os, "name", "posix")
     assert state_mod.data_dir_is_insecure(Fake()) is False  # type: ignore[arg-type]
 
 

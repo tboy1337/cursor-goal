@@ -47,6 +47,12 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("[cursor-goal] Interrupted.", file=sys.stderr)
         return 130
+    except Exception as exc:  # noqa: BLE001 — agent-facing CLI; stop has own fail-open
+        if command == "stop":
+            raise
+        logger.error("Unhandled error in %s: %s", command, exc, exc_info=True)
+        print(f"[cursor-goal] Error: {exc}", file=sys.stderr)
+        return 1
 
 
 def _print_help() -> None:
