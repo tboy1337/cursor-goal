@@ -94,8 +94,6 @@ jobs:
           NOTES="$(printf '%s\n' \
             "## cursor-goal ${TAG}" \
             "" \
-            "See [CHANGELOG.md](https://github.com/tboy1337/cursor-goal/blob/${TAG}/CHANGELOG.md) for breaking changes and fixes." \
-            "" \
             "### Install for Cursor (required)" \
             "1. Download the **source** archive or clone \`--branch ${TAG}\`" \
             "2. Run \`./scripts/install-goal.sh\` or \`scripts/install-goal.ps1\`" \

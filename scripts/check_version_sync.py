@@ -135,14 +135,6 @@ def main() -> int:
     if market is not None and market != proj:
         errors.append(f"marketplace={market} != package {proj}")
 
-    changelog = root / "CHANGELOG.md"
-    if not changelog.is_file():
-        errors.append("CHANGELOG.md missing")
-    else:
-        text = changelog.read_text(encoding="utf-8")
-        if f"## [{proj}]" not in text and f"## [v{proj}]" not in text:
-            errors.append(f"CHANGELOG.md missing section for {proj}")
-
     if errors:
         print("version mismatch:", file=sys.stderr)
         for item in errors:

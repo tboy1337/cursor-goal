@@ -13,7 +13,6 @@ Checklist for cutting a tagged GitHub Release (`vX.Y.Z`).
    - [`src/cursor_goal/__init__.py`](../src/cursor_goal/__init__.py) (`__version__`)
    - [`pyproject.toml`](../pyproject.toml) (`[project].version`)
    - Update tagged-clone pins in [`docs/install.md`](install.md) and [`README.md`](../README.md) to `vX.Y.Z`
-   - Add a section to [`CHANGELOG.md`](../CHANGELOG.md)
 
 2. **Regenerate the plugin / marketplace tree**
 
@@ -30,7 +29,7 @@ Checklist for cutting a tagged GitHub Release (`vX.Y.Z`).
    # or: python scripts/verify.py
    ```
 
-4. **Commit** the version bump, plugin sync, changelog, and docs pins.
+4. **Commit** the version bump, plugin sync, and docs pins.
 
 5. **Tag and push** (tag must equal `v` + package version exactly)
 

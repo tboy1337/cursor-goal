@@ -175,7 +175,7 @@ py -3 scripts/verify.py --fix   # apply isort/black, then verify
 
 ## Releases
 
-See [CHANGELOG.md](CHANGELOG.md) and the maintainer checklist in [docs/release.md](docs/release.md).
+See the maintainer checklist in [docs/release.md](docs/release.md).
 
 ## License
 
