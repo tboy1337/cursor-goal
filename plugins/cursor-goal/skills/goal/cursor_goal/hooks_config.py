@@ -100,7 +100,17 @@ def remove_stop_hooks(data: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(hooks, dict):
         return data
     stop = normalize_stop_hooks(hooks.get("stop"))
-    hooks["stop"] = [item for item in stop if not is_goal_stop_hook(item)]
+    # Prefer marker-only removal when at least one marked entry exists so
+    # unrelated hooks whose command happens to contain stop_hook.* are kept.
+    has_marked = any(
+        isinstance(item, dict) and item.get("_cursor_goal") == HOOK_MARKER
+        for item in stop
+    )
+    hooks["stop"] = [
+        item
+        for item in stop
+        if not is_goal_stop_hook(item, allow_legacy=not has_marked)
+    ]
     data["hooks"] = hooks
     return data
 

@@ -71,9 +71,11 @@ Uninstall: `./scripts/uninstall-goal.sh` or `.\scripts\uninstall-goal.ps1` (add 
 
 `pip install -e ".[dev]"` installs the `cursor-goal` CLI for **development only** — it does **not** register the Cursor skill, agents, or stop hook. Always run the installer (or Teams marketplace import) for Cursor integration.
 
-Security: see [SECURITY.md](SECURITY.md). Platform notes: [docs/platform-compatibility.md](docs/platform-compatibility.md).
+Security: see [SECURITY.md](SECURITY.md). Platform notes: [docs/platform-compatibility.md](docs/platform-compatibility.md). Known limits: [docs/known-limitations.md](docs/known-limitations.md). Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md).
 
 Note: an unrelated npm package is also named `cursor-goal`; this project is the Python/AGPL harness at `tboy1337/cursor-goal`.
+
+**Teams / AGPL:** marketplace import redistributes AGPL-3.0 code — review [COPYING](COPYING) and [known limitations](docs/known-limitations.md#license-teams--redistribution) before enterprise use.
 
 Verify:
 
@@ -142,16 +144,16 @@ python -u ~/.cursor/skills/goal/scripts/run_goal.py eval validate|spawn-config|p
 
 Developers can also `pip install -e ".[dev]"` and use `cursor-goal` / `python -m cursor_goal`.
 
-**Trust model:** `~/.cursor-goal/data` and `validation_command` are trusted-user local state (equivalent to shell access). Prefer simple argv-safe `--test` commands.
+**Trust model:** `~/.cursor-goal/data` and `validation_command` are trusted-user local state (equivalent to shell access). Prefer simple argv-safe `--test` commands. **Always arm wake** while pursuing — stop-hook followups are best-effort under a Cursor stdout race (see [known limitations](docs/known-limitations.md)).
 
 ## Platform support
 
 | Platform | Status |
 |----------|--------|
-| Cursor IDE (Unix) | Reference — harness unit-tested; stop hook verified on Unix |
+| Cursor IDE (Unix) | Reference — harness unit-tested; stop hook verified on Unix; residual fast-hook race possible — use wake |
 | Cursor IDE (Windows) | Harness works; `stop_hook.cmd` + drain mitigate the [Cursor capture race](https://forum.cursor.com/t/race-condition-silently-disables-hooks-that-exit-quickly/165818); wake watchdog continues when followups drop |
 
-See [docs/platform-compatibility.md](docs/platform-compatibility.md), [docs/cursor-windows-stop-hook-race.md](docs/cursor-windows-stop-hook-race.md), and [docs/install.md](docs/install.md).
+See [docs/platform-compatibility.md](docs/platform-compatibility.md), [docs/cursor-windows-stop-hook-race.md](docs/cursor-windows-stop-hook-race.md), [docs/known-limitations.md](docs/known-limitations.md), [docs/troubleshooting.md](docs/troubleshooting.md), and [docs/install.md](docs/install.md).
 
 ## Testing
 
@@ -175,7 +177,7 @@ py -3 scripts/verify.py --fix   # apply isort/black, then verify
 
 ## Releases
 
-See the maintainer checklist in [docs/release.md](docs/release.md).
+User-facing notes: [CHANGELOG.md](CHANGELOG.md). Maintainer checklist: [docs/release.md](docs/release.md).
 
 ## License
 

@@ -22,6 +22,8 @@ _SECRETISH = re.compile(
     r"client[_-]?secret))\s+(\S+)"
     r"|(Bearer)\s+(\S+)"
     r"|((?:AKIA|ASIA)[A-Z0-9]{16})"
+    r"|(Authorization:\s*Basic)\s+(\S+)"
+    r"|(eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})"
     r")"
 )
 
@@ -55,8 +57,12 @@ def redact_secrets(text: str, *, max_chars: int | None = 4000) -> str:
             return f"{match.group(3)} <redacted>"
         if match.group(5):
             return f"{match.group(5)} <redacted>"
-        if match.group(6):
+        if match.group(7):
             return "<redacted>"
+        if match.group(8):
+            return f"{match.group(8)} <redacted>"
+        if match.group(10):
+            return "<redacted-jwt>"
         return "<redacted>"
 
     redacted = _SECRETISH.sub(_sub, text)

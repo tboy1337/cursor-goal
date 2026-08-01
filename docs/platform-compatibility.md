@@ -4,13 +4,15 @@ cursor-goal targets **Cursor IDE only**. The harness is a **Python 3.12+** packa
 
 **Install:** `./scripts/install-goal.sh` or `.\scripts\install-goal.ps1` from a full clone (see [install.md](install.md)).
 
+Also: [known-limitations.md](known-limitations.md) · [troubleshooting.md](troubleshooting.md) · [CHANGELOG.md](../CHANGELOG.md)
+
 ## Compatibility Matrix
 
 | Platform | Agent Defs | Subagent Tool | Stop Hook | Tested |
 |----------|------------|---------------|-----------|--------|
-| Cursor IDE (Unix) | `goalKeeper.md` + `goal-evaluator.md` | `Task` | `hooks.json` → `stop_hook.py` | **Harness YES**; stop followups **YES** |
+| Cursor IDE (Unix) | `goalKeeper.md` + `goal-evaluator.md` | `Task` | `hooks.json` → `stop_hook.py` | **Harness YES**; stop followups best-effort (residual race — use wake) |
 | Cursor IDE (Windows) | same | `Task` | `stop_hook.cmd` (+ drain) + wake watchdog | Harness YES; race mitigated; wake bypass ([research](cursor-windows-stop-hook-race.md)) |
-| Teams marketplace plugin | same | `Task` | Dual `stop_hook.cmd` + `python3` + singleflight; wake watchdog | Harness YES; Windows PATH needed for `.cmd` interpreter discovery |
+| Teams marketplace plugin | same | `Task` | Dual `stop_hook.cmd` + `python3` + singleflight; wake watchdog | Harness YES; set absolute `CURSOR_GOAL_PYTHON` or ensure PATH |
 | Cursor CLI | same | `Task` | `hooks.json` | NO (E2E) |
 
 ## Installed Layout

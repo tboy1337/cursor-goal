@@ -355,10 +355,23 @@ print(__version__)
         if (Test-Path $legacy) { Remove-Item -Force $legacy }
     }
 
-    Copy-Item $sourceAgent (Join-Path $agentsDir "goalKeeper.md") -Force
-    Write-GoalInfo "Installed: $(Join-Path $agentsDir 'goalKeeper.md')"
-    Copy-Item $sourceEvaluator (Join-Path $agentsDir "goal-evaluator.md") -Force
-    Write-GoalInfo "Installed: $(Join-Path $agentsDir 'goal-evaluator.md')"
+    $agentTs = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
+    $destKeeper = Join-Path $agentsDir "goalKeeper.md"
+    $destEvaluator = Join-Path $agentsDir "goal-evaluator.md"
+    if (Test-Path -LiteralPath $destKeeper) {
+        $bak = Join-Path $agentsDir "goalKeeper.md.bak.$agentTs"
+        Copy-Item -LiteralPath $destKeeper -Destination $bak -Force
+        Write-GoalInfo "Backed up existing goalKeeper.md to $bak"
+    }
+    if (Test-Path -LiteralPath $destEvaluator) {
+        $bak = Join-Path $agentsDir "goal-evaluator.md.bak.$agentTs"
+        Copy-Item -LiteralPath $destEvaluator -Destination $bak -Force
+        Write-GoalInfo "Backed up existing goal-evaluator.md to $bak"
+    }
+    Copy-Item $sourceAgent $destKeeper -Force
+    Write-GoalInfo "Installed: $destKeeper"
+    Copy-Item $sourceEvaluator $destEvaluator -Force
+    Write-GoalInfo "Installed: $destEvaluator"
 
     New-Item -ItemType Directory -Force -Path (Join-Path $HomeDir ".cursor") | Out-Null
 

@@ -19,6 +19,7 @@ from cursor_goal.state import (
     data_dir,
     goal_lock,
     mutate_goal,
+    refuse_if_acl_harden_failed,
     refuse_if_data_dir_insecure,
     snapshot_goal,
 )
@@ -118,6 +119,10 @@ def _write_last_stop_response(payload: dict[str, Any]) -> None:
         insecure = refuse_if_data_dir_insecure()
         if insecure is not None:
             logger.warning("Skip last-stop-response write: %s", insecure)
+            return
+        acl_fail = refuse_if_acl_harden_failed()
+        if acl_fail is not None:
+            logger.warning("Skip last-stop-response write: %s", acl_fail)
             return
         path = data_dir() / LAST_STOP_RESPONSE_NAME
         envelope = {
@@ -277,6 +282,10 @@ def handle_stop(
     if insecure is not None:
         logger.warning("Stop refuse insecure data dir: %s", insecure)
         return {}
+    acl_fail = refuse_if_acl_harden_failed()
+    if acl_fail is not None:
+        logger.warning("Stop refuse ACL harden failure: %s", acl_fail)
+        return {}
 
     status = payload.get("status", "unknown")
     loop_count = payload.get("loop_count", 0)
@@ -334,7 +343,24 @@ def handle_stop(
         state = snapshot_goal()
         if state is None or not state.active or state.status != "pursuing":
             return {}
-        remaining = max(0, state.turn_budget - state.turns_used)
+        # Account fail-open continues against turn budget so free loops cannot
+        # bypass the budget beyond MAX_FAIL_OPEN_CONTINUES.
+        effective_turns = int(state.turns_used) + count
+        if effective_turns >= int(state.turn_budget) or budgets_exhausted(
+            effective_turns,
+            state.turn_budget,
+            state.wake_ticks,
+            state.wake_budget,
+        ):
+            logger.warning(
+                "Fail-open continue would exhaust budget "
+                "(turns_used=%s + failopen=%s >= %s); stopping",
+                state.turns_used,
+                count,
+                state.turn_budget,
+            )
+            return {}
+        remaining = max(0, state.turn_budget - effective_turns)
         return _continue_followup(state, remaining)
 
     if state is None:

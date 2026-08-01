@@ -498,6 +498,8 @@ def test_data_dir_is_insecure_mode_bits(
     monkeypatch.setattr(type(goal_home), "is_symlink", lambda self: True)
     assert state_mod.data_dir_is_insecure(goal_home) is True
 
+    monkeypatch.setattr(type(goal_home), "is_symlink", lambda self: False)
+    monkeypatch.setattr(state_mod, "_windows_path_is_reparse_point", lambda _p: False)
     monkeypatch.setattr(state_mod.os, "name", "nt")
     assert state_mod.data_dir_is_insecure(goal_home) is False
 

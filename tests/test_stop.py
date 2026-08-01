@@ -357,6 +357,20 @@ def test_fail_open_continue_cap(
     assert handle_stop({"status": "completed", "loop_count": 0}) == {}
 
 
+def test_fail_open_accounts_against_budget(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_cli("manage", "create", "fail open budget", "--budget", "2")
+
+    def boom(_mutator: object) -> GoalState | None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(stop_mod, "mutate_goal", boom)
+    # turns_used=0; first fail-open count=1 → remaining ok; count=2 → exhausted
+    assert "followup_message" in handle_stop({"status": "completed", "loop_count": 0})
+    assert handle_stop({"status": "completed", "loop_count": 0}) == {}
+
+
 def test_release_singleflight_none(goal_home: Path) -> None:
     stop_mod._release_singleflight(None)
 

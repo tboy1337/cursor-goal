@@ -77,65 +77,16 @@ def write_plugin(root: Path) -> Path:
     manifest_dir.mkdir(parents=True, exist_ok=True)
 
     shutil.copy2(skill_src / "SKILL.md", skill_dest / "SKILL.md")
-    shutil.copy2(
-        skill_src / "scripts" / "run_goal.py", skill_dest / "scripts" / "run_goal.py"
-    )
-    shutil.copy2(
-        skill_src / "scripts" / "stop_hook.py", skill_dest / "scripts" / "stop_hook.py"
-    )
-    for wake_name in ("wake_loop.sh", "wake_loop.cmd"):
-        wake_src = skill_src / "scripts" / wake_name
-        if wake_src.is_file():
-            shutil.copy2(wake_src, skill_dest / "scripts" / wake_name)
-    # PATH-based Windows launcher (no absolute Python bake) for plugin installs.
-    (skill_dest / "scripts" / "stop_hook.cmd").write_text(
-        "\r\n".join(
-            [
-                "@echo off",
-                "setlocal",
-                "set PYTHONUNBUFFERED=1",
-                'set "STOP_PY=%~dp0stop_hook.py"',
-                'if not "%CURSOR_GOAL_PYTHON%"=="" (',
-                '  "%CURSOR_GOAL_PYTHON%" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)" >nul 2>&1',
-                "  if %ERRORLEVEL%==0 (",
-                '    "%CURSOR_GOAL_PYTHON%" -u "%STOP_PY%"',
-                "    exit /b %ERRORLEVEL%",
-                "  )",
-                "  echo [cursor-goal] CURSOR_GOAL_PYTHON is not Python 3.12+ >&2",
-                "  exit /b 1",
-                ")",
-                "where py >nul 2>&1",
-                "if %ERRORLEVEL%==0 (",
-                '  py -3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)" >nul 2>&1',
-                "  if %ERRORLEVEL%==0 (",
-                '    py -3 -u "%STOP_PY%"',
-                "    exit /b %ERRORLEVEL%",
-                "  )",
-                ")",
-                "where python >nul 2>&1",
-                "if %ERRORLEVEL%==0 (",
-                '  python -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)" >nul 2>&1',
-                "  if %ERRORLEVEL%==0 (",
-                '    python -u "%STOP_PY%"',
-                "    exit /b %ERRORLEVEL%",
-                "  )",
-                ")",
-                "where python3 >nul 2>&1",
-                "if %ERRORLEVEL%==0 (",
-                '  python3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)" >nul 2>&1',
-                "  if %ERRORLEVEL%==0 (",
-                '    python3 -u "%STOP_PY%"',
-                "    exit /b %ERRORLEVEL%",
-                "  )",
-                ")",
-                "echo [cursor-goal] Python 3.12+ not found on PATH >&2",
-                "exit /b 1",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-        newline="\n",
-    )
+    for script_name in (
+        "run_goal.py",
+        "stop_hook.py",
+        "stop_hook.cmd",
+        "wake_loop.sh",
+        "wake_loop.cmd",
+    ):
+        src = skill_src / "scripts" / script_name
+        if src.is_file():
+            shutil.copy2(src, skill_dest / "scripts" / script_name)
     _copy_tree(pkg_src, skill_dest / "cursor_goal")
     # newline="\n" forces LF on Windows so --check matches git (eol=lf).
     (skill_dest / "VERSION").write_text(version + "\n", encoding="utf-8", newline="\n")

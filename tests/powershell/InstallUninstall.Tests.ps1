@@ -206,6 +206,20 @@ Describe 'Invoke-GoalInstall' {
         }
     }
 
+    It 'backs up existing agent markdown on reinstall' {
+        $null = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $RepoRoot -Python (Find-GoalPython)
+        $agentsDir = Join-Path $TempHome '.cursor\agents'
+        Set-Content -Path (Join-Path $agentsDir 'goalKeeper.md') -Value 'old-keeper' -Encoding utf8
+        Set-Content -Path (Join-Path $agentsDir 'goal-evaluator.md') -Value 'old-eval' -Encoding utf8
+
+        $code = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $RepoRoot -Python (Find-GoalPython)
+        $code | Should -Be 0
+        $backups = @(Get-ChildItem -LiteralPath $agentsDir -Filter '*.bak.*')
+        @($backups | Where-Object { $_.Name -like 'goalKeeper.md.bak.*' }).Count | Should -BeGreaterThan 0
+        @($backups | Where-Object { $_.Name -like 'goal-evaluator.md.bak.*' }).Count | Should -BeGreaterThan 0
+        (Get-Content -Raw (Join-Path $agentsDir 'goalKeeper.md')).Trim() | Should -Not -Be 'old-keeper'
+    }
+
     It 'backs up and merges an existing hooks.json' {
         $cursorDir = Join-Path $TempHome '.cursor'
         New-Item -ItemType Directory -Force -Path $cursorDir | Out-Null

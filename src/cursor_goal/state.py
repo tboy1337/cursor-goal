@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import json
 import os
@@ -91,14 +92,49 @@ def data_dir(*, check_writable: bool = True) -> Path:
     return path
 
 
-def data_dir_is_insecure(path: Path | None = None) -> bool:
-    """Return True when the data dir is unsafe to trust (Unix only).
+_FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+_INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
 
-    Unsafe means: symlink, not owned by the current user, or group/world-writable.
-    """
-    if os.name == "nt":
+
+def _windows_path_is_reparse_point(path: Path) -> bool:
+    """Return True when *path* is a symlink, junction, or other reparse point."""
+    try:
+        if path.is_symlink():
+            return True
+    except OSError as exc:
+        logger.debug("Could not check symlink for %s: %s", path, exc)
+    try:
+        # FILE_ATTRIBUTE_REPARSE_POINT via Win32 (junctions may not be is_symlink).
+        kernel32 = getattr(ctypes, "windll", None)
+        if kernel32 is None:
+            return False
+        get_attrs = kernel32.kernel32.GetFileAttributesW
+        get_attrs.restype = ctypes.c_uint32
+        attrs = int(get_attrs(str(path)))
+    except (AttributeError, OSError, ValueError, TypeError) as exc:
+        logger.debug("GetFileAttributesW failed for %s: %s", path, exc)
         return False
+    if attrs == _INVALID_FILE_ATTRIBUTES:
+        return False
+    return bool(attrs & _FILE_ATTRIBUTE_REPARSE_POINT)
+
+
+def data_dir_is_insecure(path: Path | None = None) -> bool:
+    """Return True when the data dir is unsafe to trust.
+
+    Unix: symlink, not owned by the current user, or group/world-writable.
+    Windows: symlink / junction / reparse point (ACL trust uses
+    ``refuse_if_acl_harden_failed`` separately).
+    """
     target = path if path is not None else data_dir(check_writable=False)
+    if os.name == "nt":
+        if _windows_path_is_reparse_point(target):
+            logger.warning(
+                "Goal data directory is a reparse point/symlink/junction (%s)",
+                target,
+            )
+            return True
+        return False
     try:
         if target.is_symlink():
             logger.warning("Goal data directory is a symlink (%s)", target)
@@ -130,6 +166,12 @@ def refuse_if_data_dir_insecure() -> str | None:
     if not data_dir_is_insecure():
         return None
     path = data_dir(check_writable=False)
+    if os.name == "nt":
+        return (
+            f"[goal] Error: data directory is insecure ({path}). "
+            "It must not be a symlink, junction, or other reparse point. "
+            "Set CURSOR_GOAL_DATA to a normal private directory."
+        )
     return (
         f"[goal] Error: data directory is insecure ({path}). "
         "It must not be a symlink, must be owned by you, and must not be "
@@ -521,6 +563,19 @@ def _require_field_chars(name: str, value: str) -> str:
     return value
 
 
+def _clamp_field_chars(name: str, value: str) -> str:
+    """Truncate oversized fields on load (corrupt/malicious goal.json recovery)."""
+    if len(value) <= MAX_FIELD_CHARS:
+        return value
+    logger.warning(
+        "%s exceeds %s chars on load (%s); truncating",
+        name,
+        MAX_FIELD_CHARS,
+        len(value),
+    )
+    return value[:MAX_FIELD_CHARS]
+
+
 def _set_condition(state: GoalState, value: Any) -> None:
     state.condition = _require_field_chars("condition", str(value))
 
@@ -532,7 +587,7 @@ def _set_validation_command(state: GoalState, value: Any) -> None:
 
 
 def _set_created_at(state: GoalState, value: Any) -> None:
-    state.created_at = str(value)
+    state.created_at = _require_field_chars("created_at", str(value))
 
 
 def _set_turn_budget(state: GoalState, value: Any) -> None:
@@ -566,11 +621,13 @@ def _set_status(state: GoalState, value: Any) -> None:
 
 
 def _set_last_reason(state: GoalState, value: Any) -> None:
-    state.last_reason = str(value or "")
+    state.last_reason = _require_field_chars("last_reason", str(value or ""))
 
 
 def _set_last_validation_output(state: GoalState, value: Any) -> None:
-    state.last_validation_output = str(value or "")
+    state.last_validation_output = _require_field_chars(
+        "last_validation_output", str(value or "")
+    )
 
 
 def _set_last_validation_exit_code(state: GoalState, value: Any) -> None:
@@ -581,7 +638,9 @@ def _set_last_validation_exit_code(state: GoalState, value: Any) -> None:
 
 
 def _set_last_eval_verdict(state: GoalState, value: Any) -> None:
-    state.last_eval_verdict = str(value or "")
+    state.last_eval_verdict = _require_field_chars(
+        "last_eval_verdict", str(value or "")
+    )
 
 
 _FIELD_SETTERS: dict[str, Callable[[GoalState, Any], None]] = {
@@ -726,17 +785,26 @@ class GoalState:  # pylint: disable=too-many-instance-attributes
             active=active,
             condition=condition,
             validation_command=validation_command,
-            created_at=str(data.get("created_at", "")),
+            created_at=_clamp_field_chars(
+                "created_at", str(data.get("created_at", ""))
+            ),
             turn_budget=turn_budget,
             turns_used=turns_used,
             wake_ticks=wake_ticks,
             wake_budget=wake_budget,
             shell_ok=shell_ok,
             status=status,
-            last_reason=str(data.get("last_reason") or ""),
-            last_validation_output=str(data.get("last_validation_output") or ""),
+            last_reason=_clamp_field_chars(
+                "last_reason", str(data.get("last_reason") or "")
+            ),
+            last_validation_output=_clamp_field_chars(
+                "last_validation_output",
+                str(data.get("last_validation_output") or ""),
+            ),
             last_validation_exit_code=exit_code,
-            last_eval_verdict=str(data.get("last_eval_verdict") or ""),
+            last_eval_verdict=_clamp_field_chars(
+                "last_eval_verdict", str(data.get("last_eval_verdict") or "")
+            ),
             schema_version=schema_version,
         )
 
@@ -1032,8 +1100,10 @@ def record_parse_result(verdict: str, reason: str) -> GoalState | None:
         state = load_goal()
         if state is None:
             return None
-        state.last_reason = reason
-        state.last_eval_verdict = verdict
+        state.last_reason = _clamp_field_chars("last_reason", str(reason or ""))
+        state.last_eval_verdict = _clamp_field_chars(
+            "last_eval_verdict", str(verdict or "")
+        )
         if verdict == "YES":
             _write_eval_signal_unlocked(state, reason=reason)
         else:

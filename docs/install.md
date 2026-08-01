@@ -68,12 +68,15 @@ Or download the source archive from the GitHub Release for that tag and run the 
 ```bash
 python3 -u ~/.cursor/skills/goal/scripts/run_goal.py manage status
 python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval spawn-config
+python3 -u ~/.cursor/skills/goal/scripts/run_goal.py manage doctor
 ```
 
 Expected status: `[goal] No active goal.`  
 Expected spawn-config: JSON with `"subagent_type":"goal-evaluator"` and `"model":"fast"` (unless overridden).
 
 Then in Agent chat: `/goal status`
+
+If continuation stalls after install, see [troubleshooting.md](troubleshooting.md) and [known-limitations.md](known-limitations.md).
 
 ## Uninstall
 
@@ -107,7 +110,7 @@ The plugin ships skill, agents, vendored harness, and marketplace stop hooks tha
 
 Do **not** hand-edit diverging copies — regenerate via installer or `sync-plugin-tree.py`.
 
-**Windows:** Marketplace dual-entry hooks work when `py`/`python`/`python3` is on `PATH` for the `.cmd` launcher. Individuals may still prefer `install-goal.ps1` for an absolute interpreter bake and the stdout drain mitigation.
+**Windows:** Marketplace dual-entry hooks work when `CURSOR_GOAL_PYTHON` is set to an **absolute** Python 3.12+ path, or when `py`/`python`/`python3` is on `PATH` (PATH fallback prints a warning). Individuals should prefer `install-goal.ps1` for an absolute interpreter bake and the stdout drain mitigation. This plugin is **AGPL-3.0-only** — see [known-limitations.md](known-limitations.md#license-teams--redistribution).
 
 Keep the plugin tree in sync after editing skill/agents/package sources:
 

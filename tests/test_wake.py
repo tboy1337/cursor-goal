@@ -308,7 +308,7 @@ def test_kill_pid_dead_and_oserror(
             return Result()
 
         monkeypatch.setattr(wake_mod.subprocess, "run", fake_run)
-        wake_mod._kill_pid(4242)
+        wake_mod._kill_pid(4242, token="owned")
         assert calls and calls[0][0] == "taskkill"
     else:
 
@@ -316,7 +316,7 @@ def test_kill_pid_dead_and_oserror(
             raise OSError("denied")
 
         monkeypatch.setattr(wake_mod.os, "kill", boom)
-        wake_mod._kill_pid(4242)
+        wake_mod._kill_pid(4242, token="owned")
 
 
 def test_followup_prompt_without_goal(wake_on: Path) -> None:
@@ -556,8 +556,40 @@ def test_windows_kill_refuses_unowned(
         "run",
         lambda *_a, **_k: calls.append(1),
     )
-    wake_mod._kill_pid(4242)
+    wake_mod._kill_pid(4242, token="owned")
     assert calls == []
+
+
+def test_kill_pid_refuses_missing_token(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del wake_on
+    monkeypatch.setattr(wake_mod, "_pid_alive", lambda _pid: True)
+    calls: list[object] = []
+    monkeypatch.setattr(
+        wake_mod.subprocess,
+        "run",
+        lambda *_a, **_k: calls.append(1),
+    )
+    wake_mod._kill_pid(4242, token=None)
+    wake_mod._kill_pid(4242, token="")
+    assert calls == []
+
+
+def test_kill_existing_loop_clears_legacy_without_kill(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (wake_on / "wake.pid").write_text("424242\n", encoding="utf-8")
+    killed: list[int] = []
+
+    def fake(pid: int, *, token: str | None = None) -> None:
+        del token
+        killed.append(pid)
+
+    monkeypatch.setattr(wake_mod, "_kill_pid", fake)
+    wake_mod._kill_existing_loop()
+    assert killed == []
+    assert wake_mod._read_pid() is None
 
 
 def test_windows_ownership_rejects_bare_wake_marker(
@@ -802,7 +834,7 @@ def test_taskkill_oserror(wake_on: Path, monkeypatch: pytest.MonkeyPatch) -> Non
         raise OSError("taskkill gone")
 
     monkeypatch.setattr(wake_mod.subprocess, "run", boom)
-    wake_mod._kill_pid(4242)
+    wake_mod._kill_pid(4242, token="owned")
 
 
 def test_atomic_write_unlink_oserror(
@@ -841,7 +873,7 @@ def test_unix_kill_refuses_unowned(
         killed.append(pid)
 
     monkeypatch.setattr(wake_mod.os, "kill", fake_kill)
-    wake_mod._kill_pid(4242)
+    wake_mod._kill_pid(4242, token="owned")
     assert killed == []
 
 

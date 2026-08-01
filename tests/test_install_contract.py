@@ -64,6 +64,22 @@ def test_remove_stop_hooks(tmp_path: Path) -> None:
     assert cleaned["hooks"]["stop"] == []
 
 
+def test_remove_stop_hooks_prefers_marker_over_legacy_substring() -> None:
+    data = {
+        "version": 1,
+        "hooks": {
+            "stop": [
+                build_stop_entry("python3 -u /abs/stop_hook.py"),
+                {"command": "other-tool wrap stop_hook.py"},
+            ]
+        },
+    }
+    cleaned = remove_stop_hooks(data)
+    remaining = cleaned["hooks"]["stop"]
+    assert len(remaining) == 1
+    assert "other-tool" in remaining[0]["command"]
+
+
 def test_is_goal_stop_hook_variants() -> None:
     assert is_goal_stop_hook("not-a-dict") is False
     assert is_goal_stop_hook({"command": "cursor_goal stop"}) is True
@@ -202,10 +218,14 @@ def test_plugin_manifests_and_hooks_contract() -> None:
         encoding="utf-8"
     )
     assert "CURSOR_GOAL_PYTHON" in stop_cmd
+    assert "absolute path" in stop_cmd
+    assert "WARNING" in stop_cmd
     wake_cmd = (plugin / "skills" / "goal" / "scripts" / "wake_loop.cmd").read_text(
         encoding="utf-8"
     )
     assert "CURSOR_GOAL_PYTHON" in wake_cmd
+    assert "absolute path" in wake_cmd
+    assert "WARNING" in wake_cmd
 
 
 def test_sync_plugin_tree_check() -> None:

@@ -368,7 +368,7 @@ def cmd_parse_result(argv: list[str]) -> int:
         print("[goal-eval] YES signal recorded automatically.")
 
     print(f"VERDICT={verdict}")
-    print(f"REASON={reason}")
+    print(f"REASON={redact_secrets(reason, max_chars=500)}")
     return 0 if verdict == "YES" else 1
 
 

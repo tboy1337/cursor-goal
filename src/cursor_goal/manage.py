@@ -31,7 +31,12 @@ from cursor_goal.state import (
     refuse_if_data_dir_insecure,
     snapshot_goal,
 )
-from cursor_goal.validation import deny_shell_enabled, redact_command, try_split_argv
+from cursor_goal.validation import (
+    deny_shell_enabled,
+    redact_command,
+    redact_secrets,
+    try_split_argv,
+)
 from cursor_goal.wake import arm as wake_arm
 from cursor_goal.wake import disarm as wake_disarm
 from cursor_goal.wake import status_info as wake_status_info
@@ -290,7 +295,7 @@ def cmd_status(_argv: list[str]) -> int:
     else:
         print("  Wake service: not armed")
     if state.last_reason:
-        print(f"  Last evaluation: {state.last_reason}")
+        print(f"  Last evaluation: {redact_secrets(state.last_reason, max_chars=500)}")
     if state.last_eval_verdict:
         print(f"  Last verdict: {state.last_eval_verdict}")
     print(f"  Created: {state.created_at}")
@@ -444,6 +449,25 @@ def _hooks_look_configured() -> bool | None:
     return None
 
 
+def _is_absolute_interpreter_path(value: str) -> bool:
+    """Return True when *value* looks like an absolute filesystem path."""
+    text = value.strip().strip('"')
+    if not text:
+        return False
+    path = Path(text)
+    if path.is_absolute():
+        return True
+    # POSIX absolute path (Path.is_absolute is False for these on Windows).
+    if text.startswith("/") and not text.startswith("//"):
+        return True
+    # Windows drive / UNC without relying solely on Path (odd shells).
+    if len(text) >= 3 and text[1] == ":" and text[2] in "\\/":
+        return True
+    if text.startswith("\\\\") or text.startswith("//"):
+        return True
+    return False
+
+
 # pylint: disable-next=too-many-branches,too-many-statements
 def cmd_doctor(_argv: list[str]) -> int:
     """Health check for install / data dir / wake / shell. Exit 1 on hard fail."""
@@ -463,11 +487,18 @@ def cmd_doctor(_argv: list[str]) -> int:
         ddir = None
 
     if ddir is not None and data_dir_is_insecure(ddir):
-        hard_fails.append(
-            f"Data directory is insecure ({ddir}). "
-            "It must not be a symlink, must be owned by you, and must not be "
-            "group/world-writable. Run chmod 700 or set CURSOR_GOAL_DATA."
-        )
+        if os.name == "nt":
+            hard_fails.append(
+                f"Data directory is insecure ({ddir}). "
+                "It must not be a symlink, junction, or other reparse point. "
+                "Set CURSOR_GOAL_DATA to a normal private directory."
+            )
+        else:
+            hard_fails.append(
+                f"Data directory is insecure ({ddir}). "
+                "It must not be a symlink, must be owned by you, and must not be "
+                "group/world-writable. Run chmod 700 or set CURSOR_GOAL_DATA."
+            )
 
     acl_fail = acl_harden_failure_message(ddir) if ddir is not None else None
     if acl_fail is not None:
@@ -488,6 +519,21 @@ def cmd_doctor(_argv: list[str]) -> int:
         )
 
     if os.name == "nt":
+        env_py = (os.environ.get("CURSOR_GOAL_PYTHON") or "").strip()
+        if env_py:
+            if not _is_absolute_interpreter_path(env_py):
+                hard_fails.append(
+                    "CURSOR_GOAL_PYTHON must be an absolute path to Python 3.12+ "
+                    f"(got {env_py!r})"
+                )
+            else:
+                print(f"  CURSOR_GOAL_PYTHON: {env_py}")
+        else:
+            warnings.append(
+                "CURSOR_GOAL_PYTHON unset — marketplace stop_hook.cmd / wake_loop.cmd "
+                "resolve Python via PATH (prefer classic install-goal.ps1 bake, or set "
+                "CURSOR_GOAL_PYTHON to an absolute 3.12+ interpreter)"
+            )
         py = shutil.which("py") or shutil.which("python") or shutil.which("python3")
         if not py:
             warnings.append(

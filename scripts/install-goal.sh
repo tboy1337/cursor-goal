@@ -152,6 +152,18 @@ PY
         "${INSTALL_DIR}/goal-eval.sh" \
         "${INSTALL_DIR}/goal-parse.sh"
 
+  # Backup existing agents before overwrite (same pattern as skill backup).
+  local TS
+  TS="$(date -u +%Y%m%dT%H%M%SZ)"
+  if [ -f "${AGENTS_DIR}/goalKeeper.md" ]; then
+    cp "${AGENTS_DIR}/goalKeeper.md" "${AGENTS_DIR}/goalKeeper.md.bak.${TS}"
+    log_info "Backed up existing goalKeeper.md"
+  fi
+  if [ -f "${AGENTS_DIR}/goal-evaluator.md" ]; then
+    cp "${AGENTS_DIR}/goal-evaluator.md" "${AGENTS_DIR}/goal-evaluator.md.bak.${TS}"
+    log_info "Backed up existing goal-evaluator.md"
+  fi
+
   cp "$SOURCE_AGENT" "${AGENTS_DIR}/goalKeeper.md"
   log_info "Installed: ${AGENTS_DIR}/goalKeeper.md"
   cp "$SOURCE_EVALUATOR" "${AGENTS_DIR}/goal-evaluator.md"

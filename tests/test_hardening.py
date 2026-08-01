@@ -935,3 +935,285 @@ def test_eval_validate_refuses_acl_harden_failure(
     code, _out, err = run_cli("eval", "validate")
     assert code == 1
     assert "ACL harden" in err
+
+
+def test_windows_reparse_point_is_insecure(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import cursor_goal.state as state_mod
+
+    monkeypatch.setattr(state_mod.os, "name", "nt")
+    monkeypatch.setattr(state_mod, "_windows_path_is_reparse_point", lambda _p: True)
+    assert state_mod.data_dir_is_insecure(goal_home) is True
+    monkeypatch.setattr(state_mod, "data_dir_is_insecure", lambda path=None: True)
+    monkeypatch.setattr(state_mod, "data_dir", lambda *, check_writable=True: goal_home)
+    msg = state_mod.refuse_if_data_dir_insecure()
+    assert msg is not None
+    assert "reparse" in msg.lower() or "junction" in msg.lower()
+
+
+def test_windows_reparse_helper_symlink(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import cursor_goal.state as state_mod
+
+    del goal_home
+    del monkeypatch
+
+    class Fake:
+        def is_symlink(self) -> bool:
+            return True
+
+    assert state_mod._windows_path_is_reparse_point(Fake()) is True  # type: ignore[arg-type]
+
+
+def test_stop_and_wake_refuse_acl_harden(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import stop as stop_mod
+    from cursor_goal import wake as wake_mod
+    from cursor_goal.stop import handle_stop
+
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+    run_cli("manage", "create", "acl stop")
+    monkeypatch.setattr(
+        stop_mod,
+        "refuse_if_acl_harden_failed",
+        lambda: "[goal] Error: Windows ACL harden failed",
+    )
+    assert handle_stop({"status": "completed", "loop_count": 0}) == {}
+
+    monkeypatch.setattr(
+        wake_mod,
+        "refuse_if_acl_harden_failed",
+        lambda: "[goal] Error: Windows ACL harden failed",
+    )
+    with pytest.raises(OSError, match="ACL"):
+        wake_mod.arm(interval=5)
+    assert wake_mod.tick() == 1
+
+
+def test_field_limits_on_set_and_load(goal_home: Path) -> None:
+    import cursor_goal.state as state_mod
+    from cursor_goal.state import MAX_FIELD_CHARS, GoalState, load_goal, save_goal
+
+    huge = "x" * (MAX_FIELD_CHARS + 50)
+    state = GoalState(condition="c", created_at="t", status="pursuing", active=True)
+    with pytest.raises(ValueError, match="last_reason"):
+        _apply_field(state, "last_reason", huge)
+    with pytest.raises(ValueError, match="created_at"):
+        _apply_field(state, "created_at", huge)
+
+    state.last_reason = huge  # bypass setter for corrupt-on-disk simulation
+    state.last_validation_output = huge
+    state.last_eval_verdict = huge
+    state.created_at = huge
+    save_goal(state)
+    loaded = load_goal()
+    assert loaded is not None
+    assert len(loaded.last_reason) == MAX_FIELD_CHARS
+    assert len(loaded.last_validation_output) == MAX_FIELD_CHARS
+    assert len(loaded.last_eval_verdict) == MAX_FIELD_CHARS
+    assert len(loaded.created_at) == MAX_FIELD_CHARS
+    assert state_mod._clamp_field_chars("n", "ok") == "ok"
+
+
+def test_redact_jwt_and_basic_auth() -> None:
+    from cursor_goal.validation import redact_secrets
+
+    jwt = (
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+        "eyJzdWIiOiIxMjM0NTY3ODkwIn0."
+        "signaturepartgoeshere01"
+    )
+    out = redact_secrets(f"hdr {jwt} Authorization: Basic dXNlcjpwYXNz")
+    assert "<redacted-jwt>" in out
+    assert "dXNlcjpwYXNz" not in out
+    assert "Basic <redacted>" in out
+
+
+def test_manage_status_redacts_reason(goal_home: Path) -> None:
+    run_cli("manage", "create", "secret status")
+    from cursor_goal.state import update_goal_fields
+
+    update_goal_fields(last_reason="password=supersecret value")
+    code, out, _err = run_cli("manage", "status")
+    assert code == 0
+    assert "supersecret" not in out
+    assert "<redacted>" in out
+
+
+def test_is_absolute_interpreter_path() -> None:
+    from cursor_goal.manage import _is_absolute_interpreter_path
+
+    assert _is_absolute_interpreter_path(r"C:\Python\python.exe") is True
+    assert _is_absolute_interpreter_path("/usr/bin/python3") is True
+    assert _is_absolute_interpreter_path(r"\\server\share\python.exe") is True
+    assert _is_absolute_interpreter_path("//server/share/python.exe") is True
+    assert _is_absolute_interpreter_path("python") is False
+    assert _is_absolute_interpreter_path("") is False
+    assert _is_absolute_interpreter_path('  "C:\\Python\\python.exe"  ') is True
+
+
+def test_doctor_cursor_goal_python_absolute(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("cursor_goal.manage.os.name", "nt")
+    monkeypatch.setenv("CURSOR_GOAL_PYTHON", r"C:\Python\python.exe")
+    code, out, _err = run_cli("manage", "doctor")
+    assert code == 0
+    assert "CURSOR_GOAL_PYTHON" in out
+
+
+def test_doctor_cursor_goal_python_relative_fails(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("cursor_goal.manage.os.name", "nt")
+    monkeypatch.setenv("CURSOR_GOAL_PYTHON", "python")
+    code, _out, err = run_cli("manage", "doctor")
+    assert code == 1
+    assert "absolute" in err.lower() or "absolute" in _out.lower()
+
+
+def test_doctor_insecure_windows_message(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import cursor_goal.manage as manage_mod
+
+    monkeypatch.setattr(manage_mod.os, "name", "nt")
+    monkeypatch.setattr(manage_mod, "data_dir_is_insecure", lambda _p=None: True)
+    code, out, err = run_cli("manage", "doctor")
+    assert code == 1
+    blob = out + err
+    assert "reparse" in blob.lower() or "junction" in blob.lower()
+
+
+def test_windows_reparse_helper_edge_cases(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import cursor_goal.state as state_mod
+
+    del goal_home
+
+    class BoomSymlink:
+        def is_symlink(self) -> bool:
+            raise OSError("nope")
+
+    class NoSymlink:
+        def is_symlink(self) -> bool:
+            return False
+
+    assert state_mod._windows_path_is_reparse_point(BoomSymlink()) is False  # type: ignore[arg-type]
+
+    monkeypatch.setattr(state_mod.ctypes, "windll", None, raising=False)
+
+    # When windll missing, getattr returns None → False
+    class FakeCtypes:
+        windll = None
+
+    monkeypatch.setattr(state_mod, "ctypes", FakeCtypes())
+    assert state_mod._windows_path_is_reparse_point(NoSymlink()) is False  # type: ignore[arg-type]
+
+    class BoomAttrs:
+        def GetFileAttributesW(self, _path: str) -> int:
+            raise OSError("attrs")
+
+    class FakeWindll:
+        kernel32 = BoomAttrs()
+
+    class FakeCtypes2:
+        windll = FakeWindll()
+        c_uint32 = type("c_uint32", (), {})
+
+    monkeypatch.setattr(state_mod, "ctypes", FakeCtypes2())
+    assert state_mod._windows_path_is_reparse_point(NoSymlink()) is False  # type: ignore[arg-type]
+
+    class InvalidAttrs:
+        def GetFileAttributesW(self, _path: str) -> int:
+            return state_mod._INVALID_FILE_ATTRIBUTES
+
+        restype = None
+
+    class FakeWindll2:
+        kernel32 = type(
+            "K",
+            (),
+            {
+                "GetFileAttributesW": staticmethod(
+                    lambda _p: state_mod._INVALID_FILE_ATTRIBUTES
+                )
+            },
+        )()
+
+    class FakeCtypes3:
+        windll = FakeWindll2()
+
+        class c_uint32:
+            pass
+
+    # Rebuild with assignable restype
+    class AttrFn:
+        restype = None
+
+        def __call__(self, _path: str) -> int:
+            return state_mod._INVALID_FILE_ATTRIBUTES
+
+    class K32:
+        GetFileAttributesW = AttrFn()
+
+    class WDLL:
+        kernel32 = K32()
+
+    class CT:
+        windll = WDLL()
+        c_uint32 = int
+
+    monkeypatch.setattr(state_mod, "ctypes", CT())
+    assert state_mod._windows_path_is_reparse_point(NoSymlink()) is False  # type: ignore[arg-type]
+
+    class ReparseFn:
+        restype = None
+
+        def __call__(self, _path: str) -> int:
+            return state_mod._FILE_ATTRIBUTE_REPARSE_POINT
+
+    class K32b:
+        GetFileAttributesW = ReparseFn()
+
+    class WDLLb:
+        kernel32 = K32b()
+
+    class CTb:
+        windll = WDLLb()
+        c_uint32 = int
+
+    monkeypatch.setattr(state_mod, "ctypes", CTb())
+    assert state_mod._windows_path_is_reparse_point(NoSymlink()) is True  # type: ignore[arg-type]
+
+
+def test_stop_skips_last_response_on_acl(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import stop as stop_mod
+
+    monkeypatch.setattr(
+        stop_mod,
+        "refuse_if_acl_harden_failed",
+        lambda: "[goal] Error: Windows ACL harden failed",
+    )
+    stop_mod._write_last_stop_response({"followup_message": "hi"})
+    assert not (goal_home / "last-stop-response.json").is_file()
+
+
+def test_wake_run_loop_refuses_acl(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import wake as wake_mod
+
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+    monkeypatch.setattr(
+        wake_mod,
+        "refuse_if_acl_harden_failed",
+        lambda: "[goal] Error: Windows ACL harden failed",
+    )
+    assert wake_mod.run_loop(interval=5) == 1

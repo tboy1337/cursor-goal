@@ -30,6 +30,7 @@ from cursor_goal.state import (
     data_dir,
     goal_lock,
     mutate_goal,
+    refuse_if_acl_harden_failed,
     refuse_if_data_dir_insecure,
     snapshot_goal,
 )
@@ -306,8 +307,19 @@ def _kill_pid(pid: int, *, token: str | None = None) -> None:
     if not _pid_alive(pid):
         return
 
+    # Legacy plain-int wake.pid has no ownership token — refuse kill to avoid
+    # PID-reuse taskkill/SIGTERM against an unrelated process.
+    if not token:
+        logger.warning(
+            "Refusing to kill pid=%s: missing wake ownership token "
+            "(legacy wake.pid or unverified). Clear wake.pid manually or "
+            "re-arm wake after disarm.",
+            pid,
+        )
+        return
+
     record = _read_pid_record()
-    if token is not None and record is not None:
+    if record is not None:
         stored = str(record.get("token") or "")
         if stored and stored != token:
             logger.warning("Refusing to kill pid=%s: wake token mismatch", pid)
@@ -361,7 +373,15 @@ def _kill_existing_loop() -> None:
     token = str(record.get("token") or "")
     if pid == os.getpid():
         return
-    _kill_pid(pid, token=token or None)
+    if not token:
+        logger.warning(
+            "Leaving orphan wake pid=%s (no ownership token); clearing wake.pid "
+            "without signaling. Re-arm after confirming no leftover loop.",
+            pid,
+        )
+        _clear_pid()
+        return
+    _kill_pid(pid, token=token)
     _clear_pid()
 
 
@@ -454,6 +474,9 @@ def arm(*, interval: int | None = None) -> dict[str, Any]:
     insecure = refuse_if_data_dir_insecure()
     if insecure is not None:
         raise OSError(insecure)
+    acl_fail = refuse_if_acl_harden_failed()
+    if acl_fail is not None:
+        raise OSError(acl_fail)
     if interval is not None:
         seconds = _clamp_interval(interval)
     else:
@@ -504,6 +527,10 @@ def tick() -> int:
     insecure = refuse_if_data_dir_insecure()
     if insecure is not None:
         logger.warning("Wake tick refused: %s", insecure)
+        return 1
+    acl_fail = refuse_if_acl_harden_failed()
+    if acl_fail is not None:
+        logger.warning("Wake tick refused: %s", acl_fail)
         return 1
     config = _read_wake_config()
     if config is None:
@@ -600,6 +627,10 @@ def run_loop(*, interval: int | None = None) -> int:
     insecure = refuse_if_data_dir_insecure()
     if insecure is not None:
         print(insecure, file=sys.stderr)
+        return 1
+    acl_fail = refuse_if_acl_harden_failed()
+    if acl_fail is not None:
+        print(acl_fail, file=sys.stderr)
         return 1
 
     _kill_existing_loop()
