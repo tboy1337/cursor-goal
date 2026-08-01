@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from cursor_goal.logging_config import get_logger
+from cursor_goal.paths import wake_loop_invocation
 from cursor_goal.state import (
     GoalState,
     atomic_write_text,
@@ -743,13 +744,11 @@ def cmd_wake(
             print(
                 "  Start loop in background with notify_on_output, then continue work."
             )
-            print(
-                "  Unix: python3 -u ~/.cursor/skills/goal/scripts/run_goal.py wake loop"
-            )
-            print(
-                '  Windows: py -3 -u "$env:USERPROFILE\\.cursor\\skills\\goal\\'
-                'scripts\\run_goal.py" wake loop'
-            )
+            try:
+                print(f"  {wake_loop_invocation()}")
+            except ValueError as exc:
+                logger.warning("Could not resolve wake loop path: %s", exc)
+                print("  (resolve with: manage harness-cmd)")
             return 0
 
         if command == "tick":

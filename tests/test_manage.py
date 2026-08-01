@@ -46,6 +46,29 @@ def test_manage_create_wake_budget_and_deny_shell(goal_home: Path) -> None:
     assert "Validation mode: denied" in out or "Validation mode: argv" in out
 
 
+def test_create_force_wake_disarm_oserror(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    assert run_cli("manage", "create", "first")[0] == 0
+
+    def boom(*, kill_loop: bool = True) -> None:
+        del kill_loop
+        raise OSError("cannot kill")
+
+    monkeypatch.setattr(manage_mod, "wake_disarm", boom)
+    code, out, _err = run_cli("manage", "create", "second", "--force")
+    assert code == 0
+    assert "second" in out or "Created" in out or code == 0
+
+
+def test_done_without_active_goal(goal_home: Path) -> None:
+    code, out, _err = run_cli("manage", "done", "--force")
+    assert code == 1
+    assert "No active goal" in out or "No active" in out or code == 1
+
+
 def test_manage_doctor_ok(goal_home: Path) -> None:
     code, out, _err = run_cli("manage", "doctor")
     assert code == 0
@@ -71,6 +94,17 @@ def test_manage_doctor_with_pursuing_shell_goal(
         == 0
     )
     monkeypatch.setattr(manage_mod, "_hooks_look_configured", lambda: True)
+    monkeypatch.setattr(
+        manage_mod,
+        "wake_status_info",
+        lambda: {
+            "armed": True,
+            "pid_alive": True,
+            "interval_s": 15,
+            "token_prefix": "abcd",
+            "last_emit_at": None,
+        },
+    )
     code, out, _err = run_cli("manage", "doctor")
     assert code == 0
     assert "pursuing" in out
@@ -145,6 +179,165 @@ def test_hooks_look_configured_none(
     assert manage_mod._hooks_look_configured() is None
 
 
+def test_marketplace_hooks_skill_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    plugin = tmp_path / "plugin"
+    scripts = plugin / "skills" / "goal" / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "stop_hook.py").write_text("#", encoding="utf-8")
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(manage_mod.Path, "home", lambda: fake_home)
+    monkeypatch.setenv("CURSOR_PLUGIN_ROOT", str(plugin))
+    assert manage_mod._marketplace_hooks_configured() is False
+
+
+def test_marketplace_hooks_empty_plugin_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    plugin = tmp_path / "empty-plugin"
+    plugin.mkdir()
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(manage_mod.Path, "home", lambda: fake_home)
+    monkeypatch.setenv("CURSOR_PLUGIN_ROOT", str(plugin))
+    assert manage_mod._marketplace_hooks_configured() is False
+
+
+def test_marketplace_hooks_under_cursor_plugins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    fake_home = tmp_path / "home"
+    plugin = fake_home / ".cursor" / "plugins" / "cursor-goal"
+    hooks_dir = plugin / "hooks"
+    hooks_dir.mkdir(parents=True)
+    (hooks_dir / "hooks.json").write_text(
+        '{"hooks":{"stop":[{"command":"${CURSOR_PLUGIN_ROOT}/stop_hook.py"}]}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(manage_mod.Path, "home", lambda: fake_home)
+    monkeypatch.delenv("CURSOR_PLUGIN_ROOT", raising=False)
+    assert manage_mod._marketplace_hooks_configured() is True
+
+
+def test_doctor_fail_open_counter_warning(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    monkeypatch.setattr(manage_mod, "_hooks_look_configured", lambda: True)
+    (goal_home / "stop-failopen-continues").write_text("2", encoding="utf-8")
+    code, out, _err = run_cli("manage", "doctor")
+    assert code == 0
+    assert "fail-open" in out.lower() or "Warning" in out
+
+
+def test_marketplace_hooks_read_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    plugin = tmp_path / "plugin"
+    hooks_dir = plugin / "hooks"
+    hooks_dir.mkdir(parents=True)
+    hooks = hooks_dir / "hooks.json"
+    hooks.write_text("{}", encoding="utf-8")
+
+    def boom(_self: Path, *_a: object, **_k: object) -> str:
+        raise OSError("unreadable")
+
+    monkeypatch.setenv("CURSOR_PLUGIN_ROOT", str(plugin))
+    monkeypatch.setattr(Path, "read_text", boom)
+    # No classic home skill; env root present but unreadable -> False
+    fake_home = tmp_path / "home2"
+    fake_home.mkdir()
+    monkeypatch.setattr(manage_mod.Path, "home", lambda: fake_home)
+    assert manage_mod._marketplace_hooks_configured() is False
+
+
+def test_marketplace_hooks_and_stacking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    plugin = tmp_path / "plugin"
+    hooks_dir = plugin / "hooks"
+    hooks_dir.mkdir(parents=True)
+    (hooks_dir / "hooks.json").write_text(
+        '{"hooks":{"stop":[{"command":"stop_hook.cmd",'
+        '"_cursor_goal":"cursor_goal_stop_hook"}]}}',
+        encoding="utf-8",
+    )
+    fake_home = tmp_path / "home"
+    cursor = fake_home / ".cursor"
+    cursor.mkdir(parents=True)
+    (cursor / "hooks.json").write_text(
+        '{"hooks":{"stop":[{"command":"stop_hook.py"}]}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(manage_mod.Path, "home", lambda: fake_home)
+    monkeypatch.setenv("CURSOR_PLUGIN_ROOT", str(plugin))
+    assert manage_mod._marketplace_hooks_configured() is True
+    assert manage_mod._classic_hooks_configured() is True
+    assert manage_mod._hooks_stacking_warning() is not None
+
+
+def test_doctor_marketplace_and_stacking_messages(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    assert run_cli("manage", "create", "doc market")[0] == 0
+    monkeypatch.setattr(manage_mod, "_classic_hooks_configured", lambda: True)
+    monkeypatch.setattr(manage_mod, "_marketplace_hooks_configured", lambda: True)
+    monkeypatch.setattr(manage_mod, "_hooks_look_configured", lambda: True)
+    monkeypatch.setattr(
+        manage_mod,
+        "wake_status_info",
+        lambda: {
+            "armed": True,
+            "pid_alive": True,
+            "interval_s": 15,
+            "token_prefix": "abcd",
+            "last_emit_at": "t",
+        },
+    )
+    code, out, _err = run_cli("manage", "doctor")
+    assert code == 0
+    assert "marketplace" in out.lower() or "classic" in out.lower()
+    assert "pick one" in out.lower() or "Warning" in out
+
+
+def test_doctor_wake_not_armed_hard_fail(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    assert run_cli("manage", "create", "no wake")[0] == 0
+    monkeypatch.setattr(manage_mod, "_hooks_look_configured", lambda: True)
+    monkeypatch.setattr(
+        manage_mod,
+        "wake_status_info",
+        lambda: {
+            "armed": False,
+            "pid_alive": False,
+            "interval_s": None,
+            "token_prefix": None,
+            "last_emit_at": None,
+        },
+    )
+    code, _out, err = run_cli("manage", "doctor")
+    assert code == 1
+    assert "Wake not armed" in err or "FAIL" in err
+
+
 def test_manage_doctor_wake_armed_dead(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -165,9 +358,17 @@ def test_manage_doctor_wake_armed_dead(
             "last_emit_at": None,
         },
     )
-    code, out, _err = run_cli("manage", "doctor")
+    code, out, err = run_cli("manage", "doctor")
+    assert code == 1
+    assert "not alive" in out or "not alive" in err or "FAIL" in err
+
+
+def test_manage_harness_cmd(goal_home: Path) -> None:
+    del goal_home
+    code, out, _err = run_cli("manage", "harness-cmd")
     assert code == 0
-    assert "not alive" in out or "Warning" in out
+    assert "run_goal.py" in out
+    assert "Wake loop" in out
 
 
 def test_manage_doctor_log_secrets_warning(

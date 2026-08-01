@@ -177,12 +177,19 @@ def write_plugin(root: Path) -> Path:
         f"Version: **{version}** (AGPL-3.0-only).\n\n"
         "Marketplace stop hooks register both `stop_hook.cmd` (Windows) and "
         '`python3 -u "…/stop_hook.py"` (Unix). On each OS one entry typically '
-        "fails (cmd missing on Unix / python3 often missing on Windows); a "
-        "singleflight lock ensures only one emits `followup_message`. Also "
-        "ships a wake watchdog "
+        "fails (cmd missing on Unix / python3 often missing on Windows). A "
+        "singleflight lock ensures only one hook mutates turn state and writes "
+        "stdout; the loser exits silently (no `{}`, no "
+        "`last-stop-response.json` overwrite). Also ships a wake watchdog "
         "(`wake loop` / `AGENT_GOAL_WAKE`) for continuation when Cursor drops "
         "stop-hook stdout. In-turn evaluation remains primary; the stop hook "
-        "is a safety net.\n",
+        "is a safety net.\n\n"
+        "Set `CURSOR_GOAL_PYTHON` to an **absolute** Python 3.12+ path on "
+        "Windows Teams installs (PATH fallback is fragile). Resolve the "
+        "harness with `manage harness-cmd` — skill/agent commands work from "
+        "`${CURSOR_PLUGIN_ROOT}/skills/goal` without a classic install.\n\n"
+        "Do **not** stack classic `install-goal.*` hooks with marketplace "
+        "hooks; pick one path.\n",
         encoding="utf-8",
         newline="\n",
     )

@@ -134,6 +134,7 @@ def is_goal_hook(item):
     cmd = str(item.get("command", ""))
     return (
         item.get("_cursor_goal") == "cursor_goal_stop_hook"
+        or "goal-stop.sh" in cmd
         or "stop_hook.py" in cmd
         or "stop_hook.cmd" in cmd
         or "cursor_goal stop" in cmd
@@ -162,6 +163,35 @@ print("hooks cleaned")
         }
         else {
             Write-Host "[uninstall-goal] Removed stop hook entries from hooks.json"
+        }
+    }
+
+    # Best-effort wake disarm before deleting the skill tree.
+    $runGoal = Join-Path $installDir "scripts\run_goal.py"
+    if (Test-Path $runGoal) {
+        $py = $null
+        $pyArgs = @()
+        if (Get-Command py -ErrorAction SilentlyContinue) {
+            $py = "py"
+            $pyArgs = @("-3")
+        }
+        elseif (Get-Command python -ErrorAction SilentlyContinue) {
+            $py = "python"
+            $pyArgs = @()
+        }
+        if ($py) {
+            try {
+                $null = & $py @($pyArgs + @("-u", $runGoal, "wake", "disarm")) 2>&1
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Host "[uninstall-goal] Disarmed wake watchdog"
+                }
+                else {
+                    Write-Host "[uninstall-goal] Warning: wake disarm failed (continuing uninstall)"
+                }
+            }
+            catch {
+                Write-Host "[uninstall-goal] Warning: wake disarm failed (continuing uninstall)"
+            }
         }
     }
 

@@ -42,7 +42,8 @@ Parent-side spawn fixes (windowsHide, wait-for-close) apply to **Cursor’s** pr
 
 - Windows installer writes `stop_hook.cmd` with absolute Python and `PYTHONUNBUFFERED=1`
 - `emit()` flushes stdout, best-effort `fsync`, then drains (`CURSOR_GOAL_STOP_DRAIN_MS`; default ~250ms on Windows, ~100ms elsewhere)
-- Always writes `~/.cursor-goal/data/last-stop-response.json` (`ts`, `pid`, `payload`) for diagnosis
+- Always writes `~/.cursor-goal/data/last-stop-response.json` (`ts`, `pid`, `payload`) for diagnosis when this process owns singleflight
+- Marketplace dual hooks: the lock **loser exits silently** (no stdout `{}`, no diagnostic overwrite) so Cursor cannot clobber a real followup
 
 ### Wake watchdog (tertiary, race-immune)
 

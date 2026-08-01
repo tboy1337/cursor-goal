@@ -39,6 +39,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-goal.ps1
 | `~/.cursor/skills/goal/scripts/stop_hook.py` | Cursor stop hook |
 | `~/.cursor/skills/goal/scripts/stop_hook.cmd` | Windows stop launcher (classic install: absolute Python baked by `install-goal.ps1`) |
 | `~/.cursor/skills/goal/scripts/wake_loop.cmd` | Windows wake launcher (classic install: absolute Python baked, same as stop) |
+| `~/.cursor/skills/goal/scripts/wake_loop.sh` | Unix/macOS wake launcher helper (optional; agents may also call `run_goal.py wake loop` directly) |
 | `~/.cursor/skills/goal/VERSION` | Installed package version stamp |
 | `~/.cursor/agents/goalKeeper.md` | Worker agent (`model: inherit`) |
 | `~/.cursor/agents/goal-evaluator.md` | Readonly evaluator (`model: fast` default) |
@@ -56,7 +57,7 @@ On upgrade, a previous skill tree is copied to `~/.cursor/skills/goal.bak.<UTC>`
 ### Install from a tagged release
 
 ```bash
-git clone --branch v2.4.0 https://github.com/tboy1337/cursor-goal.git
+git clone --branch v2.5.0 https://github.com/tboy1337/cursor-goal.git
 cd cursor-goal
 ./scripts/install-goal.sh   # or install-goal.ps1 on Windows
 ```
@@ -98,7 +99,9 @@ On Cursor **Teams** / **Enterprise**, admins can import this repository as a Tea
 2. Dashboard → Settings → Plugins → Import Marketplace → paste the repo URL.
 3. Cursor reads [`.cursor-plugin/marketplace.json`](../.cursor-plugin/marketplace.json) and the plugin under `plugins/cursor-goal/`.
 
-The plugin ships skill, agents, vendored harness, and marketplace stop hooks that register both `stop_hook.cmd` (Windows via `cmd /c`) and `python3 -u "…/stop_hook.py"` (Unix). On each OS one entry typically fails (expected); a singleflight lock ensures only one emit produces `followup_message`. Prefer in-turn evaluation; the stop hook remains a safety net. Classic `install-goal.ps1` still writes a single absolute `stop_hook.cmd` and `wake_loop.cmd` (best path on native Windows).
+The plugin ships skill, agents, vendored harness, and marketplace stop hooks that register both `stop_hook.cmd` (Windows via `cmd /c`) and `python3 -u "…/stop_hook.py"` (Unix). On each OS one entry typically fails (expected). A singleflight lock ensures only one hook mutates turn state and writes stdout; the loser exits silently (no `{}`, no `last-stop-response.json` overwrite). Prefer in-turn evaluation; the stop hook remains a safety net. Classic `install-goal.ps1` still writes a single absolute `stop_hook.cmd` and `wake_loop.cmd` (best path on native Windows).
+
+Resolve harness commands with `manage harness-cmd` (works from `${CURSOR_PLUGIN_ROOT}/skills/goal` without a classic install). Do **not** stack classic installer hooks with marketplace hooks — pick one path.
 
 ### Three `stop_hook.cmd` roles (do not conflate)
 

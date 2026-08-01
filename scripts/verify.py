@@ -218,6 +218,30 @@ def build_steps(
                         ],
                     )
                 )
+                smoke = root / "scripts" / "install-smoke.ps1"
+                if smoke.is_file():
+                    steps.append(
+                        (
+                            "install-smoke",
+                            [
+                                powershell,
+                                "-NoProfile",
+                                "-ExecutionPolicy",
+                                "Bypass",
+                                "-File",
+                                str(smoke),
+                            ],
+                        )
+                    )
+        else:
+            smoke_sh = root / "scripts" / "install-smoke.sh"
+            if smoke_sh.is_file():
+                steps.append(
+                    (
+                        "install-smoke",
+                        ["bash", str(smoke_sh)],
+                    )
+                )
 
     return steps
 

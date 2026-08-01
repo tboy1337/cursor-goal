@@ -6,13 +6,8 @@ import ctypes
 import hashlib
 import json
 import os
-import re
 import secrets
-import shutil
 import stat
-import subprocess  # nosec B404 — Windows ACL via icacls only
-import sys
-import time
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
@@ -20,9 +15,27 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+from cursor_goal.fs_lock import GoalLockTimeoutError
+from cursor_goal.fs_lock import lock_acquire as _fs_lock_acquire
+from cursor_goal.fs_lock import lock_release as _fs_lock_release
 from cursor_goal.logging_config import get_logger
+from cursor_goal.win_acl import ACL_HARDEN_FAILURES as _ACL_HARDEN_FAILURES
+from cursor_goal.win_acl import HARDENED_PATHS as _HARDENED_PATHS
+from cursor_goal.win_acl import failure_reason as _acl_failure_reason
+from cursor_goal.win_acl import harden_windows_acl as _harden_windows_acl
 
 logger = get_logger("cursor_goal.state")
+
+# Explicit re-exports for importers / type checkers.
+__all__ = (
+    "CorruptGoalError",
+    "GoalLockTimeoutError",
+    "GoalState",
+    "LOCK_TIMEOUT_SEC",
+    "MAX_FIELD_CHARS",
+    "MAX_TURN_BUDGET",
+    "SCHEMA_VERSION",
+)
 
 EVAL_FLAG_NAME = "goal-eval-done"
 GOAL_FILE_NAME = "goal.json"
@@ -33,11 +46,6 @@ MAX_TURN_BUDGET = 500
 MAX_FIELD_CHARS = 4000
 LOCK_TIMEOUT_SEC = 10.0
 WAKE_BUDGET_MULTIPLIER = 10
-_HARDENED_PATHS: set[str] = set()
-# Paths where Windows ACL harden failed in a way that should fail doctor.
-_ACL_HARDEN_FAILURES: dict[str, str] = {}
-# Windows DOMAIN\user or local user for icacls — reject metacharacters.
-_WINDOWS_USERNAME_RE = re.compile(r"^[A-Za-z0-9._$\\-]+$")
 ALLOWED_STATUSES = frozenset(
     {
         "pursuing",
@@ -70,10 +78,6 @@ LAST_STOP_RESPONSE_NAME = "last-stop-response.json"
 
 class CorruptGoalError(ValueError):
     """Raised when goal.json exists but cannot be loaded as a valid GoalState."""
-
-
-class GoalLockTimeoutError(OSError):
-    """Raised when the exclusive goal.lock cannot be acquired in time."""
 
 
 def data_dir(*, check_writable: bool = True) -> Path:
@@ -185,7 +189,7 @@ def acl_harden_failure_message(path: Path | None = None) -> str | None:
     if os.name != "nt":
         return None
     target = path if path is not None else data_dir(check_writable=False)
-    reason = _ACL_HARDEN_FAILURES.get(str(target))
+    reason = _acl_failure_reason(target)
     if not reason:
         return None
     return (
@@ -341,174 +345,12 @@ def _chmod_dir_private(path: Path) -> None:
         logger.debug("Could not chmod data dir %s: %s", path, exc)
 
 
-def _windows_username() -> str | None:
-    """Best-effort current Windows username for icacls grants.
-
-    Rejects values with characters that could alter icacls grant syntax.
-    """
-    candidates: list[str] = []
-    for key in ("USERNAME", "USER"):
-        value = os.environ.get(key, "").strip()
-        if value:
-            candidates.append(value)
-    try:
-        login = os.getlogin()
-        if login:
-            candidates.append(login.strip())
-    except OSError:
-        pass
-    for user in candidates:
-        if _WINDOWS_USERNAME_RE.fullmatch(user):
-            return user
-        logger.warning(
-            "Ignoring unsafe Windows username for ACL harden: %r",
-            user[:64],
-        )
-    return None
-
-
-def _acl_harden_disabled() -> bool:
-    """Return True when ACL harden is skipped (tests / explicit opt-out)."""
-    raw = os.environ.get("CURSOR_GOAL_SKIP_ACL", "").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
-
-
-def _record_acl_failure(path: Path, reason: str) -> None:
-    key = str(path)
-    _ACL_HARDEN_FAILURES[key] = reason
-    logger.error("Windows ACL harden failure for %s: %s", path, reason)
-
-
-def _harden_windows_acl(path: Path) -> None:
-    """Best-effort private ACL via icacls (no hard deps).
-
-    Tries ``/inheritance:r`` then grants the current user full control. If the
-    grant fails after inheritance was stripped, records a doctor hard-fail and
-    logs loudly. Skip with ``CURSOR_GOAL_SKIP_ACL=1``.
-    """
-    if os.name != "nt" or _acl_harden_disabled():
-        return
-    key = str(path)
-    if key in _HARDENED_PATHS:
-        return
-    user = _windows_username()
-    if not user:
-        _record_acl_failure(path, "could not determine a safe Windows username")
-        return
-    icacls = shutil.which("icacls")
-    if not icacls:
-        _record_acl_failure(path, "icacls not found on PATH")
-        return
-    grant = f"{user}:(OI)(CI)F" if path.is_dir() else f"{user}:F"
-    inheritance_stripped = False
-    try:
-        strip = subprocess.run(  # nosec B603
-            [icacls, str(path), "/inheritance:r"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
-        if strip.returncode == 0:
-            inheritance_stripped = True
-        else:
-            err = (strip.stderr or strip.stdout or "").strip()
-            logger.warning(
-                "Windows ACL inheritance strip failed for %s "
-                "(continuing with grant): %s",
-                path,
-                err[:200] or f"exit={strip.returncode}",
-            )
-        completed = subprocess.run(  # nosec B603
-            [icacls, str(path), "/grant:r", grant],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        if inheritance_stripped:
-            _record_acl_failure(
-                path,
-                f"inheritance stripped but grant raised: {exc}",
-            )
-        else:
-            _record_acl_failure(path, f"icacls failed: {exc}")
-        return
-    if completed.returncode != 0:
-        err = (completed.stderr or completed.stdout or "").strip()
-        detail = err[:200] or f"exit={completed.returncode}"
-        if inheritance_stripped:
-            _record_acl_failure(
-                path,
-                f"inheritance stripped but grant failed ({detail})",
-            )
-        else:
-            _record_acl_failure(path, f"grant failed ({detail})")
-        return
-    _ACL_HARDEN_FAILURES.pop(key, None)
-    _HARDENED_PATHS.add(key)
-    logger.debug(
-        "Windows ACL hardened path=%s user=%s inheritance_stripped=%s",
-        path,
-        user,
-        inheritance_stripped,
-    )
-
-
-def _lock_timeout_message() -> str:
-    return (
-        "Could not acquire goal.lock within ~10s; another process may "
-        "be holding it. Retry, or check for a stuck cursor-goal process."
-    )
-
-
 def _lock_acquire(handle: Any) -> None:
-    # Platform-gated imports: msvcrt/fcntl are OS-specific and must not be
-    # imported at module import time on the wrong platform (ImportError).
-    # Documented exception to the no-inline-imports workspace rule.
-    if sys.platform == "win32":
-        import msvcrt  # isort: skip  # pylint: disable=import-outside-toplevel
-
-        # Ensure the lock region exists without reading byte 0 (a concurrent
-        # holder of msvcrt.locking makes read() raise PermissionError).
-        handle.seek(0, os.SEEK_END)
-        if handle.tell() == 0:
-            handle.write(b"\0")
-            handle.flush()
-        handle.seek(0)
-        try:
-            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-        except OSError as exc:
-            raise GoalLockTimeoutError(_lock_timeout_message()) from exc
-    else:
-        import fcntl  # isort: skip  # pylint: disable=import-outside-toplevel
-
-        deadline = time.monotonic() + LOCK_TIMEOUT_SEC
-        while True:
-            try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                return
-            except BlockingIOError as exc:
-                if time.monotonic() >= deadline:
-                    raise GoalLockTimeoutError(_lock_timeout_message()) from exc
-                time.sleep(0.05)
+    _fs_lock_acquire(handle, LOCK_TIMEOUT_SEC)
 
 
 def _lock_release(handle: Any) -> None:
-    # See _lock_acquire: platform-gated inline import is intentional.
-    if sys.platform == "win32":
-        import msvcrt  # isort: skip  # pylint: disable=import-outside-toplevel
-
-        try:
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-        except OSError:
-            pass
-    else:
-        import fcntl  # isort: skip  # pylint: disable=import-outside-toplevel
-
-        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    _fs_lock_release(handle)
 
 
 @contextmanager

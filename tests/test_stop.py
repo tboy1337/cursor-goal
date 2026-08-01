@@ -316,19 +316,76 @@ def test_handle_stop_mutate_oserror_inactive(
     assert handle_stop({"status": "completed", "loop_count": 0}) == {}
 
 
-def test_stop_singleflight_second_emits_empty(
+def test_stop_singleflight_second_is_silent(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Loser must not write stdout or last-stop-response (avoids clobbering)."""
     run_cli("manage", "create", "singleflight")
     monkeypatch.setenv("CURSOR_GOAL_STOP_DRAIN_MS", "0")
     held = stop_mod._try_acquire_singleflight()
     assert held is not None
     try:
-        code, payload = _run_stop({"status": "completed", "loop_count": 0})
+        out = io.StringIO()
+        old_stdin = sys.stdin
+        try:
+            sys.stdin = io.StringIO(
+                json.dumps({"status": "completed", "loop_count": 0})
+            )
+            with redirect_stdout(out):
+                code = cmd_stop([])
+        finally:
+            sys.stdin = old_stdin
         assert code == 0
-        assert payload == {}
+        assert out.getvalue() == ""
+        last = goal_home / "last-stop-response.json"
+        # Loser must not create/overwrite diagnostics.
+        assert not last.is_file() or "singleflight" not in last.read_text(
+            encoding="utf-8"
+        )
     finally:
         stop_mod._release_singleflight(held)
+
+
+def test_cmd_stop_emit_oserror_fail_open(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_cli("manage", "create", "emit fail")
+    monkeypatch.setenv("CURSOR_GOAL_STOP_DRAIN_MS", "0")
+
+    def boom(_payload: dict[str, Any]) -> None:
+        raise OSError("stdout broken")
+
+    monkeypatch.setattr(stop_mod, "emit", boom)
+    code, payload = _run_stop({"status": "completed", "loop_count": 0})
+    assert code == 0
+    assert payload == {}
+
+
+def test_cmd_stop_emit_and_failopen_write_fail(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_cli("manage", "create", "emit fail2")
+    monkeypatch.setenv("CURSOR_GOAL_STOP_DRAIN_MS", "0")
+
+    def boom(_payload: dict[str, Any]) -> None:
+        raise OSError("stdout broken")
+
+    class BoomStdout:
+        def write(self, _s: str) -> int:
+            raise OSError("write failed")
+
+        def flush(self) -> None:
+            return None
+
+    monkeypatch.setattr(stop_mod, "emit", boom)
+    monkeypatch.setattr(sys, "stdout", BoomStdout())
+    old = sys.stdin
+    try:
+        sys.stdin = io.StringIO(json.dumps({"status": "completed", "loop_count": 0}))
+        code = cmd_stop([])
+    finally:
+        sys.stdin = old
+    assert code == 0
 
 
 def test_stop_budget_disarms_wake(goal_home: Path) -> None:

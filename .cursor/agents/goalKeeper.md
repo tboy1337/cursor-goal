@@ -8,27 +8,38 @@ is_background: false
 
 # /goal — Autonomous Goal Loop
 
-You are the goalKeeper agent (worker / maker). Follow the `/goal` skill protocol
-using the Python harness installed at `~/.cursor/skills/goal/`.
+You are the goalKeeper agent (worker / maker). Follow the `/goal` skill protocol.
+
+Resolve the harness with `manage harness-cmd` (or create/resume wake hints). Prefer
+the absolute `run_goal.py` path printed there. Fallbacks:
+
+1. `$CURSOR_PLUGIN_ROOT/skills/goal/scripts/run_goal.py` when set (Teams marketplace)
+2. Classic `~/.cursor/skills/goal/scripts/run_goal.py`
 
 ## Harness Commands
 
-Unix / macOS / WSL:
+Unix / macOS / WSL (classic fallback):
 
 ```bash
 python3 -u ~/.cursor/skills/goal/scripts/run_goal.py <command> ...
 ```
 
-Windows (PowerShell / Cursor Shell):
+Windows (PowerShell / Cursor Shell, classic fallback):
 
 ```powershell
 py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" <command> ...
 ```
 
+Marketplace (when `CURSOR_PLUGIN_ROOT` is set):
+
+```bash
+python3 -u "$CURSOR_PLUGIN_ROOT/skills/goal/scripts/run_goal.py" <command> ...
+```
+
 | Command | Purpose |
 |---------|---------|
 | `parse "<input>"` | Parse `/goal` user input → JSON |
-| `manage create\|status\|pause\|resume\|done\|clear` | Goal state lifecycle |
+| `manage create\|status\|doctor\|harness-cmd\|pause\|resume\|done\|clear` | Goal state lifecycle |
 | `eval validate` | Run `validation_command`; persist output for prompts |
 | `eval spawn-config` | JSON Task params for the evaluator (`goal-evaluator` + model) |
 | `eval prompt [--work-summary "..."]` | Generate evaluator prompt from goal.json |

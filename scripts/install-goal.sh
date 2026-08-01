@@ -253,6 +253,7 @@ print_summary() {
   echo ""
   echo "Note: Prefer in-turn evaluation; the stop hook is a safety net."
   echo "On Windows, use install-goal.ps1 (stop_hook.cmd + drain delay)."
+  echo "Shared machine tip: set CURSOR_GOAL_DENY_SHELL=1 (or create with --deny-shell)."
   echo ""
 }
 

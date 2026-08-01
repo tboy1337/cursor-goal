@@ -9,26 +9,45 @@ Set a persistent objective. Work toward it across turns until it is met.
 
 ## Harness (Python)
 
-Prefer the installed skill runner. Use the interpreter that matches the host OS:
+Resolve the runner **before** issuing lifecycle commands (works for classic install and Teams marketplace):
 
-**Unix / macOS / WSL:**
+```bash
+# Prefer absolute path printed by the installed package:
+python3 -u "$(python3 -c 'from cursor_goal.paths import run_goal_script; print(run_goal_script())' 2>/dev/null || true)" manage harness-cmd
+```
+
+**Preferred:** run `manage harness-cmd` once from any available install and reuse its `Wake loop` / invocation lines for the rest of the session.
+
+**Resolution order for Shell commands:**
+
+1. Absolute path from `manage harness-cmd` / create/resume wake hints (package-local).
+2. Marketplace: `"$CURSOR_PLUGIN_ROOT/skills/goal/scripts/run_goal.py"` when `CURSOR_PLUGIN_ROOT` is set.
+3. Classic: `~/.cursor/skills/goal/scripts/run_goal.py` (Windows: `$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py`).
+
+**Unix / macOS / WSL (classic fallback):**
 
 ```bash
 python3 -u ~/.cursor/skills/goal/scripts/run_goal.py <command> ...
 ```
 
-**Windows (PowerShell / Cursor Shell):**
+**Windows (PowerShell / Cursor Shell, classic fallback):**
 
 ```powershell
 py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" <command> ...
 ```
 
-If the package is installed editable (`pip install -e .`), `python -m cursor_goal` and `cursor-goal` also work — but editable install does **not** register the Cursor skill, agents, or stop hook. Use the installer for that.
+**Marketplace (when `CURSOR_PLUGIN_ROOT` is set):**
+
+```bash
+python3 -u "$CURSOR_PLUGIN_ROOT/skills/goal/scripts/run_goal.py" <command> ...
+```
+
+If the package is installed editable (`pip install -e .`), `python -m cursor_goal` and `cursor-goal` also work — but editable install does **not** register the Cursor skill, agents, or stop hook. Use the installer (or Teams marketplace import) for that.
 
 | Command | Purpose |
 |---------|---------|
 | `parse "<input>"` | Parse `/goal` input → JSON |
-| `manage create\|status\|pause\|resume\|done\|clear` | Goal state lifecycle |
+| `manage create\|status\|doctor\|harness-cmd\|pause\|resume\|done\|clear` | Goal state lifecycle |
 | `eval validate\|spawn-config\|prompt\|parse-result\|signal\|check` | Evaluator harness |
 | `stop` | Stop hook (stdin JSON → stdout JSON) |
 | `wake arm\|tick\|disarm\|status\|loop` | Wake watchdog (shell notify sentinel) |

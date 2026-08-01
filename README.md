@@ -30,7 +30,7 @@ Three supported paths:
 | Path | Who | How |
 |------|-----|-----|
 | **Clone + installer** | Individuals | Full clone or GitHub Release archive → `install-goal.sh` / `install-goal.ps1` |
-| **Tagged release** | Individuals | `git clone --branch v2.4.0 …` then installer (see [docs/install.md](docs/install.md)) |
+| **Tagged release** | Individuals | `git clone --branch v2.5.0 …` then installer (see [docs/install.md](docs/install.md)) |
 | **Teams marketplace** | Teams/Enterprise | Import this repo in Cursor Dashboard → Plugins (see `.cursor-plugin/marketplace.json`) |
 
 **Agent install (explicit steps):**

@@ -69,6 +69,43 @@ def test_cli_unhandled_exception(
     assert "unexpected boom" in err
 
 
+def test_cli_stop_unhandled_fail_open(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del goal_home
+
+    def boom(_argv: list[str]) -> int:
+        raise RuntimeError("stop boom")
+
+    monkeypatch.setattr(cli_mod, "cmd_stop", boom)
+    monkeypatch.setenv("CURSOR_GOAL_STOP_DRAIN_MS", "0")
+    out = io.StringIO()
+    with redirect_stdout(out):
+        code = cli_mod.main(["stop"])
+    assert code == 0
+    assert "{}" in out.getvalue()
+
+
+def test_cli_stop_emit_empty_also_fails(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del goal_home
+
+    def boom(_argv: list[str]) -> int:
+        raise RuntimeError("stop boom")
+
+    def boom_emit() -> int:
+        raise OSError("stdout dead")
+
+    monkeypatch.setattr(cli_mod, "cmd_stop", boom)
+    monkeypatch.setattr(cli_mod, "emit_empty", boom_emit)
+    out = io.StringIO()
+    with redirect_stdout(out):
+        code = cli_mod.main(["stop"])
+    assert code == 0
+    assert "{}" in out.getvalue()
+
+
 def test_python_m_cursor_goal_help(goal_home: Path) -> None:
     env = os.environ.copy()
     env["CURSOR_GOAL_DATA"] = str(goal_home)

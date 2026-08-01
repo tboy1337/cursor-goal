@@ -66,15 +66,21 @@ def _extract_test_flag(condition: str) -> tuple[str, str]:
 
 
 def _extract_budget(condition: str, default: int = 20) -> tuple[int, str]:
-    """Pull --budget / natural-language budget; return (budget, remaining)."""
+    """Pull --budget / natural-language budget; return (budget, remaining).
+
+    Explicit ``--budget N`` wins over NL phrases like ``stop after M turns``.
+    """
     budget = default
+    flag_set = False
     match = _BUDGET_FLAG.search(condition)
     if match:
         budget = int(match.group(1))
         condition = _BUDGET_FLAG.sub("", condition)
+        flag_set = True
     match = _BUDGET_NL.search(condition)
     if match:
-        budget = int(match.group(1))
+        if not flag_set:
+            budget = int(match.group(1))
         condition = _BUDGET_NL.sub("", condition)
     return budget, condition
 

@@ -10,6 +10,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cursor_goal.logging_config import get_logger
+from cursor_goal.paths import (
+    harness_cmd_report,
+    wake_loop_invocation,
+)
 from cursor_goal.state import (
     MAX_FIELD_CHARS,
     MAX_TURN_BUDGET,
@@ -146,12 +150,11 @@ def _validate_create(args: _CreateArgs) -> str | None:
 
 def _wake_loop_shell_hint() -> str:
     """OS-appropriate wake loop command for doctor / create hints."""
-    if os.name == "nt":
-        return (
-            'py -3 -u "$env:USERPROFILE\\.cursor\\skills\\goal\\'
-            'scripts\\run_goal.py" wake loop'
-        )
-    return "python3 -u ~/.cursor/skills/goal/scripts/run_goal.py wake loop"
+    try:
+        return wake_loop_invocation()
+    except ValueError as exc:
+        logger.warning("Could not resolve wake loop hint: %s", exc)
+        return "<unresolved-skill>/scripts/run_goal.py wake loop"
 
 
 def _validation_mode(state: GoalState) -> str:
@@ -403,7 +406,7 @@ def cmd_done(argv: list[str]) -> int:
             file=sys.stderr,
         )
         logger.warning("done --force without evaluator signal")
-    if state is None:
+    if state is None:  # pragma: no cover — mark_goal_achieved returns missing first
         print("[goal] No active goal to mark done.")
         return 1
     wake_disarm(kill_loop=True)
@@ -429,8 +432,8 @@ def cmd_clear(_argv: list[str]) -> int:
     return 0
 
 
-def _hooks_look_configured() -> bool | None:
-    """Return True/False if detectable; None if unknown."""
+def _classic_hooks_configured() -> bool | None:
+    """Return True/False if classic hooks.json is detectable; None if unknown."""
     hooks = Path.home() / ".cursor" / "hooks.json"
     if hooks.is_file():
         try:
@@ -440,12 +443,74 @@ def _hooks_look_configured() -> bool | None:
         return "stop" in text and (
             "stop_hook" in text or "cursor_goal" in text or "run_goal" in text
         )
-    # Classic skill install ships scripts even if hooks merge failed.
     skill_hook = (
         Path.home() / ".cursor" / "skills" / "goal" / "scripts" / "stop_hook.py"
     )
     if skill_hook.is_file():
         return False
+    return None
+
+
+def _marketplace_hooks_configured() -> bool | None:
+    """Detect Teams marketplace plugin stop hooks when possible."""
+    roots: list[Path] = []
+    env_root = (os.environ.get("CURSOR_PLUGIN_ROOT") or "").strip()
+    if env_root:
+        roots.append(Path(env_root).expanduser())
+    # Common Cursor user plugin layouts (best-effort).
+    cursor_home = Path.home() / ".cursor"
+    for candidate in (
+        cursor_home / "plugins" / "cursor-goal",
+        cursor_home / "plugins" / "cache" / "cursor-goal",
+    ):
+        if candidate.is_dir():  # pragma: no branch — layout optional
+            roots.append(candidate)
+
+    seen_file = False
+    for root in roots:
+        hooks = root / "hooks" / "hooks.json"
+        if not hooks.is_file():
+            # Plugin tree may nest under skills only.
+            alt = root / "skills" / "goal" / "scripts" / "stop_hook.py"
+            if alt.is_file():
+                seen_file = True
+            continue
+        seen_file = True
+        try:
+            text = hooks.read_text(encoding="utf-8")
+        except OSError:  # pragma: no cover — rare IO race
+            continue
+        if "stop" in text and (
+            "stop_hook" in text or "cursor_goal" in text or "CURSOR_PLUGIN_ROOT" in text
+        ):
+            return True
+    if seen_file:
+        return False
+    if env_root:
+        return False
+    return None
+
+
+def _hooks_look_configured() -> bool | None:
+    """Return True/False if any install path has stop hooks; None if unknown."""
+    classic = _classic_hooks_configured()
+    market = _marketplace_hooks_configured()
+    if classic is True or market is True:
+        return True
+    if classic is False or market is False:
+        return False
+    return None
+
+
+def _hooks_stacking_warning() -> str | None:
+    """Warn when classic and marketplace stop hooks both appear active."""
+    classic = _classic_hooks_configured()
+    market = _marketplace_hooks_configured()
+    if classic is True and market is True:
+        return (
+            "Classic (~/.cursor/hooks.json) and marketplace plugin stop hooks both "
+            "look configured — pick one install path to avoid duplicate hook runs"
+        )
     return None
 
 
@@ -461,14 +526,14 @@ def _is_absolute_interpreter_path(value: str) -> bool:
     if text.startswith("/") and not text.startswith("//"):
         return True
     # Windows drive / UNC without relying solely on Path (odd shells).
-    if len(text) >= 3 and text[1] == ":" and text[2] in "\\/":
+    if len(text) >= 3 and text[1] == ":" and text[2] in "\\/":  # pragma: no cover
         return True
-    if text.startswith("\\\\") or text.startswith("//"):
+    if text.startswith("\\\\") or text.startswith("//"):  # pragma: no cover
         return True
     return False
 
 
-# pylint: disable-next=too-many-branches,too-many-statements
+# pylint: disable-next=too-many-branches,too-many-statements,too-many-locals
 def cmd_doctor(_argv: list[str]) -> int:
     """Health check for install / data dir / wake / shell. Exit 1 on hard fail."""
     hard_fails: list[str] = []
@@ -476,13 +541,13 @@ def cmd_doctor(_argv: list[str]) -> int:
 
     print("[goal] Doctor")
     print(f"  Python: {sys.version.split()[0]} ({sys.executable})")
-    if sys.version_info < (3, 12):
+    if sys.version_info < (3, 12):  # pragma: no cover — CI/runtime is 3.12+
         hard_fails.append("Python 3.12+ is required")
 
     try:
         ddir = data_dir(check_writable=False)
         print(f"  Data dir: {ddir}")
-    except OSError as exc:
+    except OSError as exc:  # pragma: no cover — data_dir rarely raises here
         hard_fails.append(f"Cannot access data dir: {exc}")
         ddir = None
 
@@ -505,18 +570,36 @@ def cmd_doctor(_argv: list[str]) -> int:
         hard_fails.append(acl_fail)
 
     hooks_state = _hooks_look_configured()
+    classic_hooks = _classic_hooks_configured()
+    market_hooks = _marketplace_hooks_configured()
     if hooks_state is True:
-        print("  Hooks: stop hook appears configured (~/.cursor/hooks.json)")
+        sources: list[str] = []
+        if classic_hooks is True:
+            sources.append("classic ~/.cursor/hooks.json")
+        if market_hooks is True:
+            sources.append("marketplace plugin hooks")
+        label = " + ".join(sources) if sources else "detected"
+        print(f"  Hooks: stop hook appears configured ({label})")
     elif hooks_state is False:
         hard_fails.append(
-            "Goal skill scripts present but ~/.cursor/hooks.json has no stop hook. "
-            "Re-run the installer."
+            "Goal skill/plugin scripts present but no stop hook was found. "
+            "Re-run the classic installer, or enable the Teams marketplace plugin."
         )
     else:
         warnings.append(
             "Could not confirm stop hook configuration "
-            "(~/.cursor/hooks.json missing or unreadable)"
+            "(classic hooks.json missing/unreadable and no marketplace plugin root)"
         )
+    stacked = _hooks_stacking_warning()
+    if stacked is not None:
+        warnings.append(stacked)
+
+    try:
+        report = harness_cmd_report()
+        print(f"  Harness: {report['run_goal']} (exists={report['exists']})")
+        print(f"  Wake loop cmd: {report['wake_loop']}")
+    except ValueError as exc:
+        warnings.append(f"Harness path unresolved: {exc}")
 
     if os.name == "nt":
         env_py = (os.environ.get("CURSOR_GOAL_PYTHON") or "").strip()
@@ -566,14 +649,14 @@ def cmd_doctor(_argv: list[str]) -> int:
                 "Prefer argv or CURSOR_GOAL_DENY_SHELL=1 / --deny-shell."
             )
         if not wake_info.get("armed"):
-            warnings.append(
-                "Wake not armed — immediately start background Shell: "
+            hard_fails.append(
+                "Wake not armed while pursuing — start background Shell: "
                 f"`{_wake_loop_shell_hint()}` with notify_on_output "
                 "matching ^AGENT_GOAL_WAKE (required for automatic continuation)"
             )
         elif not wake_info.get("pid_alive"):
-            warnings.append(
-                "Wake armed but loop not alive — immediately start: "
+            hard_fails.append(
+                "Wake armed but loop not alive — start: "
                 f"`{_wake_loop_shell_hint()}` with notify_on_output "
                 "matching ^AGENT_GOAL_WAKE"
             )
@@ -662,6 +745,24 @@ def _maybe_arm_wake() -> None:
     print(f"  {hint}")
 
 
+def cmd_harness_cmd(_argv: list[str]) -> int:
+    """Print resolved harness invocation (classic or marketplace)."""
+    try:
+        report = harness_cmd_report()
+    except ValueError as exc:
+        print(f"[goal] Error: {exc}", file=sys.stderr)
+        return 1
+    print(f"[goal] Skill root: {report['skill_root']}")
+    print(f"[goal] run_goal.py: {report['run_goal']} (exists={report['exists']})")
+    print(f"[goal] Invocation template: {report['invocation']}")
+    print(f"[goal] Wake loop: {report['wake_loop']}")
+    if report["cursor_goal_home"]:
+        print(f"[goal] CURSOR_GOAL_HOME: {report['cursor_goal_home']}")
+    if report["cursor_plugin_root"]:
+        print(f"[goal] CURSOR_PLUGIN_ROOT: {report['cursor_plugin_root']}")
+    return 0
+
+
 def cmd_manage(argv: list[str]) -> int:
     if not argv:
         _print_help()
@@ -678,6 +779,7 @@ def cmd_manage(argv: list[str]) -> int:
         "done": cmd_done,
         "clear": cmd_clear,
         "doctor": cmd_doctor,
+        "harness-cmd": cmd_harness_cmd,
     }
     handler = dispatch.get(command)
     if handler is None:
@@ -695,6 +797,7 @@ def _print_help() -> int:
     )
     print("  status     Show current goal state")
     print("  doctor     Install / health diagnostics")
+    print("  harness-cmd  Print resolved run_goal.py / wake loop invocation")
     print("  pause      Pause auto-continuation")
     print("  resume     Resume a paused goal")
     print("  done       Mark goal as achieved (requires YES-bound eval signal)")

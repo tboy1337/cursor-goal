@@ -2,7 +2,7 @@
 
 Checklist for cutting a tagged GitHub Release (`vX.Y.Z`).
 
-Tagging `v2.4.0` is the first public 2.x release (GitHub Latest was previously v1.1.1 while `main` already carried 2.x).
+Tagging `v2.5.0` is the first public 2.x release (GitHub Latest was previously v1.1.1 while `main` already carried 2.x).
 
 ## Prerequisites
 

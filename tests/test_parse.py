@@ -115,6 +115,12 @@ def test_parse_budget_flag() -> None:
     assert result["condition"] == "ship"
 
 
+def test_parse_budget_flag_wins_over_nl() -> None:
+    result = parse_raw("ship it --budget 30, stop after 10 turns")
+    assert result["budget"] == 30
+    assert "stop after" not in result["condition"].lower()
+
+
 def test_parse_rejects_zero_budget() -> None:
     with pytest.raises(ValueError, match="positive integer"):
         parse_raw("ship --budget 0")

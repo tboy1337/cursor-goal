@@ -59,16 +59,72 @@ def test_update_goal_fields_ignores_unknown(goal_home: Path) -> None:
     assert "not_a_field" not in raw
 
 
+def test_logging_reset_closes_handlers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from cursor_goal import logging_config as log_mod
+
+    monkeypatch.setenv("CURSOR_GOAL_LOG_FILE", str(tmp_path / "r.log"))
+    log_mod._reset_for_tests()
+    log_mod.get_logger("cursor_goal.reset_test")
+    log_mod._reset_for_tests()
+    log_mod._reset_for_tests()  # second reset is a no-op-ish cleanup
+
+
+def test_logging_reset_handler_close_oserror(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cursor_goal import logging_config as log_mod
+
+    class BadHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            del record
+
+        def close(self) -> None:
+            raise OSError("close failed")
+
+    log_mod._reset_for_tests()
+    root = logging.getLogger("cursor_goal")
+    root.addHandler(BadHandler())
+    log_mod._CONFIGURED = True
+    log_mod._LOG_FILE_HANDLE = None
+    log_mod._reset_for_tests()
+
+
+def test_fs_lock_unix_release(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cursor_goal import fs_lock as fs_lock_mod
+
+    class Handle:
+        def fileno(self) -> int:
+            return 3
+
+        def seek(self, *_a: object, **_k: object) -> None:
+            return None
+
+    calls: list[object] = []
+
+    fake_fcntl = type(sys)("fcntl")
+    fake_fcntl.flock = lambda *a, **k: calls.append(a)  # type: ignore[attr-defined]
+    fake_fcntl.LOCK_UN = 8  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "fcntl", fake_fcntl)
+    monkeypatch.setattr(sys, "platform", "linux")
+    fs_lock_mod.lock_release(Handle())  # type: ignore[arg-type]
+    assert calls
+
+
 def test_get_logger_reuses_handlers(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cursor_goal import logging_config as log_mod
+
     monkeypatch.setenv("CURSOR_GOAL_LOG", "DEBUG")
+    log_mod._reset_for_tests()
     name = "cursor_goal.test_logger_unique"
-    # Ensure clean slate
     existing = logging.getLogger(name)
     existing.handlers.clear()
     first = get_logger(name)
     second = get_logger(name)
     assert first is second
-    assert len(first.handlers) == 1
+    root = logging.getLogger("cursor_goal")
+    assert len(root.handlers) >= 1
+    assert len(first.handlers) == 0
+    assert first.propagate is True
 
 
 def test_load_goal_corrupt_numeric_fields(goal_home: Path) -> None:
@@ -286,10 +342,11 @@ def test_lock_acquire_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_msvcrt = type(sys)("msvcrt")
     fake_msvcrt.locking = fake_locking  # type: ignore[attr-defined]
     fake_msvcrt.LK_LOCK = 1  # type: ignore[attr-defined]
+    fake_msvcrt.LK_NBLCK = 2  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
     monkeypatch.setattr(sys, "platform", "win32")
     state_mod._lock_acquire(Handle())
-    assert calls == [(3, 1, 1)]
+    assert calls == [(3, 2, 1)]
 
 
 def test_set_eval_signal_rejects_non_yes(goal_home: Path) -> None:
@@ -513,25 +570,28 @@ def test_get_logger_invalid_level_and_log_file(
 
     monkeypatch.setenv("CURSOR_GOAL_LOG", "NOTALEVEL")
     monkeypatch.setenv("CURSOR_GOAL_LOG_FILE", str(tmp_path / "cg.log"))
+    log_mod._reset_for_tests()
     name = f"cursor_goal.test_log_{os.getpid()}"
-    # Clear any prior logger
     existing = logging.getLogger(name)
     existing.handlers.clear()
     logger = log_mod.get_logger(name)
-    assert logger.level == logging.WARNING
+    root = logging.getLogger("cursor_goal")
+    assert root.level == logging.WARNING
     logger.warning("hello durable")
     log_path = tmp_path / "cg.log"
     assert log_path.is_file()
     assert "hello durable" in log_path.read_text(encoding="utf-8")
 
     # Default data-dir log path via CURSOR_GOAL_LOG_FILE=1
+    log_mod._reset_for_tests()
     existing2 = logging.getLogger(name + "_b")
     existing2.handlers.clear()
     monkeypatch.setenv("CURSOR_GOAL_LOG_FILE", "1")
     monkeypatch.delenv("CURSOR_GOAL_LOG", raising=False)
     monkeypatch.setenv("CURSOR_GOAL_DATA", str(goal_home))
     logger_b = log_mod.get_logger(name + "_b")
-    assert logger_b.level == logging.INFO
+    root_b = logging.getLogger("cursor_goal")
+    assert root_b.level == logging.INFO
     logger_b.error("via data dir")
     assert (goal_home / "cursor-goal.log").is_file()
 
@@ -548,10 +608,12 @@ def test_get_logger_log_file_oserror(
     blocker = tmp_path / "missing"
     blocker.write_text("not a dir", encoding="utf-8")
     monkeypatch.setenv("CURSOR_GOAL_LOG_FILE", str(bad))
+    log_mod._reset_for_tests()
     name = f"cursor_goal.test_log_fail_{os.getpid()}"
     logging.getLogger(name).handlers.clear()
-    logger = log_mod.get_logger(name)
-    assert logger.handlers  # stderr still attached
+    log_mod.get_logger(name)
+    root = logging.getLogger("cursor_goal")
+    assert root.handlers  # stderr still attached
 
 
 def test_default_log_path_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

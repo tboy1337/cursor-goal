@@ -38,6 +38,8 @@ No multi-tenant / shared-host isolation. Anyone who can write `~/.cursor-goal/da
 
 Marketplace `stop_hook.cmd` / `wake_loop.cmd` resolve Python via `CURSOR_GOAL_PYTHON` (must be absolute when set) or PATH. Classic `install-goal.ps1` bakes an absolute interpreter — preferred for individuals on Windows.
 
+Teams marketplace installs are **standalone**: resolve the harness with `manage harness-cmd` or `$CURSOR_PLUGIN_ROOT/skills/goal/scripts/run_goal.py`. Do not stack classic `~/.cursor/hooks.json` entries with marketplace plugin hooks.
+
 ## Name collision
 
 An unrelated npm package is also named `cursor-goal`. This project is the Python/AGPL harness at [tboy1337/cursor-goal](https://github.com/tboy1337/cursor-goal).

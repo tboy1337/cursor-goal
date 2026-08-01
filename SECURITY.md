@@ -22,7 +22,7 @@ If another user or process can write your goal data directory, they can cause co
 - Prefer argv-safe `--test` commands; compound shell snippets use `shell=True` (`COMSPEC`/cmd on Windows).
 - Set `CURSOR_GOAL_DENY_SHELL=1` or create with `--deny-shell` (`shell_ok=false`) to refuse shell-mode validation.
 - Create/validate/stop/wake refuse insecure data directories: on Unix, symlink / wrong owner / group/world-writable (stop fails open to `{}`; wake arm/loop/tick refuse). On Windows, symlink / junction / reparse point (same refuse behavior).
-- On Windows, create/validate/**stop/wake** refuse when ACL harden was attempted and failed (doctor also hard-fails). Skip with `CURSOR_GOAL_SKIP_ACL=1` after manually locking down the path.
+- On Windows, create/validate/**stop/wake** refuse when ACL harden was attempted and failed (doctor also hard-fails). If inheritance was stripped and the grant fails, inheritance is restored (`icacls /inheritance:e`) best-effort before recording the failure. Skip with `CURSOR_GOAL_SKIP_ACL=1` after manually locking down the path.
 - Exclusive `goal.lock` times out after ~10s (Unix and Windows). Fail-open stop continues are capped and counted against the turn budget.
 - Corrupt `goal.json` is quarantined to `goal.json.corrupt.<UTC>`.
 - Field length limits enforced on load (truncate) and update (reject) for condition, validation command, reasons, outputs, verdicts, and timestamps (`MAX_FIELD_CHARS`).

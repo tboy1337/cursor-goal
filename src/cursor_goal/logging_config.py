@@ -8,6 +8,9 @@ import sys
 from pathlib import Path
 from typing import TextIO
 
+_CONFIGURED = False
+_LOG_FILE_HANDLE: TextIO | None = None
+
 
 def _resolve_level(name: str) -> int:
     """Map level name to logging level; warn and fall back on invalid values."""
@@ -60,36 +63,72 @@ def _open_log_file() -> TextIO | None:
         return None
 
 
-def get_logger(name: str = "cursor_goal") -> logging.Logger:
-    """Return a module logger configured for stderr (+ optional file) diagnostics."""
-    logger = logging.getLogger(name)
-    if logger.handlers:
-        return logger
+def _configure_root() -> None:
+    """Configure the parent ``cursor_goal`` logger once; children propagate."""
+    global _CONFIGURED, _LOG_FILE_HANDLE
+    if _CONFIGURED:
+        return
 
+    root = logging.getLogger("cursor_goal")
     raw_level = os.environ.get("CURSOR_GOAL_LOG", "").strip()
     if raw_level:
         level_name = raw_level.upper()
     elif os.environ.get("CURSOR_GOAL_LOG_FILE", "").strip():
-        # Durable log file without explicit level → INFO for usable diagnostics.
         level_name = "INFO"
     else:
         level_name = "WARNING"
     level = _resolve_level(level_name)
-    logger.setLevel(level)
+    root.setLevel(level)
 
     formatter = logging.Formatter(
         "[%(name)s] %(levelname)s: %(message)s [pid=%(process)d]"
     )
 
-    stderr_handler = logging.StreamHandler(sys.stderr)
-    stderr_handler.setFormatter(formatter)
-    logger.addHandler(stderr_handler)
+    if not any(isinstance(h, logging.StreamHandler) for h in root.handlers):
+        stderr_handler = logging.StreamHandler(sys.stderr)
+        stderr_handler.setFormatter(formatter)
+        root.addHandler(stderr_handler)
 
-    log_file = _open_log_file()
-    if log_file is not None:
-        file_handler = logging.StreamHandler(log_file)
-        file_handler.setFormatter(formatter)
-        logger.addHandler(file_handler)
+    if _LOG_FILE_HANDLE is None:
+        _LOG_FILE_HANDLE = _open_log_file()
+        if _LOG_FILE_HANDLE is not None:
+            file_handler = logging.StreamHandler(_LOG_FILE_HANDLE)
+            file_handler.setFormatter(formatter)
+            root.addHandler(file_handler)
 
-    logger.propagate = False
+    root.propagate = False
+    _CONFIGURED = True
+
+
+def get_logger(name: str = "cursor_goal") -> logging.Logger:
+    """Return a module logger; handlers live on the parent ``cursor_goal`` logger."""
+    _configure_root()
+    logger = logging.getLogger(name)
+    # Children inherit level/handlers via propagate; do not attach duplicates.
+    if name != "cursor_goal":
+        logger.setLevel(logging.NOTSET)
+        logger.propagate = True
+        # Clear any legacy per-module handlers from older installs / reloads.
+        if logger.handlers:
+            logger.handlers.clear()
     return logger
+
+
+def _reset_for_tests() -> None:
+    """Clear configuration state (test helper only)."""
+    global _CONFIGURED, _LOG_FILE_HANDLE
+    root = logging.getLogger("cursor_goal")
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+        try:
+            handler.close()
+        except OSError:
+            pass
+    if _LOG_FILE_HANDLE is not None:
+        try:
+            _LOG_FILE_HANDLE.close()
+        except OSError:
+            pass
+    _LOG_FILE_HANDLE = None
+    _CONFIGURED = False
+    root.setLevel(logging.NOTSET)

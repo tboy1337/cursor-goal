@@ -10,7 +10,7 @@ from cursor_goal.evaluate import cmd_eval
 from cursor_goal.logging_config import get_logger
 from cursor_goal.manage import cmd_manage
 from cursor_goal.parse import cmd_parse
-from cursor_goal.stop import cmd_stop
+from cursor_goal.stop import cmd_stop, emit_empty
 from cursor_goal.wake import cmd_wake
 
 logger = get_logger("cursor_goal.cli")
@@ -47,9 +47,19 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("[cursor-goal] Interrupted.", file=sys.stderr)
         return 130
-    except Exception as exc:  # noqa: BLE001 — agent-facing CLI; stop has own fail-open
+    except Exception as exc:  # noqa: BLE001 — agent-facing CLI; stop fail-opens
         if command == "stop":
-            raise
+            logger.error("Unhandled stop error (fail-open): %s", exc, exc_info=True)
+            try:
+                return int(emit_empty())
+            except Exception as emit_exc:  # noqa: BLE001 — last resort
+                logger.error("Stop emit_empty failed: %s", emit_exc)
+                try:
+                    sys.stdout.write("{}\n")
+                    sys.stdout.flush()
+                except OSError:
+                    pass
+                return 0
         logger.error("Unhandled error in %s: %s", command, exc, exc_info=True)
         print(f"[cursor-goal] Error: {exc}", file=sys.stderr)
         return 1
@@ -61,7 +71,7 @@ def _print_help() -> None:
     print("  manage <subcommand> [...]     Goal lifecycle")
     print(
         "                                "
-        "(create|status|doctor|pause|resume|done|clear)"
+        "(create|status|doctor|harness-cmd|pause|resume|done|clear)"
     )
     print("  eval <subcommand> [...]       Evaluator harness")
     print(

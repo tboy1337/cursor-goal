@@ -78,6 +78,17 @@ PY
   fi
 fi
 
+# Best-effort wake disarm before deleting the skill tree.
+if [ -f "${INSTALL_DIR}/scripts/run_goal.py" ]; then
+  if PY="$(detect_python)"; then
+    if "$PY" -u "${INSTALL_DIR}/scripts/run_goal.py" wake disarm >/dev/null 2>&1; then
+      echo "[uninstall-goal] Disarmed wake watchdog"
+    else
+      echo "[uninstall-goal] Warning: wake disarm failed (continuing uninstall)"
+    fi
+  fi
+fi
+
 echo "[uninstall-goal] Removing skill at $INSTALL_DIR"
 rm -rf "$INSTALL_DIR"
 

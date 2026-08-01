@@ -90,6 +90,32 @@ def _read_marketplace_version(root: Path) -> str | None:
     return next(iter(versions))
 
 
+def _read_marketplace_metadata_version(root: Path) -> str | None:
+    path = root / ".cursor-plugin" / "marketplace.json"
+    if not path.is_file():
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    metadata = data.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    version = metadata.get("version")
+    if version is None:
+        return None
+    if not isinstance(version, str) or not version:
+        raise ValueError(f"Invalid metadata.version in {path}")
+    return version
+
+
+def _read_skill_version_file(root: Path) -> str | None:
+    path = root / "plugins" / "cursor-goal" / "skills" / "goal" / "VERSION"
+    if not path.is_file():
+        return None
+    version = path.read_text(encoding="utf-8").strip()
+    if not version:
+        raise ValueError(f"Empty VERSION file at {path}")
+    return version
+
+
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
     errors: list[str] = []
@@ -135,6 +161,22 @@ def main() -> int:
     if market is not None and market != proj:
         errors.append(f"marketplace={market} != package {proj}")
 
+    try:
+        market_meta = _read_marketplace_metadata_version(root)
+    except ValueError as exc:
+        errors.append(str(exc))
+        market_meta = None
+    if market_meta is not None and market_meta != proj:
+        errors.append(f"marketplace.metadata={market_meta} != package {proj}")
+
+    try:
+        skill_ver = _read_skill_version_file(root)
+    except ValueError as exc:
+        errors.append(str(exc))
+        skill_ver = None
+    if skill_ver is not None and skill_ver != proj:
+        errors.append(f"plugins/.../VERSION={skill_ver} != package {proj}")
+
     if errors:
         print("version mismatch:", file=sys.stderr)
         for item in errors:
@@ -150,6 +192,10 @@ def main() -> int:
         extras.append(f"plugin={plugin}")
     if market is not None:
         extras.append(f"marketplace={market}")
+    if market_meta is not None:
+        extras.append(f"metadata={market_meta}")
+    if skill_ver is not None:
+        extras.append(f"VERSION={skill_ver}")
     suffix = f" ({', '.join(extras)})" if extras else ""
     print(f"version OK {proj}{suffix}")
     return 0

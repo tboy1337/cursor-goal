@@ -378,10 +378,16 @@ def handle_stop(
 
 
 def cmd_stop(_argv: list[str] | None = None) -> int:
-    """Read Cursor stop JSON from stdin; always exit 0 with a JSON object."""
+    """Read Cursor stop JSON from stdin; always exit 0.
+
+    Dual marketplace hooks use singleflight: the lock holder emits JSON; the
+    loser exits silently (no stdout, no last-stop-response write) so Cursor
+    cannot overwrite a real followup with ``{}``.
+    """
     lock = _try_acquire_singleflight()
     if lock is None:
-        return emit_empty()
+        logger.info("Stop singleflight miss: silent exit (no stdout)")
+        return 0
     try:
         try:
             raw = sys.stdin.read(MAX_STDIN_BYTES + 1)
@@ -408,7 +414,16 @@ def cmd_stop(_argv: list[str] | None = None) -> int:
             logger.error("Unhandled stop error: %s", exc)
             return emit_empty()
 
-        emit(response if isinstance(response, dict) else {})
+        try:
+            emit(response if isinstance(response, dict) else {})
+        except OSError as exc:
+            logger.error("Stop emit failed (fail-open empty): %s", exc)
+            try:
+                sys.stdout.write("{}\n")
+                sys.stdout.flush()
+            except OSError as write_exc:
+                logger.error("Stop fail-open stdout write failed: %s", write_exc)
+            return 0
         return 0
     finally:
         _release_singleflight(lock)

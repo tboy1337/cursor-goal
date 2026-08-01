@@ -431,6 +431,7 @@ print(__version__)
     Write-GoalInfo "Wake watchdog: after create/resume, start wake loop with notify_on_output on ^AGENT_GOAL_WAKE."
     Write-GoalWarn "If stop followups still drop, wake continues the goal; last-stop-response.json is always written."
     Write-GoalWarn "Re-run the installer after moving/upgrading Python (stop_hook.cmd and wake_loop.cmd bake absolute interpreter paths)."
+    Write-GoalInfo "Shared machine tip: set CURSOR_GOAL_DENY_SHELL=1 (or create with --deny-shell)."
     Write-Host ""
     return 0
 }
