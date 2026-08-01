@@ -7,11 +7,20 @@ import os
 import sys
 import time
 from datetime import datetime, timezone
-from typing import Any
+from pathlib import Path
+from typing import IO, Any
 
 from cursor_goal.logging_config import get_logger
-from cursor_goal.state import GoalState, data_dir, load_goal, mutate_goal
+from cursor_goal.state import (
+    LAST_STOP_RESPONSE_NAME,
+    GoalState,
+    _chmod_private,
+    data_dir,
+    load_goal,
+    mutate_goal,
+)
 from cursor_goal.validation import redact_command
+from cursor_goal.wake import disarm as wake_disarm
 
 logger = get_logger("cursor_goal.stop")
 
@@ -19,7 +28,9 @@ MAX_STDIN_BYTES = 1 * 1024 * 1024
 DEFAULT_DRAIN_MS = 100
 DEFAULT_DRAIN_MS_WINDOWS = 250
 MAX_DRAIN_MS = 2000
-LAST_STOP_RESPONSE_NAME = "last-stop-response.json"
+STOP_SINGLEFLIGHT_NAME = "stop-emit.lock"
+_FAIL_OPEN_CONTINUE_NAME = "stop-failopen-continues"
+MAX_FAIL_OPEN_CONTINUES = 3
 
 
 def _default_drain_ms() -> int:
@@ -69,19 +80,31 @@ def _fsync_stdout() -> None:
         pass
 
 
+def _redact_payload_for_disk(payload: dict[str, Any]) -> dict[str, Any]:
+    """Copy payload and redact goal-condition text inside followup messages."""
+    safe = dict(payload)
+    msg = safe.get("followup_message")
+    if isinstance(msg, str) and "toward:" in msg:
+        # Keep structure; drop trailing condition detail that may be sensitive.
+        head, _sep, _tail = msg.partition("toward:")
+        safe["followup_message"] = head + "toward: <redacted>"
+    return safe
+
+
 def _write_last_stop_response(payload: dict[str, Any]) -> None:
-    """Persist last stop response for diagnosis (always on)."""
+    """Persist last stop response for diagnosis (always on; redacted)."""
     try:
         path = data_dir() / LAST_STOP_RESPONSE_NAME
         envelope = {
             "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "pid": os.getpid(),
-            "payload": payload,
+            "payload": _redact_payload_for_disk(payload),
         }
         path.write_text(
             json.dumps(envelope, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
+        _chmod_private(path)
     except OSError as exc:
         logger.debug("Could not write %s: %s", LAST_STOP_RESPONSE_NAME, exc)
 
@@ -102,6 +125,54 @@ def emit_empty() -> int:
     return 0
 
 
+def _try_acquire_singleflight() -> IO[bytes] | None:
+    """Non-blocking exclusive lock so dual marketplace hooks emit once."""
+    path = data_dir() / STOP_SINGLEFLIGHT_NAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Lock must stay open until emit finishes (dual marketplace singleflight).
+    handle = open(path, "a+b")  # pylint: disable=consider-using-with
+    try:
+        if sys.platform == "win32":
+            import msvcrt  # isort: skip  # pylint: disable=import-outside-toplevel
+
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:  # pragma: no cover — exercised on Unix CI
+            import fcntl  # isort: skip  # pylint: disable=import-outside-toplevel
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        logger.info("Stop singleflight: another stop hook holds the lock")
+        return None
+    return handle
+
+
+def _release_singleflight(handle: IO[bytes] | None) -> None:
+    if handle is None:
+        return
+    try:
+        if sys.platform == "win32":
+            import msvcrt  # isort: skip  # pylint: disable=import-outside-toplevel
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:  # pragma: no cover — exercised on Unix CI
+            import fcntl  # isort: skip  # pylint: disable=import-outside-toplevel
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        pass
+    try:
+        handle.close()
+    except OSError:
+        pass
+
+
 def _budget_limited_response(state: GoalState) -> dict[str, Any]:
     return {
         "followup_message": (
@@ -113,6 +184,7 @@ def _budget_limited_response(state: GoalState) -> dict[str, Any]:
 
 def _continue_followup(state: GoalState, remaining: int) -> dict[str, Any]:
     """Build a followup that does not run validation (avoids hook timeouts)."""
+    remaining = max(0, remaining)
     if state.validation_command:
         safe_cmd = redact_command(state.validation_command)
         return {
@@ -132,7 +204,40 @@ def _continue_followup(state: GoalState, remaining: int) -> dict[str, Any]:
     }
 
 
-def handle_stop(payload: dict[str, Any] | None) -> dict[str, Any]:
+def _fail_open_continue_count_path() -> Path:
+    return data_dir() / _FAIL_OPEN_CONTINUE_NAME
+
+
+def _read_fail_open_continues() -> int:
+    path = _fail_open_continue_count_path()
+    if not path.is_file():
+        return 0
+    try:
+        return max(0, int(path.read_text(encoding="utf-8").strip() or "0"))
+    except (OSError, ValueError):
+        return 0
+
+
+def _write_fail_open_continues(value: int) -> None:
+    path = _fail_open_continue_count_path()
+    try:
+        path.write_text(f"{value}\n", encoding="utf-8")
+        _chmod_private(path)
+    except OSError as exc:
+        logger.debug("Could not write fail-open continue counter: %s", exc)
+
+
+def _clear_fail_open_continues() -> None:
+    try:
+        _fail_open_continue_count_path().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+# pylint: disable-next=too-many-return-statements
+def handle_stop(
+    payload: dict[str, Any] | None,
+) -> dict[str, Any]:
     """Compute stop-hook response. Never raises — fail open to {}."""
     if not isinstance(payload, dict):
         return {}
@@ -144,64 +249,88 @@ def handle_stop(payload: dict[str, Any] | None) -> dict[str, Any]:
     if status != "completed":
         return {}
 
+    budget_hit = False
+
     def mutator(state: GoalState) -> None:
+        nonlocal budget_hit
         if not state.active or state.status != "pursuing":
             raise ValueError("inactive")
         state.turns_used = int(state.turns_used) + 1
-        if state.turns_used >= state.turn_budget:
+        if state.turns_used >= state.turn_budget or int(state.wake_ticks) >= int(
+            state.turn_budget
+        ):
             state.status = "budget-limited"
             state.active = False
+            budget_hit = True
 
     try:
         state = mutate_goal(mutator)
+        _clear_fail_open_continues()
     except ValueError:
         return {}
     except OSError as exc:
         logger.error("Failed to persist stop-hook turn update: %s", exc)
-        # Fail-open: still try to continue based on loaded state if possible.
+        # Cap fail-open continuations to avoid unbounded free loops.
+        count = _read_fail_open_continues() + 1
+        _write_fail_open_continues(count)
+        if count > MAX_FAIL_OPEN_CONTINUES:
+            logger.error(
+                "Stop persist failures exceeded %s; fail-open empty",
+                MAX_FAIL_OPEN_CONTINUES,
+            )
+            return {}
         state = load_goal()
         if state is None or not state.active or state.status != "pursuing":
             return {}
-        # Do not invent a turn bump if persist failed; return continue prompt.
         remaining = max(0, state.turn_budget - state.turns_used)
         return _continue_followup(state, remaining)
 
     if state is None:
         return {}
 
-    if state.status == "budget-limited":
+    if state.status == "budget-limited" or budget_hit:
+        try:
+            wake_disarm(kill_loop=True)
+        except OSError as exc:
+            logger.debug("Could not disarm wake after budget limit: %s", exc)
         return _budget_limited_response(state)
 
-    remaining = state.turn_budget - state.turns_used
+    remaining = max(0, state.turn_budget - state.turns_used)
     return _continue_followup(state, remaining)
 
 
 def cmd_stop(_argv: list[str] | None = None) -> int:
     """Read Cursor stop JSON from stdin; always exit 0 with a JSON object."""
+    lock = _try_acquire_singleflight()
+    if lock is None:
+        return emit_empty()
     try:
-        raw = sys.stdin.read(MAX_STDIN_BYTES + 1)
-    except OSError as exc:
-        logger.error("Failed to read stdin: %s", exc)
-        return emit_empty()
+        try:
+            raw = sys.stdin.read(MAX_STDIN_BYTES + 1)
+        except OSError as exc:
+            logger.error("Failed to read stdin: %s", exc)
+            return emit_empty()
 
-    if len(raw) > MAX_STDIN_BYTES:
-        logger.error("Stop stdin exceeds %s bytes; fail-open", MAX_STDIN_BYTES)
-        return emit_empty()
+        if len(raw) > MAX_STDIN_BYTES:
+            logger.error("Stop stdin exceeds %s bytes; fail-open", MAX_STDIN_BYTES)
+            return emit_empty()
 
-    if not raw.strip():
-        return emit_empty()
+        if not raw.strip():
+            return emit_empty()
 
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        logger.error("Invalid stop JSON: %s", exc)
-        return emit_empty()
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            logger.error("Invalid stop JSON: %s", exc)
+            return emit_empty()
 
-    try:
-        response = handle_stop(payload if isinstance(payload, dict) else None)
-    except Exception as exc:  # noqa: BLE001 — fail-open for stop hook
-        logger.error("Unhandled stop error: %s", exc)
-        return emit_empty()
+        try:
+            response = handle_stop(payload if isinstance(payload, dict) else None)
+        except Exception as exc:  # noqa: BLE001 — fail-open for stop hook
+            logger.error("Unhandled stop error: %s", exc)
+            return emit_empty()
 
-    emit(response if isinstance(response, dict) else {})
-    return 0
+        emit(response if isinstance(response, dict) else {})
+        return 0
+    finally:
+        _release_singleflight(lock)

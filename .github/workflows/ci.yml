@@ -49,6 +49,9 @@ jobs:
       - name: ShellCheck
         run: |
           shellcheck --severity=warning scripts/*.sh
+          if [ -f .cursor/skills/goal/scripts/wake_loop.sh ]; then
+            shellcheck --severity=warning .cursor/skills/goal/scripts/wake_loop.sh
+          fi
       - name: Unix install smoke
         if: matrix.python-version == '3.12'
         run: bash scripts/install-smoke.sh

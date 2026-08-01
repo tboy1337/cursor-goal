@@ -20,7 +20,9 @@ def wake_on(goal_home: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return goal_home
 
 
-def test_wake_disabled_skips_arm(goal_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_wake_disabled_skips_arm(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("CURSOR_GOAL_WAKE", "0")
     assert wake_mod.arm() == {}
     code, out, _err = run_cli("wake", "arm")
@@ -163,14 +165,14 @@ def test_wake_loop_exits_when_disarmed(
 
     def fake_sleep(seconds: float) -> None:
         sleeps.append(seconds)
-        # After first sleep, clear wake.json so loop exits.
+        # After first sleep slice, clear wake.json so loop exits.
         if len(sleeps) == 1:
             wake_mod.disarm(kill_loop=False)
 
     monkeypatch.setattr(wake_mod.time, "sleep", fake_sleep)
     code = wake_mod.run_loop(interval=5)
     assert code == 0
-    assert sleeps == [5]
+    assert sleeps  # interruptible sleep uses slices
     assert not (wake_on / "wake.pid").is_file()
 
 
@@ -237,7 +239,9 @@ def test_interval_empty_env_uses_default(
     wake_on: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("CURSOR_GOAL_WAKE_INTERVAL_S", "")
-    assert wake_mod._interval_from_env_or(45) == 45
+    assert wake_mod._interval_from_env_or(wake_mod.DEFAULT_INTERVAL_S) == (
+        wake_mod.DEFAULT_INTERVAL_S
+    )
 
 
 def test_read_wake_config_corrupt_and_non_dict(wake_on: Path) -> None:
@@ -286,12 +290,31 @@ def test_kill_pid_dead_and_oserror(
     wake_mod._kill_pid(999999)
 
     monkeypatch.setattr(wake_mod, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(wake_mod, "_windows_pid_looks_owned", lambda _pid: True)
 
-    def boom(_pid: int, _sig: int) -> None:
-        raise OSError("denied")
+    if wake_mod.os.name == "nt":
+        calls: list[list[str]] = []
 
-    monkeypatch.setattr(wake_mod.os, "kill", boom)
-    wake_mod._kill_pid(4242)
+        def fake_run(cmd: list[str], **_kwargs: object) -> object:
+            calls.append(list(cmd))
+
+            class Result:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+
+            return Result()
+
+        monkeypatch.setattr(wake_mod.subprocess, "run", fake_run)
+        wake_mod._kill_pid(4242)
+        assert calls and calls[0][0] == "taskkill"
+    else:
+
+        def boom(_pid: int, _sig: int) -> None:
+            raise OSError("denied")
+
+        monkeypatch.setattr(wake_mod.os, "kill", boom)
+        wake_mod._kill_pid(4242)
 
 
 def test_followup_prompt_without_goal(wake_on: Path) -> None:
@@ -306,9 +329,7 @@ def test_tick_when_wake_disabled(
     assert wake_mod.tick() == 0
 
 
-def test_run_loop_when_disabled(
-    wake_on: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_loop_when_disabled(wake_on: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CURSOR_GOAL_WAKE", "0")
     assert wake_mod.run_loop() == 0
 
@@ -380,7 +401,8 @@ def test_disarm_kills_foreign_pid(
     wake_mod._write_pid(999001)
     killed: list[int] = []
 
-    def fake_kill(pid: int) -> None:
+    def fake_kill(pid: int, *, token: str | None = None) -> None:
+        del token
         killed.append(pid)
 
     monkeypatch.setattr(wake_mod, "_kill_pid", fake_kill)
@@ -422,3 +444,257 @@ def test_wake_loop_missing_interval_value(wake_on: Path) -> None:
     code, _out, err = run_cli("wake", "loop", "--interval")
     assert code == 1
     assert "requires" in err.lower()
+
+
+def test_wake_arm_includes_token(wake_on: Path) -> None:
+    config = wake_mod.arm(interval=5)
+    assert "token" in config and len(config["token"]) >= 8
+    data = json.loads((wake_on / "wake.json").read_text(encoding="utf-8"))
+    assert data["token"] == config["token"]
+
+
+def test_clear_pid_skips_other_owner(wake_on: Path) -> None:
+    wake_mod._write_pid_record(111, "token-a")
+    wake_mod._clear_pid(only_if_pid=222, only_if_token="token-a")
+    assert wake_mod._read_pid() == 111
+    wake_mod._clear_pid(only_if_pid=111, only_if_token="token-a")
+    assert wake_mod._read_pid() is None
+
+
+def test_wake_tick_increments_wake_ticks(wake_on: Path) -> None:
+    assert run_cli("manage", "create", "tick budget", "--budget", "3")[0] == 0
+    assert run_cli("wake", "tick")[0] == 0
+    from tests.conftest import load_goal_json
+
+    data = load_goal_json(wake_on)
+    assert data["wake_ticks"] == 1
+    assert data["status"] == "pursuing"
+
+
+def test_wake_ticks_hit_budget(wake_on: Path) -> None:
+    assert run_cli("manage", "create", "wake budget", "--budget", "1")[0] == 0
+    code, out, _err = run_cli("wake", "tick")
+    assert code == 0
+    assert "BUDGET" in out
+    from tests.conftest import load_goal_json
+
+    data = load_goal_json(wake_on)
+    assert data["status"] == "budget-limited"
+    assert not (wake_on / "wake.json").is_file()
+
+
+def test_force_create_disarms_prior_wake(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert run_cli("manage", "create", "first")[0] == 0
+    wake_mod._write_pid(999002)
+    killed: list[int] = []
+
+    def fake_kill(pid: int, *, token: str | None = None) -> None:
+        del token
+        killed.append(pid)
+
+    monkeypatch.setattr(wake_mod, "_kill_pid", fake_kill)
+    assert run_cli("manage", "create", "second", "--force")[0] == 0
+    assert 999002 in killed
+
+
+def test_windows_kill_refuses_unowned(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(wake_mod, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(wake_mod.os, "name", "nt")
+    monkeypatch.setattr(wake_mod, "_windows_pid_looks_owned", lambda _pid: False)
+    calls: list[object] = []
+    monkeypatch.setattr(
+        wake_mod.subprocess,
+        "run",
+        lambda *_a, **_k: calls.append(1),
+    )
+    wake_mod._kill_pid(4242)
+    assert calls == []
+
+
+def test_atomic_write_cleans_tmp_on_replace_fail(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = wake_on / "atomic.txt"
+    tmp_holder: dict[str, Path] = {}
+
+    real_with_name = Path.with_name
+
+    def tracking_with_name(self: Path, name: str) -> Path:
+        result = real_with_name(self, name)
+        if name.endswith(".tmp"):
+            tmp_holder["tmp"] = result
+        return result
+
+    monkeypatch.setattr(Path, "with_name", tracking_with_name)
+
+    def boom_replace(self: Path, _target: Path) -> None:
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(Path, "replace", boom_replace)
+    with pytest.raises(OSError):
+        wake_mod._atomic_write_text(path, "hello")
+    assert "tmp" in tmp_holder
+    assert not tmp_holder["tmp"].exists()
+
+
+def test_read_pid_record_variants(wake_on: Path) -> None:
+    (wake_on / "wake.pid").write_text("", encoding="utf-8")
+    assert wake_mod._read_pid_record() is None
+    (wake_on / "wake.pid").write_text("42\n", encoding="utf-8")
+    assert wake_mod._read_pid_record() == {"pid": 42, "token": "", "started_at": ""}
+    (wake_on / "wake.pid").write_text('{"pid": "x"}\n', encoding="utf-8")
+    assert wake_mod._read_pid_record() is None
+    (wake_on / "wake.pid").write_text("[1]\n", encoding="utf-8")
+    assert wake_mod._read_pid_record() is None
+
+
+def test_clear_pid_token_mismatch(wake_on: Path) -> None:
+    wake_mod._write_pid_record(55, "tok-a")
+    wake_mod._clear_pid(only_if_pid=55, only_if_token="tok-b")
+    assert wake_mod._read_pid() == 55
+
+
+def test_windows_ownership_probe(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Res:
+        stdout = "python run_goal.py wake loop"
+        stderr = ""
+        returncode = 0
+
+    monkeypatch.setattr(wake_mod.subprocess, "run", lambda *_a, **_k: Res())
+    assert wake_mod._windows_pid_looks_owned(123) is True
+
+    class Empty:
+        stdout = ""
+        stderr = ""
+        returncode = 1
+
+    monkeypatch.setattr(wake_mod.subprocess, "run", lambda *_a, **_k: Empty())
+    assert wake_mod._windows_pid_looks_owned(123) is False
+
+    def boom(*_a: object, **_k: object) -> None:
+        raise OSError("no ps")
+
+    monkeypatch.setattr(wake_mod.subprocess, "run", boom)
+    assert wake_mod._windows_pid_looks_owned(123) is False
+
+
+def test_kill_pid_token_guards(wake_on: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(wake_mod, "_pid_alive", lambda _p: True)
+    wake_mod._write_pid_record(777, "right")
+    wake_mod._kill_pid(777, token="wrong")
+    wake_mod._write_pid_record(888, "same")
+    wake_mod._kill_pid(777, token="same")
+
+
+def test_kill_existing_loop(wake_on: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    wake_mod._write_pid_record(999003, "t")
+    killed: list[int] = []
+
+    def fake(pid: int, *, token: str | None = None) -> None:
+        del token
+        killed.append(pid)
+
+    monkeypatch.setattr(wake_mod, "_kill_pid", fake)
+    wake_mod._kill_existing_loop()
+    assert killed == [999003]
+    assert wake_mod._read_pid() is None
+
+    wake_mod._write_pid_record(wake_mod.os.getpid(), "self")
+    wake_mod._kill_existing_loop()  # skips self
+
+
+def test_record_wake_tick_errors(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(_m: object) -> None:
+        raise ValueError("inactive")
+
+    monkeypatch.setattr(wake_mod, "mutate_goal", boom)
+    monkeypatch.setattr(wake_mod, "load_goal", lambda: None)
+    assert wake_mod._record_wake_tick() is None
+
+    def boom_os(_m: object) -> None:
+        raise OSError("disk")
+
+    monkeypatch.setattr(wake_mod, "mutate_goal", boom_os)
+    assert wake_mod._record_wake_tick() is None
+
+
+def test_interruptible_sleep_token_mismatch(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wake_mod.arm(interval=5)
+    cfg = wake_mod._read_wake_config()
+    assert cfg is not None
+    monkeypatch.setattr(wake_mod.time, "sleep", lambda _s: None)
+    # Change token in file
+    cfg["token"] = "other"
+    wake_mod._write_wake_config(cfg)
+    assert wake_mod._interruptible_sleep(5.0, "original") is False
+
+
+def test_run_loop_budget_via_wake_ticks(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert run_cli("manage", "create", "loop budget", "--budget", "1")[0] == 0
+    monkeypatch.setattr(wake_mod.time, "sleep", lambda _s: None)
+    out = io.StringIO()
+    with redirect_stdout(out):
+        assert wake_mod.run_loop(interval=5) == 0
+    assert "BUDGET" in out.getvalue()
+
+
+def test_run_loop_token_replaced(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert run_cli("manage", "create", "token race")[0] == 0
+    n = {"i": 0}
+
+    def sleep(_s: float) -> None:
+        n["i"] += 1
+        if n["i"] == 1:
+            # Re-arm replaces token while loop runs
+            wake_mod.arm(interval=5)
+
+    monkeypatch.setattr(wake_mod.time, "sleep", sleep)
+    assert wake_mod.run_loop(interval=5) == 0
+
+
+def test_taskkill_oserror(wake_on: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(wake_mod, "_pid_alive", lambda _p: True)
+    monkeypatch.setattr(wake_mod.os, "name", "nt")
+    monkeypatch.setattr(wake_mod, "_windows_pid_looks_owned", lambda _p: True)
+
+    def boom(*_a: object, **_k: object) -> None:
+        raise OSError("taskkill gone")
+
+    monkeypatch.setattr(wake_mod.subprocess, "run", boom)
+    wake_mod._kill_pid(4242)
+
+
+def test_atomic_write_unlink_oserror(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = wake_on / "atomic2.txt"
+
+    def boom_replace(self: Path, _target: Path) -> None:
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(Path, "replace", boom_replace)
+
+    real_unlink = Path.unlink
+
+    def boom_unlink(self: Path, *, missing_ok: bool = False) -> None:
+        if str(self).endswith(".tmp"):
+            raise OSError("busy tmp")
+        return real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", boom_unlink)
+    with pytest.raises(OSError):
+        wake_mod._atomic_write_text(path, "x")

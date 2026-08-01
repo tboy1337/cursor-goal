@@ -21,7 +21,7 @@ py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" wake loop
    - View → Output → Hooks — look for stop exit 0 and JSON body
    - Check `%USERPROFILE%\.cursor-goal\data\last-stop-response.json` for `payload.followup_message`
    - If the file has `followup_message` but Hooks shows `{}`, that is the Cursor capture race ([research](cursor-windows-stop-hook-race.md))
-   - Wake sentinel should still fire within `CURSOR_GOAL_WAKE_INTERVAL_S` (default 45s)
+   - Wake sentinel should still fire within `CURSOR_GOAL_WAKE_INTERVAL_S` (default 15s; first tick is immediate once the loop starts)
 7. Clear:
 
 ```powershell

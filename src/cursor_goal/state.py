@@ -48,6 +48,7 @@ _UPDATABLE_FIELDS = frozenset(
         "created_at",
         "turn_budget",
         "turns_used",
+        "wake_ticks",
         "status",
         "last_reason",
         "last_validation_output",
@@ -55,6 +56,7 @@ _UPDATABLE_FIELDS = frozenset(
         "last_eval_verdict",
     }
 )
+LAST_STOP_RESPONSE_NAME = "last-stop-response.json"
 
 
 class CorruptGoalError(ValueError):
@@ -334,12 +336,22 @@ def _set_active(state: GoalState, value: Any) -> None:
     state.active = _parse_active(value)
 
 
+def _require_field_chars(name: str, value: str) -> str:
+    if len(value) > MAX_FIELD_CHARS:
+        raise ValueError(
+            f"{name} exceeds {MAX_FIELD_CHARS} character limit ({len(value)} chars)"
+        )
+    return value
+
+
 def _set_condition(state: GoalState, value: Any) -> None:
-    state.condition = str(value)
+    state.condition = _require_field_chars("condition", str(value))
 
 
 def _set_validation_command(state: GoalState, value: Any) -> None:
-    state.validation_command = str(value or "")
+    state.validation_command = _require_field_chars(
+        "validation_command", str(value or "")
+    )
 
 
 def _set_created_at(state: GoalState, value: Any) -> None:
@@ -355,6 +367,13 @@ def _set_turns_used(state: GoalState, value: Any) -> None:
     if turns < 0:
         raise ValueError(f"turns_used must be >= 0, got {turns}")
     state.turns_used = turns
+
+
+def _set_wake_ticks(state: GoalState, value: Any) -> None:
+    ticks = int(value)
+    if ticks < 0:
+        raise ValueError(f"wake_ticks must be >= 0, got {ticks}")
+    state.wake_ticks = ticks
 
 
 def _set_status(state: GoalState, value: Any) -> None:
@@ -387,6 +406,7 @@ _FIELD_SETTERS: dict[str, Callable[[GoalState, Any], None]] = {
     "created_at": _set_created_at,
     "turn_budget": _set_turn_budget,
     "turns_used": _set_turns_used,
+    "wake_ticks": _set_wake_ticks,
     "status": _set_status,
     "last_reason": _set_last_reason,
     "last_validation_output": _set_last_validation_output,
@@ -404,13 +424,14 @@ def _apply_field(state: GoalState, key: str, value: Any) -> None:
 
 
 @dataclass
-class GoalState:
+class GoalState:  # pylint: disable=too-many-instance-attributes
     active: bool = True
     condition: str = ""
     validation_command: str = ""
     created_at: str = ""
     turn_budget: int = 20
     turns_used: int = 0
+    wake_ticks: int = 0
     status: str = "pursuing"
     last_reason: str = ""
     last_validation_output: str = ""
@@ -424,15 +445,35 @@ class GoalState:
         return data
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> GoalState:
+    def from_dict(  # pylint: disable=too-many-branches
+        cls, data: dict[str, Any]
+    ) -> GoalState:
         try:
             turn_budget = clamp_turn_budget(int(data.get("turn_budget", 20)))
             turns_used = int(data.get("turns_used", 0))
+            wake_ticks = int(data.get("wake_ticks", 0))
             schema_version = int(data.get("schema_version", 1))
         except (TypeError, ValueError) as exc:
             raise ValueError(f"invalid goal.json numeric fields: {exc}") from exc
         if turns_used < 0:
             raise ValueError(f"turns_used must be >= 0, got {turns_used}")
+        if wake_ticks < 0:
+            raise ValueError(f"wake_ticks must be >= 0, got {wake_ticks}")
+        # Clamp counters that exceed budget (corrupt / race) into budget-limited.
+        if turns_used > turn_budget:
+            logger.warning(
+                "turns_used %s > turn_budget %s; clamping",
+                turns_used,
+                turn_budget,
+            )
+            turns_used = turn_budget
+        if wake_ticks > turn_budget:
+            logger.warning(
+                "wake_ticks %s > turn_budget %s; clamping",
+                wake_ticks,
+                turn_budget,
+            )
+            wake_ticks = turn_budget
         if schema_version not in SUPPORTED_SCHEMA_VERSIONS:
             raise ValueError(
                 f"unsupported schema_version={schema_version}; "
@@ -453,13 +494,25 @@ class GoalState:
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
         status = _parse_status(data.get("status", "unknown"))
+        condition = _require_field_chars("condition", str(data.get("condition", "")))
+        validation_command = _require_field_chars(
+            "validation_command", str(data.get("validation_command") or "")
+        )
+        if (
+            status == "pursuing"
+            and active
+            and (turns_used >= turn_budget or wake_ticks >= turn_budget)
+        ):
+            status = "budget-limited"
+            active = False
         return cls(
             active=active,
-            condition=str(data.get("condition", "")),
-            validation_command=str(data.get("validation_command") or ""),
+            condition=condition,
+            validation_command=validation_command,
             created_at=str(data.get("created_at", "")),
             turn_budget=turn_budget,
             turns_used=turns_used,
+            wake_ticks=wake_ticks,
             status=status,
             last_reason=str(data.get("last_reason") or ""),
             last_validation_output=str(data.get("last_validation_output") or ""),
@@ -578,6 +631,15 @@ def mutate_goal(mutator: Callable[[GoalState], None]) -> GoalState | None:
         return state
 
 
+def clear_last_stop_response() -> None:
+    """Best-effort remove last-stop-response.json diagnostic file."""
+    path = data_dir(check_writable=False) / LAST_STOP_RESPONSE_NAME
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.debug("Could not remove %s: %s", LAST_STOP_RESPONSE_NAME, exc)
+
+
 def clear_goal_files() -> bool:
     """Remove goal.json and eval signal under lock. Returns True if goal existed."""
     with goal_lock():
@@ -588,6 +650,7 @@ def clear_goal_files() -> bool:
         flag = eval_flag_path()
         if flag.exists():
             flag.unlink()
+        clear_last_stop_response()
         if existed:
             logger.info("Cleared goal and evaluator signal")
         else:

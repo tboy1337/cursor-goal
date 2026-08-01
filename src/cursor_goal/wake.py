@@ -4,13 +4,18 @@ Cursor's stop-hook stdout capture can drop ``followup_message``. This module
 arms a background loop that emits ``AGENT_GOAL_WAKE`` while a goal is
 ``pursuing``. Agents start ``wake loop`` with ``notify_on_output`` matching
 ``^AGENT_GOAL_WAKE`` (same pattern as Cursor's ``/loop`` skill).
+
+Ownership uses a generation token shared by ``wake.json`` and ``wake.pid`` so
+restarts cannot leave orphan loops or clear a newer loop's PID file.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import secrets
 import signal
+import subprocess  # nosec B404 — taskkill / ownership checks only
 import sys
 import time
 from datetime import datetime, timezone
@@ -18,16 +23,23 @@ from pathlib import Path
 from typing import Any
 
 from cursor_goal.logging_config import get_logger
-from cursor_goal.state import data_dir, load_goal
+from cursor_goal.state import (
+    GoalState,
+    _chmod_private,
+    data_dir,
+    load_goal,
+    mutate_goal,
+)
 
 logger = get_logger("cursor_goal.wake")
 
 WAKE_JSON_NAME = "wake.json"
 WAKE_PID_NAME = "wake.pid"
 SENTINEL_PREFIX = "AGENT_GOAL_WAKE"
-DEFAULT_INTERVAL_S = 45
+DEFAULT_INTERVAL_S = 15
 MIN_INTERVAL_S = 5
 MAX_INTERVAL_S = 600
+SLEEP_SLICE_S = 0.5
 
 
 def wake_enabled() -> bool:
@@ -54,6 +66,11 @@ def _interval_from_env_or(default: int) -> int:
 
 def _clamp_interval(value: int) -> int:
     if value < MIN_INTERVAL_S:
+        logger.warning(
+            "Wake interval %s below min %s; clamping",
+            value,
+            MIN_INTERVAL_S,
+        )
         return MIN_INTERVAL_S
     if value > MAX_INTERVAL_S:
         logger.warning(
@@ -77,6 +94,23 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write text via temp file + replace; apply private mode bits."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(path)
+    except Exception:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+        raise
+    _chmod_private(path)
+
+
 def _read_wake_config() -> dict[str, Any] | None:
     path = wake_json_path()
     if not path.is_file():
@@ -92,10 +126,9 @@ def _read_wake_config() -> dict[str, Any] | None:
 
 
 def _write_wake_config(config: dict[str, Any]) -> None:
-    path = wake_json_path()
-    path.write_text(
+    _atomic_write_text(
+        wake_json_path(),
         json.dumps(config, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
     )
 
 
@@ -113,30 +146,121 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def _read_pid() -> int | None:
+def _read_pid_record() -> (  # pylint: disable=too-many-return-statements
+    dict[str, Any] | None
+):
+    """Return ``{pid, token, started_at}`` or None. Accepts legacy plain-int files."""
     path = wake_pid_path()
     if not path.is_file():
         return None
     try:
         raw = path.read_text(encoding="utf-8").strip()
-        return int(raw)
-    except (OSError, ValueError):
+    except OSError:
         return None
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        try:
+            return {"pid": int(raw), "token": "", "started_at": ""}
+        except ValueError:
+            return None
+    if isinstance(data, int):
+        return {"pid": int(data), "token": "", "started_at": ""}
+    if isinstance(data, dict) and "pid" in data:
+        try:
+            return {
+                "pid": int(data["pid"]),
+                "token": str(data.get("token") or ""),
+                "started_at": str(data.get("started_at") or ""),
+            }
+        except (TypeError, ValueError):
+            return None
+    return None
 
 
-def _write_pid(pid: int) -> None:
-    wake_pid_path().write_text(f"{pid}\n", encoding="utf-8")
+def _read_pid() -> int | None:
+    record = _read_pid_record()
+    if record is None:
+        return None
+    return int(record["pid"])
 
 
-def _clear_pid() -> None:
+def _write_pid_record(pid: int, token: str) -> None:
+    payload = {
+        "pid": pid,
+        "token": token,
+        "started_at": _now_iso(),
+    }
+    _atomic_write_text(
+        wake_pid_path(),
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+    )
+
+
+def _write_pid(pid: int, token: str = "") -> None:
+    """Write pid ownership record (tests may omit token)."""
+    _write_pid_record(pid, token or secrets.token_hex(8))
+
+
+def _clear_pid(
+    *, only_if_pid: int | None = None, only_if_token: str | None = None
+) -> None:
+    """Remove wake.pid; optionally only when ownership still matches."""
     path = wake_pid_path()
+    if only_if_pid is not None or only_if_token is not None:
+        record = _read_pid_record()
+        if record is None:
+            return
+        if only_if_pid is not None and int(record["pid"]) != only_if_pid:
+            logger.debug(
+                "Skipping clear of wake.pid (pid %s != %s)",
+                record["pid"],
+                only_if_pid,
+            )
+            return
+        if only_if_token is not None and str(record.get("token") or "") != (
+            only_if_token
+        ):
+            logger.debug("Skipping clear of wake.pid (token mismatch)")
+            return
     try:
         path.unlink(missing_ok=True)
     except OSError as exc:
         logger.debug("Could not remove wake pid file: %s", exc)
 
 
-def _kill_pid(pid: int) -> None:
+def _windows_pid_looks_owned(pid: int) -> bool:
+    """Best-effort: confirm PID exists and command line mentions wake/goal."""
+    try:
+        completed = subprocess.run(  # nosec B603 B607 — fixed powershell args
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                (
+                    f'(Get-CimInstance Win32_Process -Filter "ProcessId={int(pid)}")'
+                    f".CommandLine"
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.debug("Windows ownership probe failed for pid=%s: %s", pid, exc)
+        return False
+    cmdline = (completed.stdout or "").strip().lower()
+    if not cmdline:
+        return False
+    markers = ("cursor_goal", "cursor-goal", "wake", "run_goal.py")
+    return any(marker in cmdline for marker in markers)
+
+
+def _kill_pid(pid: int, *, token: str | None = None) -> None:
+    """Signal a wake loop process. On Windows, verify ownership before taskkill."""
     if pid <= 0:
         return
     if pid == os.getpid():
@@ -144,10 +268,57 @@ def _kill_pid(pid: int) -> None:
         return
     if not _pid_alive(pid):
         return
-    try:
+
+    record = _read_pid_record()
+    if token is not None and record is not None:
+        stored = str(record.get("token") or "")
+        if stored and stored != token:
+            logger.warning("Refusing to kill pid=%s: wake token mismatch", pid)
+            return
+        if int(record.get("pid", -1)) != pid:
+            logger.warning(
+                "Refusing to kill pid=%s: wake.pid points elsewhere",
+                pid,
+            )
+            return
+
+    if os.name == "nt":
+        if not _windows_pid_looks_owned(pid):
+            logger.warning(
+                "Refusing Windows kill of pid=%s: ownership check failed "
+                "(possible PID reuse)",
+                pid,
+            )
+            return
+        try:
+            subprocess.run(  # nosec B603 B607 — taskkill with integer PID only
+                ["taskkill", "/PID", str(int(pid)), "/T", "/F"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            logger.debug("taskkill failed for pid %s: %s", pid, exc)
+        return
+
+    try:  # pragma: no cover — SIGTERM path covered on Unix CI
         os.kill(pid, signal.SIGTERM)
-    except OSError as exc:
+    except OSError as exc:  # pragma: no cover
         logger.debug("Could not signal wake pid %s: %s", pid, exc)
+
+
+def _kill_existing_loop() -> None:
+    """Stop any previously recorded wake loop before taking ownership."""
+    record = _read_pid_record()
+    if record is None:
+        return
+    pid = int(record["pid"])
+    token = str(record.get("token") or "")
+    if pid == os.getpid():
+        return
+    _kill_pid(pid, token=token or None)
+    _clear_pid()
 
 
 def _goal_is_pursuing() -> bool:
@@ -165,12 +336,40 @@ def _followup_prompt() -> str:
             "Evaluate completion via subagent when ready."
         )
     remaining = max(0, state.turn_budget - state.turns_used)
+    wake_ticks = int(getattr(state, "wake_ticks", 0) or 0)
     return (
         f"[GOAL] Turn {state.turns_used}/{state.turn_budget} "
-        f"({remaining} remaining). Continue working toward: {state.condition}. "
+        f"({remaining} remaining, wake_ticks={wake_ticks}). "
+        f"Continue working toward: {state.condition}. "
         "Evaluate completion via subagent when ready. "
         "(Wake watchdog — stop-hook followup may have been dropped.)"
     )
+
+
+def _budget_exhausted(state: GoalState) -> bool:
+    return int(state.turns_used) >= int(state.turn_budget) or int(
+        state.wake_ticks
+    ) >= int(state.turn_budget)
+
+
+def _record_wake_tick() -> GoalState | None:
+    """Increment wake_ticks; mark budget-limited when exhausted. Returns state."""
+
+    def mutator(state: GoalState) -> None:
+        if not state.active or state.status != "pursuing":
+            raise ValueError("inactive")
+        state.wake_ticks = int(state.wake_ticks) + 1
+        if _budget_exhausted(state):
+            state.status = "budget-limited"
+            state.active = False
+
+    try:
+        return mutate_goal(mutator)
+    except ValueError:
+        return load_goal()
+    except OSError as exc:
+        logger.error("Failed to persist wake_ticks: %s", exc)
+        return load_goal()
 
 
 def emit_wake_line(prompt: str | None = None) -> None:
@@ -190,29 +389,35 @@ def arm(*, interval: int | None = None) -> dict[str, Any]:
         seconds = _clamp_interval(interval)
     else:
         seconds = _interval_from_env_or(DEFAULT_INTERVAL_S)
+    token = secrets.token_hex(8)
     config: dict[str, Any] = {
         "armed_at": _now_iso(),
         "interval_s": seconds,
         "sentinel": SENTINEL_PREFIX,
         "notify_pattern": f"^{SENTINEL_PREFIX}",
+        "token": token,
     }
     _write_wake_config(config)
-    logger.info("Wake armed interval_s=%s", seconds)
+    logger.info("Wake armed interval_s=%s token=%s", seconds, token[:8])
     return config
 
 
 def disarm(*, kill_loop: bool = True) -> bool:
     """Remove wake state; optionally signal the loop process. Returns True if armed."""
     existed = wake_json_path().is_file() or wake_pid_path().is_file()
-    if kill_loop:
-        pid = _read_pid()
-        if pid is not None:
-            _kill_pid(pid)
-    _clear_pid()
+    # Clear config first so a running loop exits on next slice check.
     try:
         wake_json_path().unlink(missing_ok=True)
     except OSError as exc:
         logger.debug("Could not remove wake.json: %s", exc)
+    if kill_loop:
+        record = _read_pid_record()
+        if record is not None:
+            _kill_pid(
+                int(record["pid"]),
+                token=str(record.get("token") or "") or None,
+            )
+    _clear_pid()
     if existed:
         logger.info("Wake disarmed")
     return existed
@@ -224,8 +429,6 @@ def tick() -> int:
         return 0
     config = _read_wake_config()
     if config is None:
-        # Not armed via wake.json — still allow one-shot tick if pursuing
-        # so scripts can probe without arm (no-op when idle).
         if not _goal_is_pursuing():
             return 0
         emit_wake_line()
@@ -236,6 +439,15 @@ def tick() -> int:
         disarm(kill_loop=False)
         return 0
 
+    state = _record_wake_tick()
+    if state is not None and state.status == "budget-limited":
+        emit_wake_line(
+            f"[GOAL BUDGET] Wake tick limit ({state.turn_budget}) reached. "
+            f"Wrap up current work and summarize progress toward: {state.condition}"
+        )
+        disarm(kill_loop=True)
+        return 0
+
     emit_wake_line()
     return 0
 
@@ -243,12 +455,14 @@ def tick() -> int:
 def status_report() -> dict[str, Any]:
     """Return wake status as a JSON-serializable dict."""
     config = _read_wake_config()
-    pid = _read_pid()
+    record = _read_pid_record()
+    pid = int(record["pid"]) if record is not None else None
     return {
         "enabled": wake_enabled(),
         "armed": config is not None,
         "config": config,
         "pid": pid,
+        "token": (record or {}).get("token") if record else None,
         "pid_alive": _pid_alive(pid) if pid is not None else False,
         "goal_pursuing": _goal_is_pursuing(),
         "sentinel": SENTINEL_PREFIX,
@@ -256,40 +470,79 @@ def status_report() -> dict[str, Any]:
     }
 
 
+def _interruptible_sleep(seconds: float, token: str) -> bool:
+    """Sleep in slices; return False if config cleared or token mismatch."""
+    deadline = time.monotonic() + max(0.0, seconds)
+    while time.monotonic() < deadline:
+        config = _read_wake_config()
+        if config is None:
+            return False
+        if str(config.get("token") or "") != token:
+            logger.info("Wake loop: token mismatch; exiting")
+            return False
+        remaining = deadline - time.monotonic()
+        time.sleep(min(SLEEP_SLICE_S, max(0.0, remaining)))
+    return True
+
+
 def run_loop(*, interval: int | None = None) -> int:
-    """Block: sleep/tick until disarmed or goal leaves pursuing."""
+    """Block: emit immediately, then sleep/tick until disarmed or not pursuing."""
     if not wake_enabled():
         print("[goal] Wake disabled (CURSOR_GOAL_WAKE=0).", file=sys.stderr)
         return 0
 
+    _kill_existing_loop()
     config = arm(interval=interval)
     if not config:
         return 0
 
     seconds = int(config["interval_s"])
-    _write_pid(os.getpid())
-    logger.info("Wake loop started pid=%s interval_s=%s", os.getpid(), seconds)
+    token = str(config["token"])
+    my_pid = os.getpid()
+    _write_pid_record(my_pid, token)
+    logger.info(
+        "Wake loop started pid=%s interval_s=%s token=%s",
+        my_pid,
+        seconds,
+        token[:8],
+    )
     print(
-        f"[goal] Wake loop running (pid={os.getpid()}, every {seconds}s). "
+        f"[goal] Wake loop running (pid={my_pid}, every {seconds}s). "
         f"Notify pattern: ^{SENTINEL_PREFIX}",
         file=sys.stderr,
     )
 
     try:
         while True:
-            time.sleep(seconds)
             if _read_wake_config() is None:
                 logger.info("Wake loop: config cleared; exiting")
+                break
+            cfg = _read_wake_config()
+            if cfg is None or str(cfg.get("token") or "") != token:
+                logger.info("Wake loop: token/config gone; exiting")
                 break
             if not _goal_is_pursuing():
                 logger.info("Wake loop: goal not pursuing; exiting")
                 disarm(kill_loop=False)
                 break
+
+            state = _record_wake_tick()
+            if state is not None and state.status == "budget-limited":
+                emit_wake_line(
+                    f"[GOAL BUDGET] Wake tick limit ({state.turn_budget}) reached. "
+                    f"Wrap up current work and summarize progress toward: "
+                    f"{state.condition}"
+                )
+                disarm(kill_loop=False)
+                break
+
             emit_wake_line()
+            if not _interruptible_sleep(float(seconds), token):
+                break
     except KeyboardInterrupt:
         print("[goal] Wake loop interrupted.", file=sys.stderr)
     finally:
-        _clear_pid()
+        _clear_pid(only_if_pid=my_pid, only_if_token=token)
     return 0
 
 
@@ -316,7 +569,10 @@ def _parse_interval_flag(argv: list[str]) -> tuple[int | None, list[str]]:
     return interval, rest
 
 
-def cmd_wake(argv: list[str]) -> int:
+# pylint: disable-next=too-many-return-statements,too-many-branches
+def cmd_wake(
+    argv: list[str],
+) -> int:
     """CLI: wake arm|tick|disarm|status|loop."""
     if not argv or argv[0] in {"-h", "--help", "help"}:
         _print_help()
@@ -393,7 +649,10 @@ def cmd_wake(argv: list[str]) -> int:
 
 def _print_help() -> None:
     print("Usage: cursor-goal wake <command> [args...]")
-    print("  arm [--interval N]   Write wake.json (default interval 45s)")
+    print(
+        f"  arm [--interval N]   Write wake.json "
+        f"(default interval {DEFAULT_INTERVAL_S}s)"
+    )
     print("  tick                 Emit AGENT_GOAL_WAKE if goal is pursuing")
     print("  disarm               Stop loop (if any) and clear wake state")
     print("  status               Print wake status JSON")

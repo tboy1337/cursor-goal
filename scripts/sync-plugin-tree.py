@@ -96,18 +96,27 @@ def write_plugin(root: Path) -> Path:
                 "set PYTHONUNBUFFERED=1",
                 "where py >nul 2>&1",
                 "if %ERRORLEVEL%==0 (",
-                '  py -3 -u "%~dp0stop_hook.py"',
-                "  exit /b %ERRORLEVEL%",
+                '  py -3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)" >nul 2>&1',
+                "  if %ERRORLEVEL%==0 (",
+                '    py -3 -u "%~dp0stop_hook.py"',
+                "    exit /b %ERRORLEVEL%",
+                "  )",
                 ")",
                 "where python >nul 2>&1",
                 "if %ERRORLEVEL%==0 (",
-                '  python -u "%~dp0stop_hook.py"',
-                "  exit /b %ERRORLEVEL%",
+                '  python -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)" >nul 2>&1',
+                "  if %ERRORLEVEL%==0 (",
+                '    python -u "%~dp0stop_hook.py"',
+                "    exit /b %ERRORLEVEL%",
+                "  )",
                 ")",
                 "where python3 >nul 2>&1",
                 "if %ERRORLEVEL%==0 (",
-                '  python3 -u "%~dp0stop_hook.py"',
-                "  exit /b %ERRORLEVEL%",
+                '  python3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)" >nul 2>&1',
+                "  if %ERRORLEVEL%==0 (",
+                '    python3 -u "%~dp0stop_hook.py"',
+                "    exit /b %ERRORLEVEL%",
+                "  )",
                 ")",
                 "echo [cursor-goal] Python 3.12+ not found on PATH >&2",
                 "exit /b 1",
@@ -123,21 +132,27 @@ def write_plugin(root: Path) -> Path:
     shutil.copy2(agents_src / "goalKeeper.md", agents_dest / "goalKeeper.md")
     shutil.copy2(agents_src / "goal-evaluator.md", agents_dest / "goal-evaluator.md")
 
+    plugin_root_var = "${CURSOR_PLUGIN_ROOT}/skills/goal/scripts"
     hooks = {
         "version": 1,
         "hooks": {
             "stop": [
                 {
-                    # Prefer python3 on Unix; Windows plugin users should use
-                    # stop_hook.cmd via the alternate entry below or ensure python on PATH.
                     "command": (
-                        "python3 -u "
-                        "${CURSOR_PLUGIN_ROOT}/skills/goal/scripts/stop_hook.py"
+                        f'cmd /c "{plugin_root_var}/stop_hook.cmd"'
                     ),
                     "loop_limit": None,
                     "timeout": 30,
                     "_cursor_goal": MARKER,
-                }
+                },
+                {
+                    "command": (
+                        f"python3 -u {plugin_root_var}/stop_hook.py"
+                    ),
+                    "loop_limit": None,
+                    "timeout": 30,
+                    "_cursor_goal": MARKER,
+                },
             ]
         },
     }
@@ -198,12 +213,12 @@ def write_plugin(root: Path) -> Path:
         "Individuals: prefer `scripts/install-goal.sh` / `install-goal.ps1` "
         "from a full clone or GitHub Release.\n\n"
         f"Version: **{version}** (AGPL-3.0-only).\n\n"
-        "Stop hook uses `${CURSOR_PLUGIN_ROOT}` and `python3` on PATH "
-        "(Unix/Teams-oriented). On native Windows prefer `install-goal.ps1`, "
-        "which writes `stop_hook.cmd` with an absolute interpreter. "
-        "Also ships a wake watchdog (`wake loop` / `AGENT_GOAL_WAKE`) for "
-        "continuation when Cursor drops stop-hook stdout. "
-        "In-turn evaluation remains primary; the stop hook is a safety net.\n",
+        "Marketplace stop hooks register both `stop_hook.cmd` (Windows) and "
+        "`python3 …/stop_hook.py` (Unix). A singleflight lock ensures only one "
+        "emits `followup_message`. Also ships a wake watchdog "
+        "(`wake loop` / `AGENT_GOAL_WAKE`) for continuation when Cursor drops "
+        "stop-hook stdout. In-turn evaluation remains primary; the stop hook "
+        "is a safety net.\n",
         encoding="utf-8",
     )
     return plugin_root
@@ -218,6 +233,7 @@ def _files_to_compare(plugin_root: Path) -> list[Path]:
         "skills/goal/scripts/stop_hook.py",
         "skills/goal/scripts/stop_hook.cmd",
         "skills/goal/scripts/wake_loop.cmd",
+        "skills/goal/scripts/wake_loop.sh",
         "skills/goal/VERSION",
         "agents/goalKeeper.md",
         "agents/goal-evaluator.md",

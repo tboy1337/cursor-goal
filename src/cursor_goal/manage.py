@@ -127,12 +127,18 @@ def cmd_create(argv: list[str]) -> int:
         created_at=now_iso(),
         turn_budget=clamp_turn_budget(args.budget),
         turns_used=0,
+        wake_ticks=0,
         status="pursuing",
         last_reason="",
         last_validation_output="",
         last_validation_exit_code=None,
         last_eval_verdict="",
     )
+    if args.force:
+        try:
+            wake_disarm(kill_loop=True)
+        except OSError as exc:
+            logger.warning("Could not disarm prior wake before force create: %s", exc)
     try:
         created, status = create_goal_atomic(state, force=args.force)
     except GoalLockTimeoutError as exc:
@@ -191,6 +197,7 @@ def cmd_status(_argv: list[str]) -> int:
     print(f"  Status: {state.status}")
     print(f"  Condition: {state.condition}")
     print(f"  Progress: {state.turns_used} / {state.turn_budget} turns")
+    print(f"  Wake ticks: {state.wake_ticks} / {state.turn_budget}")
     if state.validation_command:
         print(f"  Validation: {redact_command(state.validation_command)}")
         if state.last_validation_exit_code is not None:

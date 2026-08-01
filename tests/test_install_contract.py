@@ -185,13 +185,19 @@ def test_plugin_manifests_and_hooks_contract() -> None:
     assert market_data["plugins"][0]["source"] == "cursor-goal"
     assert market_data["plugins"][0]["version"] == __version__
     hooks_data = json.loads(hooks.read_text(encoding="utf-8"))
-    stop = hooks_data["hooks"]["stop"][0]
-    assert "${CURSOR_PLUGIN_ROOT}" in stop["command"]
-    assert stop["loop_limit"] is None
-    assert stop["_cursor_goal"] == HOOK_MARKER
+    stop_list = hooks_data["hooks"]["stop"]
+    assert isinstance(stop_list, list) and len(stop_list) == 2
+    cmds = [entry["command"] for entry in stop_list]
+    assert any("stop_hook.cmd" in c for c in cmds)
+    assert any("stop_hook.py" in c and "python3" in c for c in cmds)
+    for entry in stop_list:
+        assert "${CURSOR_PLUGIN_ROOT}" in entry["command"]
+        assert entry["loop_limit"] is None
+        assert entry["_cursor_goal"] == HOOK_MARKER
     assert (plugin / "skills" / "goal" / "cursor_goal" / "__init__.py").is_file()
     assert (plugin / "agents" / "goalKeeper.md").is_file()
     assert (plugin / "skills" / "goal" / "scripts" / "stop_hook.cmd").is_file()
+    assert (plugin / "skills" / "goal" / "scripts" / "wake_loop.sh").is_file()
 
 
 def test_sync_plugin_tree_check() -> None:

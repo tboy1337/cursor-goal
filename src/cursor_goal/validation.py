@@ -74,7 +74,7 @@ def deny_shell_enabled() -> bool:
 
 def try_split_argv(command: str) -> list[str] | None:
     """Best-effort split for simple commands without shell metacharacters."""
-    meta = ("|", "&", ";", ">", "<", "`", "\n", "$(")
+    meta = ("|", "&", ";", ">", "<", "`", "\n", "$(", "${")
     if any(ch in command for ch in meta):
         return None
     if os.name == "nt" and any(ch in command for ch in ("%", "^")):

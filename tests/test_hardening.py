@@ -350,6 +350,41 @@ def test_create_rejects_long_validation_command(goal_home: Path) -> None:
     assert "validation command exceeds" in err
 
 
+def test_from_dict_rejects_oversized_condition(goal_home: Path) -> None:
+    from cursor_goal.state import MAX_FIELD_CHARS, GoalState
+
+    with pytest.raises(ValueError, match="condition exceeds"):
+        GoalState.from_dict(
+            {
+                "active": True,
+                "condition": "c" * (MAX_FIELD_CHARS + 1),
+                "turn_budget": 5,
+                "turns_used": 0,
+                "status": "pursuing",
+                "schema_version": 2,
+            }
+        )
+
+
+def test_from_dict_clamps_turns_over_budget(goal_home: Path) -> None:
+    from cursor_goal.state import GoalState
+
+    state = GoalState.from_dict(
+        {
+            "active": True,
+            "condition": "ok",
+            "turn_budget": 3,
+            "turns_used": 99,
+            "wake_ticks": 0,
+            "status": "pursuing",
+            "schema_version": 2,
+        }
+    )
+    assert state.turns_used == 3
+    assert state.status == "budget-limited"
+    assert state.active is False
+
+
 def test_quarantine_corrupt_goal(goal_home: Path) -> None:
     (goal_home / "goal.json").write_text("{not-json", encoding="utf-8")
     assert load_goal() is None

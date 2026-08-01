@@ -168,11 +168,14 @@ When you see a `[GOAL]` prefix, resume working toward the condition immediately.
 
 ## Wake Watchdog (race-immune continuation)
 
-Cursor may drop stop-hook stdout (see repo `docs/cursor-windows-stop-hook-race.md`). `manage create` / `resume` arms wake state. After creating or resuming a goal:
+Cursor may drop stop-hook stdout (see repo `docs/cursor-windows-stop-hook-race.md`). `manage create` / `resume` arms wake state.
+
+**Blocking checklist after every create/resume** (do not skip):
 
 1. Start `wake loop` in a **background** Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE`.
-2. On wake: read the sentinel JSON `prompt`, check `manage status`, continue if still `pursuing`.
-3. `manage done` / `pause` / `clear` disarms automatically. Disable with `CURSOR_GOAL_WAKE=0`.
+2. Run `wake status` and confirm `pid_alive` is true (and `armed` is true).
+3. On wake: read the sentinel JSON `prompt`, check `manage status`, continue if still `pursuing`.
+4. `manage done` / `pause` / `clear` disarms automatically. Disable with `CURSOR_GOAL_WAKE=0`.
 
 **Unix:**
 
@@ -186,11 +189,11 @@ python3 -u ~/.cursor/skills/goal/scripts/run_goal.py wake loop
 py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" wake loop
 ```
 
-Interval: `CURSOR_GOAL_WAKE_INTERVAL_S` (default 45, min 5, max 600).
+Interval: `CURSOR_GOAL_WAKE_INTERVAL_S` (default 15, min 5, max 600). Budget also counts `wake_ticks` (each armed tick); either turns or wake ticks can hit `budget-limited`.
 
 ## Turn Budget
 
-Default budget is 20 turns (max 500). Customize with `--budget N` or natural language (`stop after 10 turns`). When exhausted, status becomes `budget-limited` and you wrap up.
+Default budget is 20 turns (max 500). Customize with `--budget N` or natural language (`stop after 10 turns`). Exhausted when `turns_used` **or** `wake_ticks` reaches the budget → `budget-limited`.
 
 ## Writing Good Conditions
 

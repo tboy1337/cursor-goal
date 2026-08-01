@@ -10,7 +10,7 @@ cursor-goal targets **Cursor IDE only**. The harness is a **Python 3.12+** packa
 |----------|------------|---------------|-----------|--------|
 | Cursor IDE (Unix) | `goalKeeper.md` + `goal-evaluator.md` | `Task` | `hooks.json` → `stop_hook.py` | **Harness YES**; stop followups **YES** |
 | Cursor IDE (Windows) | same | `Task` | `stop_hook.cmd` (+ drain) + wake watchdog | Harness YES; race mitigated; wake bypass ([research](cursor-windows-stop-hook-race.md)) |
-| Teams marketplace plugin | same | `Task` | `python3` + `${CURSOR_PLUGIN_ROOT}` | Harness YES; Windows users should prefer `install-goal.ps1` for stop hooks |
+| Teams marketplace plugin | same | `Task` | Dual `stop_hook.cmd` + `python3` + singleflight; wake watchdog | Harness YES; Windows PATH needed for `.cmd` interpreter discovery |
 | Cursor CLI | same | `Task` | `hooks.json` | NO (E2E) |
 
 ## Installed Layout
@@ -52,7 +52,7 @@ Some Cursor plans only accept Task `model: "fast"`; specific model IDs work when
 | `CURSOR_GOAL_LOG` | Log level (`WARNING` default; `DEBUG` writes `last-stop-response.json`) |
 | `CURSOR_GOAL_STOP_DRAIN_MS` | Stop-hook stdout drain delay before exit (default ~250 on Windows, ~100 elsewhere; max 2000) |
 | `CURSOR_GOAL_WAKE` | When `0`/`false`/`off`, disable wake watchdog arming |
-| `CURSOR_GOAL_WAKE_INTERVAL_S` | Wake loop interval seconds (default 45, min 5, max 600) |
+| `CURSOR_GOAL_WAKE_INTERVAL_S` | Wake loop interval seconds (default 15, min 5, max 600) |
 | `CURSOR_GOAL_DENY_SHELL` | When `1`/`true`/`yes`/`on`, refuse shell-mode validation (argv only) |
 | `CURSOR_GOAL_LOG_SECRETS` | When set, DEBUG may log full validation commands (default: never) |
 | `CURSOR_GOAL_SKIP_ACL` | When set, skip Windows `icacls` data-dir harden (used by tests) |

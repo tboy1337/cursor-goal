@@ -57,8 +57,8 @@ Do **not** put long evaluator responses on the Windows command line (argv length
 - **Worker model:** session / `inherit` (this agent).
 - **Evaluator model:** from `eval spawn-config` (default `fast`; override with `CURSOR_GOAL_EVAL_MODEL`).
 - **Subagent tool:** `Task` — spawn `goal-evaluator` with spawn-config params.
-- **Stop hook:** Cursor `hooks.json` → `stop_hook.py` (Unix) or `stop_hook.cmd` (Windows) returns `followup_message` (safety net). Prefer in-turn evaluation. Windows uses a cmd launcher + stdout drain delay to mitigate Cursor’s capture race.
-- **Wake watchdog:** After `manage create` / `resume`, start `wake loop` in background with `notify_on_output` on `^AGENT_GOAL_WAKE`. Continues even when Cursor drops stop-hook stdout. Disarmed on done/pause/clear. Disable with `CURSOR_GOAL_WAKE=0`.
+- **Stop hook:** Cursor `hooks.json` → `stop_hook.py` (Unix) or `stop_hook.cmd` (Windows) returns `followup_message` (safety net). Prefer in-turn evaluation. Windows uses a cmd launcher + stdout drain delay to mitigate Cursor’s capture race. Marketplace installs register both launchers; singleflight prevents double followups.
+- **Wake watchdog:** After `manage create` / `resume`, (1) start `wake loop` in background with `notify_on_output` on `^AGENT_GOAL_WAKE`, then (2) verify `wake status` shows `pid_alive`. Continues even when Cursor drops stop-hook stdout. Disarmed on done/pause/clear. Disable with `CURSOR_GOAL_WAKE=0`.
 - **No idle while pursuing:** do not end a turn without `manage done` or a completed evaluate→NO cycle with the next action started.
 
 ## Rules

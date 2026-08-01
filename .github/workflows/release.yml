@@ -12,7 +12,7 @@ jobs:
   release:
     name: Build and publish GitHub Release
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
@@ -43,11 +43,39 @@ jobs:
           fi
           echo "Tag OK: $TAG"
 
+      - name: Format (isort/black/pyproject-fmt)
+        run: |
+          isort --check-only --diff src tests scripts
+          black --check --diff src tests scripts
+          pyproject-fmt --check pyproject.toml
+
+      - name: pip-audit
+        run: pip-audit
+
+      - name: Bandit
+        run: bandit -r src/cursor_goal -c pyproject.toml -q
+
       - name: Pytest
         run: pytest tests -q --tb=short
 
       - name: Coverage metrics (>=95% statement/branch/function/combined)
         run: python scripts/check_coverage_metrics.py --threshold 95
+
+      - name: Mypy
+        run: mypy src/cursor_goal
+
+      - name: Pylint
+        run: pylint src/cursor_goal
+
+      - name: ShellCheck
+        run: |
+          shellcheck --severity=warning scripts/*.sh
+          if [ -f .cursor/skills/goal/scripts/wake_loop.sh ]; then
+            shellcheck --severity=warning .cursor/skills/goal/scripts/wake_loop.sh
+          fi
+
+      - name: Unix install smoke
+        run: bash scripts/install-smoke.sh
 
       - name: Build sdist and wheel
         run: python -m build
@@ -66,11 +94,16 @@ jobs:
           NOTES="$(printf '%s\n' \
             "## cursor-goal ${TAG}" \
             "" \
-            "Install from this release:" \
-            "1. Download the source archive or clone \`--branch ${TAG}\`" \
-            "2. Run \`./scripts/install-goal.sh\` or \`scripts/install-goal.ps1\`" \
+            "See [CHANGELOG.md](https://github.com/tboy1337/cursor-goal/blob/${TAG}/CHANGELOG.md) for breaking changes and fixes." \
             "" \
-            "See [docs/install.md](https://github.com/tboy1337/cursor-goal/blob/${TAG}/docs/install.md) and [CHANGELOG.md](https://github.com/tboy1337/cursor-goal/blob/${TAG}/CHANGELOG.md)." \
+            "### Install for Cursor (required)" \
+            "1. Download the **source** archive or clone \`--branch ${TAG}\`" \
+            "2. Run \`./scripts/install-goal.sh\` or \`scripts/install-goal.ps1\`" \
+            "3. Or import the Team Marketplace (see \`.cursor-plugin/marketplace.json\`)" \
+            "" \
+            "The attached \`.whl\` / sdist are for **development** (\`pip install\`) only — they do **not** register the Cursor skill, agents, or stop hook." \
+            "" \
+            "See [docs/install.md](https://github.com/tboy1337/cursor-goal/blob/${TAG}/docs/install.md)." \
           )"
           gh release create "$TAG" \
             --title "cursor-goal ${TAG}" \

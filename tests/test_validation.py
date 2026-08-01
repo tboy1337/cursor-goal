@@ -129,6 +129,11 @@ def test_try_split_argv_windows_percent(monkeypatch: pytest.MonkeyPatch) -> None
     assert try_split_argv("echo hi^there") is None
 
 
+def test_try_split_argv_powershell_brace_expansion() -> None:
+    assert try_split_argv('echo "${HOME}/x"') is None
+    assert try_split_argv("echo $(whoami)") is None
+
+
 def test_try_split_argv_windows_strips_quotes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
