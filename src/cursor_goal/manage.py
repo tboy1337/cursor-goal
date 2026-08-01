@@ -27,6 +27,7 @@ from cursor_goal.state import (
     mark_goal_achieved,
     mutate_goal,
     now_iso,
+    refuse_if_acl_harden_failed,
     refuse_if_data_dir_insecure,
     snapshot_goal,
 )
@@ -132,7 +133,20 @@ def _validate_create(args: _CreateArgs) -> str | None:
     insecure = refuse_if_data_dir_insecure()
     if insecure is not None:
         return insecure
+    acl_fail = refuse_if_acl_harden_failed()
+    if acl_fail is not None:
+        return acl_fail
     return None
+
+
+def _wake_loop_shell_hint() -> str:
+    """OS-appropriate wake loop command for doctor / create hints."""
+    if os.name == "nt":
+        return (
+            'py -3 -u "$env:USERPROFILE\\.cursor\\skills\\goal\\'
+            'scripts\\run_goal.py" wake loop'
+        )
+    return "python3 -u ~/.cursor/skills/goal/scripts/run_goal.py wake loop"
 
 
 def _validation_mode(state: GoalState) -> str:
@@ -507,11 +521,16 @@ def cmd_doctor(_argv: list[str]) -> int:
             )
         if not wake_info.get("armed"):
             warnings.append(
-                "Wake not armed — start `wake loop` with notify_on_output "
-                "or continuation may stall if stop-hook stdout is dropped"
+                "Wake not armed — immediately start background Shell: "
+                f"`{_wake_loop_shell_hint()}` with notify_on_output "
+                "matching ^AGENT_GOAL_WAKE (required for automatic continuation)"
             )
         elif not wake_info.get("pid_alive"):
-            warnings.append("Wake armed but loop process not alive — start `wake loop`")
+            warnings.append(
+                "Wake armed but loop not alive — immediately start: "
+                f"`{_wake_loop_shell_hint()}` with notify_on_output "
+                "matching ^AGENT_GOAL_WAKE"
+            )
     elif state is None:
         print("  Goal: none")
     else:
@@ -588,11 +607,13 @@ def _maybe_arm_wake() -> None:
         return
     if not config:
         return
+    hint = _wake_loop_shell_hint()
     print(
         f"[goal] Wake armed (every {config['interval_s']}s). "
-        "Start `wake loop` in background with notify_on_output "
-        f"matching {config['notify_pattern']}."
+        "REQUIRED next step: start `wake loop` in a background Shell with "
+        f"notify_on_output matching {config['notify_pattern']}:"
     )
+    print(f"  {hint}")
 
 
 def cmd_manage(argv: list[str]) -> int:

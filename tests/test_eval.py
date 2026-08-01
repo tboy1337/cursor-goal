@@ -178,6 +178,27 @@ def test_eval_prompt_redacts_secrets(goal_home: Path) -> None:
     assert "<redacted>" in out
 
 
+def test_eval_prompt_redacts_validation_output_secrets(goal_home: Path) -> None:
+    run_cli("manage", "create", "g", "--test", "echo")
+    state = GoalState(
+        active=True,
+        condition="g",
+        validation_command="echo",
+        created_at="t",
+        turn_budget=20,
+        turns_used=1,
+        status="pursuing",
+        last_validation_output="token=supersecret-output\nall green",
+        last_validation_exit_code=0,
+    )
+    save_goal(state)
+    code, out, _err = run_cli("eval", "prompt")
+    assert code == 0
+    assert "supersecret-output" not in out
+    assert "<redacted>" in out
+    assert "all green" in out
+
+
 def test_eval_help_lists_spawn_config(goal_home: Path) -> None:
     code, out, _err = run_cli("eval", "help")
     assert code == 0

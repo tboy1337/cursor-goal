@@ -42,8 +42,11 @@ def _stream_to_text(stream: str | bytes | None) -> str:
     return stream
 
 
-def redact_command(command: str) -> str:
-    """Redact likely secrets for logs / prompts / status; truncate long commands."""
+def redact_secrets(text: str, *, max_chars: int | None = 4000) -> str:
+    """Redact likely secrets in commands or validation output for logs/prompts.
+
+    ``max_chars`` truncates after redaction (``None`` keeps full length).
+    """
 
     def _sub(match: re.Match[str]) -> str:
         if match.group(1):
@@ -56,16 +59,21 @@ def redact_command(command: str) -> str:
             return "<redacted>"
         return "<redacted>"
 
-    redacted = _SECRETISH.sub(_sub, command)
+    redacted = _SECRETISH.sub(_sub, text)
     # Also redact common JSON-ish "apiKey":"…" / 'token':'…' forms.
     redacted = re.sub(
         r'(?i)(["\']?(?:api[_-]?key|token|password|secret)["\']?\s*[:=]\s*["\'])([^"\']+)',
         r"\1<redacted>",
         redacted,
     )
-    if len(redacted) > 200:
-        return redacted[:200] + "…"
+    if max_chars is not None and len(redacted) > max_chars:
+        return redacted[:max_chars] + "…"
     return redacted
+
+
+def redact_command(command: str) -> str:
+    """Redact likely secrets for logs / prompts / status; truncate long commands."""
+    return redact_secrets(command, max_chars=200)
 
 
 # Back-compat alias for older call sites / tests.
@@ -95,8 +103,7 @@ _ENV_ALLOWLIST_EXACT = frozenset(
         "LANGUAGE",
         "TERM",
         "TZ",
-        "PYTHONPATH",
-        "PYTHONHOME",
+        # Intentionally omit PYTHONPATH / PYTHONHOME — ambient import hijack risk.
         "PYTHONUTF8",
         "PYTHONIOENCODING",
         "PYTHONUNBUFFERED",
@@ -119,8 +126,9 @@ def scrubbed_validation_env(
 ) -> dict[str, str]:
     """Return a reduced environment for validation subprocesses.
 
-    Keeps PATH/home/locale/shell basics and ``CURSOR_GOAL_*`` (except log-secret
-    toggles). Drops ambient API tokens and unrelated secrets from the parent.
+    Keeps PATH/home/locale/shell basics, ``VIRTUAL_ENV``, and ``CURSOR_GOAL_*``
+    (except log-secret toggles). Drops ambient API tokens, ``PYTHONPATH``,
+    ``PYTHONHOME``, and unrelated secrets from the parent.
     """
     env_in = os.environ if source is None else source
     out: dict[str, str] = {}

@@ -869,3 +869,69 @@ def test_eval_validate_lock_timeout_on_snapshot(
     code, _out, err = run_cli("eval", "validate")
     assert code == 1
     assert "locked" in err
+
+
+def test_refuse_if_acl_harden_failed_message(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import state as state_mod
+
+    monkeypatch.setattr(state_mod.os, "name", "posix")
+    assert state_mod.refuse_if_acl_harden_failed(goal_home) is None
+
+    monkeypatch.setattr(state_mod.os, "name", "nt")
+    state_mod._ACL_HARDEN_FAILURES.clear()
+    assert state_mod.refuse_if_acl_harden_failed(goal_home) is None
+    state_mod._ACL_HARDEN_FAILURES[str(goal_home)] = "grant failed"
+    msg = state_mod.refuse_if_acl_harden_failed(goal_home)
+    assert msg is not None
+    assert msg.startswith("[goal] Error:")
+    assert "grant failed" in msg
+
+
+def test_create_refuses_acl_harden_failure(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    monkeypatch.setattr(
+        manage_mod,
+        "refuse_if_acl_harden_failed",
+        lambda: "[goal] Error: Windows ACL harden failed",
+    )
+    code, _out, err = run_cli("manage", "create", "acl fail")
+    assert code == 1
+    assert "ACL harden" in err
+
+
+def test_doctor_wake_warning_includes_command(goal_home: Path) -> None:
+    run_cli("manage", "create", "doctor wake")
+    # Armed but no loop pid → warning with exact command
+    code, out, _err = run_cli("manage", "doctor")
+    assert code == 0
+    assert "wake loop" in out.lower() or "REQUIRED" in out or "immediately start" in out
+
+
+def test_wake_loop_shell_hint_unix(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cursor_goal import manage as manage_mod
+
+    monkeypatch.setattr(manage_mod.os, "name", "posix")
+    hint = manage_mod._wake_loop_shell_hint()
+    assert "python3" in hint
+    assert "wake loop" in hint
+
+
+def test_eval_validate_refuses_acl_harden_failure(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import evaluate as evaluate_mod
+
+    run_cli("manage", "create", "g", "--test", "echo")
+    monkeypatch.setattr(
+        evaluate_mod,
+        "refuse_if_acl_harden_failed",
+        lambda: "[goal] Error: Windows ACL harden failed",
+    )
+    code, _out, err = run_cli("eval", "validate")
+    assert code == 1
+    assert "ACL harden" in err

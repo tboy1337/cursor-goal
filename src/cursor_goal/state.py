@@ -153,6 +153,21 @@ def acl_harden_failure_message(path: Path | None = None) -> str | None:
     )
 
 
+def refuse_if_acl_harden_failed(path: Path | None = None) -> str | None:
+    """Return an error message when Windows ACL harden failed, else None.
+
+    Ensures ``data_dir()`` has run so harden is attempted first. Skip with
+    ``CURSOR_GOAL_SKIP_ACL=1`` (no failure recorded).
+    """
+    if os.name != "nt":
+        return None
+    target = path if path is not None else data_dir(check_writable=False)
+    detail = acl_harden_failure_message(target)
+    if detail is None:
+        return None
+    return f"[goal] Error: {detail}"
+
+
 def atomic_write_text(path: Path, text: str) -> None:
     """Write *text* via temp file + replace; prefer private mode bits."""
     path.parent.mkdir(parents=True, exist_ok=True)

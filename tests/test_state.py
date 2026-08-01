@@ -526,8 +526,11 @@ def test_get_logger_invalid_level_and_log_file(
     existing2 = logging.getLogger(name + "_b")
     existing2.handlers.clear()
     monkeypatch.setenv("CURSOR_GOAL_LOG_FILE", "1")
+    monkeypatch.delenv("CURSOR_GOAL_LOG", raising=False)
     monkeypatch.setenv("CURSOR_GOAL_DATA", str(goal_home))
-    log_mod.get_logger(name + "_b").error("via data dir")
+    logger_b = log_mod.get_logger(name + "_b")
+    assert logger_b.level == logging.INFO
+    logger_b.error("via data dir")
     assert (goal_home / "cursor-goal.log").is_file()
 
 

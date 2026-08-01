@@ -15,12 +15,13 @@ from cursor_goal.state import (
     data_dir,
     has_eval_signal,
     record_parse_result,
+    refuse_if_acl_harden_failed,
     refuse_if_data_dir_insecure,
     set_eval_signal,
     snapshot_goal,
     update_goal_fields,
 )
-from cursor_goal.validation import redact_command, run_validation
+from cursor_goal.validation import redact_command, redact_secrets, run_validation
 
 logger = get_logger("cursor_goal.eval")
 
@@ -57,9 +58,9 @@ def cmd_prompt(argv: list[str]) -> int:
                 f"\nExit code: {state.last_validation_exit_code} "
                 f"({'passed' if passed else 'failed'})"
             )
+        safe_output = redact_secrets(state.last_validation_output, max_chars=4000)
         validation_section = (
-            f"Validation command: {safe_cmd}{exit_note}\n"
-            f"Output:\n{state.last_validation_output}"
+            f"Validation command: {safe_cmd}{exit_note}\n" f"Output:\n{safe_output}"
         )
     elif state.validation_command:
         validation_section = f"Validation command ({safe_cmd}) has not been run yet."
@@ -124,6 +125,10 @@ def cmd_validate(_argv: list[str]) -> int:
     if insecure is not None:
         print(insecure.replace("[goal]", "[goal-eval]"), file=sys.stderr)
         return 1
+    acl_fail = refuse_if_acl_harden_failed()
+    if acl_fail is not None:
+        print(acl_fail.replace("[goal]", "[goal-eval]"), file=sys.stderr)
+        return 1
 
     try:
         state = snapshot_goal()
@@ -153,10 +158,12 @@ def cmd_validate(_argv: list[str]) -> int:
     output = result.output
     if result.timed_out:
         output = f"[timed out]\n{output}".strip()
+    # Persist a redacted copy so later prompts/status do not leak secrets.
+    stored_output = redact_secrets(output, max_chars=4000)
 
     try:
         updated = update_goal_fields(
-            last_validation_output=output,
+            last_validation_output=stored_output,
             last_validation_exit_code=result.exit_code,
         )
     except GoalLockTimeoutError as exc:

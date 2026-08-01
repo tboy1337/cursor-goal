@@ -40,6 +40,7 @@ py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" <command> ..
 ## Work Cycle
 
 ```
+0. After create/resume: start wake loop (background + notify_on_output) and verify pid_alive — do not skip
 1. Do focused work
 2. If validation_command set: …/run_goal.py eval validate
 3. Capture eval prompt + spawn-config (OS-appropriate Shell; do not rely on bash-only $())

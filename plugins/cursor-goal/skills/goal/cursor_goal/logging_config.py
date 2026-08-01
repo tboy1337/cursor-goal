@@ -66,7 +66,14 @@ def get_logger(name: str = "cursor_goal") -> logging.Logger:
     if logger.handlers:
         return logger
 
-    level_name = os.environ.get("CURSOR_GOAL_LOG", "WARNING").upper()
+    raw_level = os.environ.get("CURSOR_GOAL_LOG", "").strip()
+    if raw_level:
+        level_name = raw_level.upper()
+    elif os.environ.get("CURSOR_GOAL_LOG_FILE", "").strip():
+        # Durable log file without explicit level → INFO for usable diagnostics.
+        level_name = "INFO"
+    else:
+        level_name = "WARNING"
     level = _resolve_level(level_name)
     logger.setLevel(level)
 

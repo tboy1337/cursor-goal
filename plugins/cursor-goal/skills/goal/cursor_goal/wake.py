@@ -30,6 +30,7 @@ from cursor_goal.state import (
     data_dir,
     goal_lock,
     mutate_goal,
+    refuse_if_data_dir_insecure,
     snapshot_goal,
 )
 
@@ -231,6 +232,19 @@ def _clear_pid(
         logger.debug("Could not remove wake pid file: %s", exc)
 
 
+def _cmdline_looks_owned(cmdline: str) -> bool:
+    """Return True when *cmdline* looks like a cursor-goal / wake harness process."""
+    lowered = cmdline.strip().lower()
+    if not lowered:
+        return False
+    # Require cursor-goal identity — never match bare "wake" (false-positive kill).
+    if "cursor_goal" in lowered or "cursor-goal" in lowered:
+        return True
+    if "run_goal.py" in lowered:
+        return True
+    return False
+
+
 def _windows_pid_looks_owned(pid: int) -> bool:
     """Best-effort: confirm PID exists and command line mentions wake/goal."""
     try:
@@ -252,19 +266,38 @@ def _windows_pid_looks_owned(pid: int) -> bool:
     except (OSError, subprocess.TimeoutExpired) as exc:
         logger.debug("Windows ownership probe failed for pid=%s: %s", pid, exc)
         return False
-    cmdline = (completed.stdout or "").strip().lower()
-    if not cmdline:
+    return _cmdline_looks_owned(completed.stdout or "")
+
+
+def _unix_pid_looks_owned(pid: int) -> bool:
+    """Best-effort: confirm PID cmdline mentions wake/goal (Linux /proc or ps)."""
+    proc_cmdline = Path(f"/proc/{int(pid)}/cmdline")
+    if proc_cmdline.is_file():
+        try:
+            raw = proc_cmdline.read_bytes().replace(b"\x00", b" ")
+            return _cmdline_looks_owned(raw.decode("utf-8", errors="replace"))
+        except OSError as exc:
+            logger.debug("Unix /proc ownership probe failed for pid=%s: %s", pid, exc)
+            return False
+    # macOS / other Unix without /proc: fall back to ps.
+    try:
+        completed = subprocess.run(  # nosec B603 B607 — fixed ps argv
+            ["ps", "-p", str(int(pid)), "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.debug("Unix ps ownership probe failed for pid=%s: %s", pid, exc)
         return False
-    # Require cursor-goal identity — never match bare "wake" (false-positive kill).
-    if "cursor_goal" in cmdline or "cursor-goal" in cmdline:
-        return True
-    if "run_goal.py" in cmdline:
-        return True
-    return False
+    if completed.returncode != 0:
+        return False
+    return _cmdline_looks_owned(completed.stdout or "")
 
 
 def _kill_pid(pid: int, *, token: str | None = None) -> None:
-    """Signal a wake loop process. On Windows, verify ownership before taskkill."""
+    """Signal a wake loop process. Verify ownership before kill (PID reuse)."""
     if pid <= 0:
         return
     if pid == os.getpid():
@@ -306,6 +339,13 @@ def _kill_pid(pid: int, *, token: str | None = None) -> None:
             logger.debug("taskkill failed for pid %s: %s", pid, exc)
         return
 
+    if not _unix_pid_looks_owned(pid):  # pragma: no cover — Unix CI
+        logger.warning(
+            "Refusing Unix kill of pid=%s: ownership check failed "
+            "(possible PID reuse)",
+            pid,
+        )
+        return
     try:  # pragma: no cover — SIGTERM path covered on Unix CI
         os.kill(pid, signal.SIGTERM)
     except OSError as exc:  # pragma: no cover
@@ -411,6 +451,9 @@ def arm(*, interval: int | None = None) -> dict[str, Any]:
     if not wake_enabled():
         logger.info("Wake arm skipped (CURSOR_GOAL_WAKE disabled)")
         return {}
+    insecure = refuse_if_data_dir_insecure()
+    if insecure is not None:
+        raise OSError(insecure)
     if interval is not None:
         seconds = _clamp_interval(interval)
     else:
@@ -458,6 +501,10 @@ def tick() -> int:
     """Emit a wake sentinel if pursuing; auto-disarm when inactive. Exit 0."""
     if not wake_enabled():
         return 0
+    insecure = refuse_if_data_dir_insecure()
+    if insecure is not None:
+        logger.warning("Wake tick refused: %s", insecure)
+        return 1
     config = _read_wake_config()
     if config is None:
         if not _goal_is_pursuing():
@@ -550,6 +597,10 @@ def run_loop(*, interval: int | None = None) -> int:
     if not wake_enabled():
         print("[goal] Wake disabled (CURSOR_GOAL_WAKE=0).", file=sys.stderr)
         return 0
+    insecure = refuse_if_data_dir_insecure()
+    if insecure is not None:
+        print(insecure, file=sys.stderr)
+        return 1
 
     _kill_existing_loop()
     config = arm(interval=interval)

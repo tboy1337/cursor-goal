@@ -273,6 +273,11 @@ def handle_stop(
     if not isinstance(payload, dict):
         return {}
 
+    insecure = refuse_if_data_dir_insecure()
+    if insecure is not None:
+        logger.warning("Stop refuse insecure data dir: %s", insecure)
+        return {}
+
     status = payload.get("status", "unknown")
     loop_count = payload.get("loop_count", 0)
     logger.info("stop hook status=%s loop_count=%s", status, loop_count)

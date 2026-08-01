@@ -70,7 +70,7 @@ Then:
 - If `action` is `status|pause|resume|clear` → `manage <action>`
 - If `action` is `create` → `manage create "<condition>" [--test "<cmd>"] [--budget N]`
 
-After creating a goal, **immediately start working** toward the condition.
+After **every** `create` or `resume`, complete the **Wake Watchdog blocking checklist** below (start `wake loop` + verify `pid_alive`) **before** other work. Then start working toward the condition.
 
 ## Command Reference
 

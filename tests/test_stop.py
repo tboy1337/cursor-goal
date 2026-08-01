@@ -419,3 +419,15 @@ def test_clear_fail_open_oserror(
 
     monkeypatch.setattr(stop_mod, "_fail_open_continue_count_path", lambda: Boom())
     stop_mod._clear_fail_open_continues()
+
+
+def test_handle_stop_refuses_insecure_data_dir(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_cli("manage", "create", "insecure stop")
+    monkeypatch.setattr(
+        stop_mod,
+        "refuse_if_data_dir_insecure",
+        lambda: "[goal] Error: data directory is insecure",
+    )
+    assert handle_stop({"status": "completed", "loop_count": 0}) == {}

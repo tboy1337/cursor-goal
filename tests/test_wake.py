@@ -92,6 +92,8 @@ def test_manage_create_arms_wake(wake_on: Path) -> None:
     code, out, _err = run_cli("manage", "create", "armed")
     assert code == 0
     assert "Wake armed" in out
+    assert "REQUIRED next step" in out
+    assert "wake loop" in out
     assert (wake_on / "wake.json").is_file()
 
 
@@ -823,3 +825,151 @@ def test_atomic_write_unlink_oserror(
     monkeypatch.setattr(Path, "unlink", boom_unlink)
     with pytest.raises(OSError):
         wake_mod._atomic_write_text(path, "x")
+
+
+def test_unix_kill_refuses_unowned(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del wake_on
+    monkeypatch.setattr(wake_mod, "_read_pid_record", lambda: None)
+    monkeypatch.setattr(wake_mod, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(wake_mod.os, "name", "posix")
+    monkeypatch.setattr(wake_mod, "_unix_pid_looks_owned", lambda _pid: False)
+    killed: list[int] = []
+
+    def fake_kill(pid: int, _sig: int) -> None:
+        killed.append(pid)
+
+    monkeypatch.setattr(wake_mod.os, "kill", fake_kill)
+    wake_mod._kill_pid(4242)
+    assert killed == []
+
+
+def test_unix_ownership_via_ps(wake_on: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    del wake_on
+
+    real_is_file = Path.is_file
+
+    def fake_is_file(self: Path) -> bool:
+        if str(self).endswith("/cmdline"):
+            return False
+        return real_is_file(self)
+
+    monkeypatch.setattr(Path, "is_file", fake_is_file)
+
+    class Owned:
+        returncode = 0
+        stdout = "python3 -u /home/x/.cursor/skills/goal/scripts/run_goal.py wake loop"
+        stderr = ""
+
+    monkeypatch.setattr(wake_mod.subprocess, "run", lambda *_a, **_k: Owned())
+    assert wake_mod._unix_pid_looks_owned(88) is True
+
+    class Bare:
+        returncode = 0
+        stdout = "/usr/bin/other-wake-daemon --mode wake"
+        stderr = ""
+
+    monkeypatch.setattr(wake_mod.subprocess, "run", lambda *_a, **_k: Bare())
+    assert wake_mod._unix_pid_looks_owned(88) is False
+
+    class Failed:
+        returncode = 1
+        stdout = ""
+        stderr = "not found"
+
+    monkeypatch.setattr(wake_mod.subprocess, "run", lambda *_a, **_k: Failed())
+    assert wake_mod._unix_pid_looks_owned(88) is False
+
+
+def test_cmdline_looks_owned_helpers() -> None:
+    assert wake_mod._cmdline_looks_owned("python -m cursor_goal wake loop") is True
+    assert wake_mod._cmdline_looks_owned("run_goal.py wake loop") is True
+    assert wake_mod._cmdline_looks_owned("other-wake-daemon") is False
+    assert wake_mod._cmdline_looks_owned("") is False
+
+
+def test_wake_arm_refuses_insecure(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        wake_mod,
+        "refuse_if_data_dir_insecure",
+        lambda: "[goal] Error: data directory is insecure",
+    )
+    with pytest.raises(OSError, match="insecure"):
+        wake_mod.arm()
+    code, _out, err = run_cli("wake", "loop")
+    assert code == 1
+    assert "insecure" in err
+
+
+def test_wake_tick_refuses_insecure(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert run_cli("manage", "create", "tick insecure")[0] == 0
+    monkeypatch.setattr(
+        wake_mod,
+        "refuse_if_data_dir_insecure",
+        lambda: "[goal] Error: data directory is insecure",
+    )
+    assert wake_mod.tick() == 1
+
+
+def test_unix_ownership_via_proc_file(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    del wake_on
+    cmdline = tmp_path / "cmdline"
+    cmdline.write_bytes(b"python\x00-m\x00cursor_goal\x00wake\x00loop\x00")
+
+    real_path = Path
+
+    class ProcPath:
+        def __init__(self, arg: object) -> None:
+            self._arg = str(arg)
+
+        def is_file(self) -> bool:
+            return self._arg.endswith("/cmdline")
+
+        def read_bytes(self) -> bytes:
+            return cmdline.read_bytes()
+
+    def path_factory(arg: object) -> object:
+        text = str(arg)
+        if text.startswith("/proc/") and text.endswith("/cmdline"):
+            return ProcPath(text)
+        return real_path(arg)
+
+    monkeypatch.setattr(wake_mod, "Path", path_factory)
+    assert wake_mod._unix_pid_looks_owned(42) is True
+
+    bad = tmp_path / "badcmd"
+    bad.write_bytes(b"other-wake-daemon\x00")
+
+    class BadProc(ProcPath):
+        def read_bytes(self) -> bytes:
+            return bad.read_bytes()
+
+    monkeypatch.setattr(
+        wake_mod,
+        "Path",
+        lambda arg: BadProc(arg) if str(arg).endswith("/cmdline") else real_path(arg),
+    )
+    assert wake_mod._unix_pid_looks_owned(42) is False
+
+
+def test_unix_ownership_proc_oserror(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del wake_on
+
+    class BoomPath:
+        def is_file(self) -> bool:
+            return True
+
+        def read_bytes(self) -> bytes:
+            raise OSError("denied")
+
+    monkeypatch.setattr(wake_mod, "Path", lambda _arg: BoomPath())
+    assert wake_mod._unix_pid_looks_owned(7) is False

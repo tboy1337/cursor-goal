@@ -163,13 +163,29 @@ def test_scrubbed_validation_env_drops_secrets() -> None:
         "CURSOR_GOAL_DATA": "/tmp/data",
         "CURSOR_GOAL_LOG_SECRETS": "1",
         "LANG": "C",
+        "PYTHONPATH": "/evil/inject",
+        "PYTHONHOME": "/evil/home",
+        "VIRTUAL_ENV": "/home/tboy1337/.venv",
     }
     scrubbed = scrubbed_validation_env(source)
     assert scrubbed["PATH"] == "/usr/bin"
     assert scrubbed["CURSOR_GOAL_DATA"] == "/tmp/data"
+    assert scrubbed["VIRTUAL_ENV"] == "/home/tboy1337/.venv"
     assert "OPENAI_API_KEY" not in scrubbed
     assert "AWS_SECRET_ACCESS_KEY" not in scrubbed
     assert "CURSOR_GOAL_LOG_SECRETS" not in scrubbed
+    assert "PYTHONPATH" not in scrubbed
+    assert "PYTHONHOME" not in scrubbed
+
+
+def test_redact_secrets_preserves_longer_output() -> None:
+    from cursor_goal.validation import redact_secrets
+
+    body = "ok\napi_key=supersecret\n" + ("x" * 500)
+    redacted = redact_secrets(body, max_chars=4000)
+    assert "supersecret" not in redacted
+    assert "<redacted>" in redacted
+    assert len(redacted) > 200
 
 
 def test_run_validation_uses_scrubbed_env(monkeypatch: pytest.MonkeyPatch) -> None:
