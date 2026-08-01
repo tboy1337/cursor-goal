@@ -81,8 +81,28 @@ def test_load_goal_corrupt_numeric_fields(goal_home: Path) -> None:
 def test_save_goal_writes_schema_version(goal_home: Path) -> None:
     save_goal(GoalState(condition="c", created_at="t", status="pursuing"))
     raw = json.loads((goal_home / "goal.json").read_text(encoding="utf-8"))
-    assert raw["schema_version"] == 2
+    assert raw["schema_version"] == 3
+    assert raw["wake_budget"] == 200
+    assert raw["shell_ok"] is True
 
+
+def test_from_dict_migrates_v2_wake_budget(goal_home: Path) -> None:
+    del goal_home  # fixture sets CURSOR_GOAL_DATA
+    state = GoalState.from_dict(
+        {
+            "condition": "legacy",
+            "turn_budget": 20,
+            "turns_used": 0,
+            "wake_ticks": 5,
+            "schema_version": 2,
+            "status": "pursuing",
+            "active": True,
+        }
+    )
+    assert state.wake_budget == 200
+    assert state.shell_ok is True
+    assert state.wake_ticks == 5
+    assert state.status == "pursuing"
 
 def test_load_goal_rejects_unknown_schema(goal_home: Path) -> None:
     (goal_home / "goal.json").write_text(

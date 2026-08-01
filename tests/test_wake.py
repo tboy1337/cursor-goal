@@ -472,7 +472,18 @@ def test_wake_tick_increments_wake_ticks(wake_on: Path) -> None:
 
 
 def test_wake_ticks_hit_budget(wake_on: Path) -> None:
-    assert run_cli("manage", "create", "wake budget", "--budget", "1")[0] == 0
+    assert (
+        run_cli(
+            "manage",
+            "create",
+            "wake budget",
+            "--budget",
+            "5",
+            "--wake-budget",
+            "1",
+        )[0]
+        == 0
+    )
     code, out, _err = run_cli("wake", "tick")
     assert code == 0
     assert "BUDGET" in out
@@ -480,8 +491,34 @@ def test_wake_ticks_hit_budget(wake_on: Path) -> None:
 
     data = load_goal_json(wake_on)
     assert data["status"] == "budget-limited"
+    assert data["wake_budget"] == 1
     assert not (wake_on / "wake.json").is_file()
 
+
+def test_wake_ticks_do_not_consume_turn_budget(wake_on: Path) -> None:
+    assert (
+        run_cli(
+            "manage",
+            "create",
+            "independent budgets",
+            "--budget",
+            "2",
+            "--wake-budget",
+            "10",
+        )[0]
+        == 0
+    )
+    assert run_cli("wake", "tick")[0] == 0
+    assert run_cli("wake", "tick")[0] == 0
+    from tests.conftest import load_goal_json
+
+    data = load_goal_json(wake_on)
+    assert data["wake_ticks"] == 2
+    assert data["turns_used"] == 0
+    assert data["status"] == "pursuing"
+    assert data["wake_budget"] == 10
+    assert data["turn_budget"] == 2
+    assert data["schema_version"] == 3
 
 def test_force_create_disarms_prior_wake(
     wake_on: Path, monkeypatch: pytest.MonkeyPatch
@@ -513,6 +550,36 @@ def test_windows_kill_refuses_unowned(
     )
     wake_mod._kill_pid(4242)
     assert calls == []
+
+
+def test_windows_ownership_rejects_bare_wake_marker(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del wake_on
+
+    class Result:
+        returncode = 0
+        stdout = "C:\\tools\\other-wake-daemon.exe --mode wake"
+        stderr = ""
+
+    monkeypatch.setattr(
+        wake_mod.subprocess,
+        "run",
+        lambda *_a, **_k: Result(),
+    )
+    assert wake_mod._windows_pid_looks_owned(12345) is False
+
+    class Owned:
+        returncode = 0
+        stdout = "py -3 -u C:\\Users\\x\\.cursor\\skills\\goal\\scripts\\run_goal.py wake loop"
+        stderr = ""
+
+    monkeypatch.setattr(
+        wake_mod.subprocess,
+        "run",
+        lambda *_a, **_k: Owned(),
+    )
+    assert wake_mod._windows_pid_looks_owned(12345) is True
 
 
 def test_atomic_write_cleans_tmp_on_replace_fail(
@@ -642,7 +709,18 @@ def test_interruptible_sleep_token_mismatch(
 def test_run_loop_budget_via_wake_ticks(
     wake_on: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    assert run_cli("manage", "create", "loop budget", "--budget", "1")[0] == 0
+    assert (
+        run_cli(
+            "manage",
+            "create",
+            "loop budget",
+            "--budget",
+            "5",
+            "--wake-budget",
+            "1",
+        )[0]
+        == 0
+    )
     monkeypatch.setattr(wake_mod.time, "sleep", lambda _s: None)
     out = io.StringIO()
     with redirect_stdout(out):

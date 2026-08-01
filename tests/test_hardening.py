@@ -461,9 +461,10 @@ def test_harden_windows_acl_cached(
     state_mod._HARDENED_PATHS.clear()
     state_mod._harden_windows_acl(goal_home)
     state_mod._harden_windows_acl(goal_home)
-    assert len(calls) == 1
-    assert "icacls" in calls[0][0].lower() or calls[0][0].endswith("icacls.exe")
-
+    # First harden: inheritance strip + grant; second is cached (no more calls).
+    assert len(calls) == 2
+    assert any("/inheritance:r" in c for c in calls)
+    assert any("/grant:r" in c for c in calls)
 
 def test_parse_result_path_jail_rejects_outside(
     goal_home: Path, tmp_path: Path
@@ -508,6 +509,38 @@ def test_eval_parse_result_lock_timeout(
     assert "locked" in err
 
 
+def test_harden_windows_acl_strip_then_grant(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import state as state_mod
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **_k: object) -> object:
+        calls.append(list(cmd))
+
+        class Result:
+            returncode = 0
+            stderr = ""
+            stdout = ""
+
+        return Result()
+
+    monkeypatch.setattr(state_mod.os, "name", "nt")
+    monkeypatch.setattr(state_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        state_mod.shutil, "which", lambda _n: r"C:\Windows\System32\icacls.exe"
+    )
+    monkeypatch.setenv("USERNAME", "tester")
+    monkeypatch.delenv("CURSOR_GOAL_SKIP_ACL", raising=False)
+    state_mod._HARDENED_PATHS.clear()
+    state_mod._harden_windows_acl(goal_home)
+    assert len(calls) == 2
+    assert calls[0][2] == "/inheritance:r"
+    assert calls[1][2] == "/grant:r"
+    assert str(goal_home) in state_mod._HARDENED_PATHS
+
+
 def test_harden_windows_acl_skip_env(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -531,6 +564,159 @@ def test_harden_windows_acl_skip_env(
     state_mod._HARDENED_PATHS.clear()
     state_mod._harden_windows_acl(goal_home)
     assert calls == []
+
+
+def test_harden_windows_acl_grant_fails_after_strip(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import state as state_mod
+
+    n = {"i": 0}
+
+    def fake_run(cmd: list[str], **_k: object) -> object:
+        del cmd
+        n["i"] += 1
+
+        class Result:
+            returncode = 0 if n["i"] == 1 else 5
+            stderr = "grant failed"
+            stdout = ""
+
+        return Result()
+
+    monkeypatch.setattr(state_mod.os, "name", "nt")
+    monkeypatch.setattr(state_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        state_mod.shutil, "which", lambda _n: r"C:\Windows\System32\icacls.exe"
+    )
+    monkeypatch.setenv("USERNAME", "tester")
+    monkeypatch.delenv("CURSOR_GOAL_SKIP_ACL", raising=False)
+    state_mod._HARDENED_PATHS.clear()
+    state_mod._harden_windows_acl(goal_home)
+    assert str(goal_home) not in state_mod._HARDENED_PATHS
+
+
+def test_harden_windows_acl_strip_fails_grant_ok(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import state as state_mod
+
+    n = {"i": 0}
+
+    def fake_run(cmd: list[str], **_k: object) -> object:
+        del cmd
+        n["i"] += 1
+
+        class Result:
+            returncode = 5 if n["i"] == 1 else 0
+            stderr = "strip failed"
+            stdout = ""
+
+        return Result()
+
+    monkeypatch.setattr(state_mod.os, "name", "nt")
+    monkeypatch.setattr(state_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        state_mod.shutil, "which", lambda _n: r"C:\Windows\System32\icacls.exe"
+    )
+    monkeypatch.setenv("USERNAME", "tester")
+    monkeypatch.delenv("CURSOR_GOAL_SKIP_ACL", raising=False)
+    state_mod._HARDENED_PATHS.clear()
+    state_mod._harden_windows_acl(goal_home)
+    assert str(goal_home) in state_mod._HARDENED_PATHS
+
+
+def test_default_wake_budget_helpers() -> None:
+    from cursor_goal.state import (
+        GoalState,
+        _apply_field,
+        clamp_wake_budget,
+        default_wake_budget,
+    )
+
+    assert default_wake_budget(20) == 200
+    assert default_wake_budget(1) == 10
+    assert clamp_wake_budget(999) == 500
+    try:
+        clamp_wake_budget(0)
+        raise AssertionError("expected ValueError")
+    except ValueError:
+        pass
+
+    state = GoalState()
+    _apply_field(state, "shell_ok", 0)
+    assert state.shell_ok is False
+    _apply_field(state, "shell_ok", "off")
+    assert state.shell_ok is False
+    try:
+        _apply_field(state, "shell_ok", "maybe")
+        raise AssertionError("expected ValueError")
+    except ValueError:
+        pass
+    try:
+        _apply_field(state, "wake_ticks", -1)
+        raise AssertionError("expected ValueError")
+    except ValueError:
+        pass
+
+
+def test_from_dict_invalid_shell_ok_and_wake_budget() -> None:
+    from cursor_goal.state import GoalState
+
+    with pytest.raises(ValueError, match="shell_ok"):
+        GoalState.from_dict(
+            {
+                "condition": "x",
+                "turn_budget": 5,
+                "turns_used": 0,
+                "schema_version": 3,
+                "shell_ok": "maybe",
+                "status": "pursuing",
+            }
+        )
+    with pytest.raises(ValueError, match="wake_budget"):
+        GoalState.from_dict(
+            {
+                "condition": "x",
+                "turn_budget": 5,
+                "turns_used": 0,
+                "schema_version": 3,
+                "wake_budget": "nope",
+                "status": "pursuing",
+            }
+        )
+
+
+def test_harden_acl_oserror_after_strip(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import state as state_mod
+
+    n = {"i": 0}
+
+    def fake_run(cmd: list[str], **_k: object) -> object:
+        del cmd
+        n["i"] += 1
+        if n["i"] == 1:
+
+            class Ok:
+                returncode = 0
+                stderr = ""
+                stdout = ""
+
+            return Ok()
+        raise OSError("grant boom")
+
+    monkeypatch.setattr(state_mod.os, "name", "nt")
+    monkeypatch.setattr(state_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        state_mod.shutil, "which", lambda _n: r"C:\Windows\System32\icacls.exe"
+    )
+    monkeypatch.setenv("USERNAME", "tester")
+    monkeypatch.delenv("CURSOR_GOAL_SKIP_ACL", raising=False)
+    state_mod._HARDENED_PATHS.clear()
+    state_mod._harden_windows_acl(goal_home)
+    assert str(goal_home) not in state_mod._HARDENED_PATHS
 
 
 def test_harden_windows_acl_failures(

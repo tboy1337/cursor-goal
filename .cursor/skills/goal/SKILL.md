@@ -189,12 +189,25 @@ python3 -u ~/.cursor/skills/goal/scripts/run_goal.py wake loop
 py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" wake loop
 ```
 
-Interval: `CURSOR_GOAL_WAKE_INTERVAL_S` (default 15, min 5, max 600). Budget also counts `wake_ticks` (each armed tick); either turns or wake ticks can hit `budget-limited`.
+Interval: `CURSOR_GOAL_WAKE_INTERVAL_S` (default 15, min 5, max 600). Each wake emission increments `wake_ticks` against **`wake_budget`** (independent of turn budget). Default `wake_budget = turn_budget * 10` (min 10, max 500). Override with `--wake-budget N`.
 
 ## Turn Budget
 
-Default budget is 20 turns (max 500). Customize with `--budget N` or natural language (`stop after 10 turns`). Exhausted when `turns_used` **or** `wake_ticks` reaches the budget → `budget-limited`.
+Default turn budget is 20 (max 500). Customize with `--budget N` or natural language (`stop after 10 turns`). Exhausted when `turns_used >= turn_budget` **or** `wake_ticks >= wake_budget` → `budget-limited` (check `last_reason` / status for which limit hit).
 
+## Failure modes
+
+| Symptom | Likely cause | Action |
+|---------|--------------|--------|
+| Goal ends quickly with low `turns_used` | `wake_budget` exhausted | Raise `--wake-budget` or interval |
+| Hooks UI `{}` but `last-stop-response.json` has followup | Cursor stdout race | Rely on wake loop |
+| Wake armed but no continuation | Loop not started / `pid_alive=false` | Start `wake loop` with `notify_on_output` |
+| Validation refused (shell) | `--deny-shell` or `CURSOR_GOAL_DENY_SHELL` | Use argv-safe `--test` or allow shell |
+| Doctor FAIL insecure data dir | World-writable `CURSOR_GOAL_DATA` | `chmod 700` / private path |
+
+Prefer argv-safe `--test` commands. Shell mode is allowed by default but reported in `manage status` / `doctor`. Use `--deny-shell` for argv-only goals.
+
+Run `manage doctor` after install or when diagnosing stalls.
 ## Writing Good Conditions
 
 ```

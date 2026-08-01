@@ -49,7 +49,7 @@ Some Cursor plans only accept Task `model: "fast"`; specific model IDs work when
 |----------|---------|
 | `CURSOR_GOAL_DATA` | Absolute override for `~/.cursor-goal/data` |
 | `CURSOR_GOAL_EVAL_MODEL` | Evaluator model slug for `eval spawn-config` (default `fast`) |
-| `CURSOR_GOAL_LOG` | Log level (`WARNING` default; `DEBUG` writes `last-stop-response.json`) |
+| `CURSOR_GOAL_LOG` | Log level (`WARNING` default). `last-stop-response.json` is always written on stop emit (redacted) |
 | `CURSOR_GOAL_STOP_DRAIN_MS` | Stop-hook stdout drain delay before exit (default ~250 on Windows, ~100 elsewhere; max 2000) |
 | `CURSOR_GOAL_WAKE` | When `0`/`false`/`off`, disable wake watchdog arming |
 | `CURSOR_GOAL_WAKE_INTERVAL_S` | Wake loop interval seconds (default 15, min 5, max 600) |
@@ -62,14 +62,14 @@ Some Cursor plans only accept Task `model: "fast"`; specific model IDs work when
 | Command | Purpose |
 |---------|---------|
 | `…/run_goal.py parse "<input>"` | Parse `/goal` → JSON |
-| `…/run_goal.py manage …` | State lifecycle |
+| `…/run_goal.py manage …` | State lifecycle (`create`/`status`/`doctor`/`pause`/`resume`/`done`/`clear`) |
 | `…/run_goal.py eval validate` | Run `validation_command`; persist output |
 | `…/run_goal.py eval spawn-config` | JSON Task params for the evaluator |
 | `…/run_goal.py eval prompt\|parse-result\|signal\|check` | Evaluator harness (`parse-result --stdin` / `@file` preferred on Windows) |
 | `…/run_goal.py stop` / `stop_hook.py` | Cursor stop hook stdin/stdout JSON |
 | `…/run_goal.py wake …` | Wake watchdog (`arm`/`tick`/`disarm`/`status`/`loop`) |
 
-State: `~/.cursor-goal/data/goal.json` (or `CURSOR_GOAL_DATA`). Treat that directory as **trusted-user state** — equivalent to shell trust. Create/validate refuse a group/world-writable data dir on Unix. `validation_command` may be executed by `eval validate` (prefers argv; falls back to `shell=True` / `COMSPEC` on Windows for metacharacters unless `CURSOR_GOAL_DENY_SHELL` is set). Unix uses `0700` on the data dir and `0600` on state files. Windows best-effort `icacls` grants the current user full control on the data dir (skip with `CURSOR_GOAL_SKIP_ACL=1`). Corrupt `goal.json` is quarantined to `goal.json.corrupt.<UTC>`. Exclusive `goal.lock` times out after ~10s on both Unix and Windows. Stop emits always write `last-stop-response.json`.
+State: `~/.cursor-goal/data/goal.json` (or `CURSOR_GOAL_DATA`). Treat that directory as **trusted-user state** — equivalent to shell trust. Create/validate refuse a group/world-writable data dir on Unix. `validation_command` may be executed by `eval validate` (prefers argv; falls back to `shell=True` / `COMSPEC` on Windows for metacharacters unless `CURSOR_GOAL_DENY_SHELL` is set or the goal has `shell_ok=false`). Unix uses `0700` on the data dir and `0600` on state files. Windows best-effort `icacls` strips inheritance then grants the current user full control on the data dir (skip with `CURSOR_GOAL_SKIP_ACL=1`; loud warning if grant fails after strip). Corrupt `goal.json` is quarantined to `goal.json.corrupt.<UTC>`. Exclusive `goal.lock` times out after ~10s on both Unix and Windows. Stop emits always write `last-stop-response.json`.
 
 ## Subagent Invocation Pattern
 
@@ -90,11 +90,11 @@ On Windows, pipe the response into `eval parse-result --stdin` (or use `@file`) 
 ## Security notes
 
 - `~/.cursor-goal/data` and `validation_command` are trusted-user local state. If an attacker can write `goal.json`, they can run commands as you.
-- Prefer `--test "..."` / simple argv-safe commands; compound shell snippets force `shell=True` (cmd.exe on Windows via `COMSPEC`, not PowerShell). Set `CURSOR_GOAL_DENY_SHELL=1` to refuse shell mode.
+- Prefer `--test "..."` / simple argv-safe commands; compound shell snippets force `shell=True` (cmd.exe on Windows via `COMSPEC`, not PowerShell). Set `CURSOR_GOAL_DENY_SHELL=1` or create with `--deny-shell` to refuse shell mode.
 - `eval parse-result @file` only accepts paths under the goal data directory or the current working directory.
 - Eval signal is a protocol guard bound to the goal content hash with `verdict: YES` — not cryptographic attestation. `manage done --force` and `eval signal --force` exist for recovery and are logged.
 - Stop hook does **not** run validation (avoids 30s hook timeouts).
-- Turn budget is capped at 500; stop-hook drain is capped at 2000ms.
+- Turn budget and wake budget are independent (each capped at 500). Default `wake_budget = turn_budget * 10` (min 10). Stop-hook drain is capped at 2000ms.
 - See [SECURITY.md](../SECURITY.md) for the full threat model and reporting process.
 
 ## Design notes

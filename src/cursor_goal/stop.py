@@ -15,7 +15,9 @@ from cursor_goal.state import (
     LAST_STOP_RESPONSE_NAME,
     GoalState,
     _chmod_private,
+    budgets_exhausted,
     data_dir,
+    goal_lock,
     load_goal,
     mutate_goal,
 )
@@ -234,6 +236,14 @@ def _clear_fail_open_continues() -> None:
         pass
 
 
+def _bump_fail_open_continues() -> int:
+    """Atomically increment fail-open counter under goal.lock. Returns new count."""
+    with goal_lock():
+        count = _read_fail_open_continues() + 1
+        _write_fail_open_continues(count)
+        return count
+
+
 # pylint: disable-next=too-many-return-statements
 def handle_stop(
     payload: dict[str, Any] | None,
@@ -256,23 +266,39 @@ def handle_stop(
         if not state.active or state.status != "pursuing":
             raise ValueError("inactive")
         state.turns_used = int(state.turns_used) + 1
-        if state.turns_used >= state.turn_budget or int(state.wake_ticks) >= int(
-            state.turn_budget
+        # Stop path charges turns only; wake budget is enforced in wake.py.
+        if budgets_exhausted(
+            state.turns_used,
+            state.turn_budget,
+            state.wake_ticks,
+            state.wake_budget,
         ):
             state.status = "budget-limited"
             state.active = False
             budget_hit = True
+            if state.turns_used >= state.turn_budget:
+                state.last_reason = (
+                    f"turn budget exhausted ({state.turns_used}/{state.turn_budget})"
+                )
+            else:
+                state.last_reason = (
+                    f"wake budget exhausted ({state.wake_ticks}/{state.wake_budget})"
+                )
 
     try:
         state = mutate_goal(mutator)
-        _clear_fail_open_continues()
+        with goal_lock():
+            _clear_fail_open_continues()
     except ValueError:
         return {}
     except OSError as exc:
         logger.error("Failed to persist stop-hook turn update: %s", exc)
         # Cap fail-open continuations to avoid unbounded free loops.
-        count = _read_fail_open_continues() + 1
-        _write_fail_open_continues(count)
+        try:
+            count = _bump_fail_open_continues()
+        except OSError as lock_exc:
+            logger.error("Fail-open counter lock failed: %s", lock_exc)
+            return {}
         if count > MAX_FAIL_OPEN_CONTINUES:
             logger.error(
                 "Stop persist failures exceeded %s; fail-open empty",

@@ -15,19 +15,21 @@ cursor-goal is a **single-user, trusted-local** Cursor IDE harness.
 | Stop hook | Fail-open; never blocks Cursor on corrupt state; singleflight across dual marketplace entries |
 | Eval YES signal | Protocol guard bound to goal content hash — **not** cryptographic attestation |
 
-If another user or process can write your goal data directory, they can cause commands to run as you. Protect the directory (`0700` on Unix; Windows best-effort `icacls` grant for the current user). Windows ACL harden grants the current user full control and does **not** strip inheritance (stripping can brick access if a later grant fails).
+If another user or process can write your goal data directory, they can cause commands to run as you. Protect the directory (`0700` on Unix; Windows best-effort `icacls /inheritance:r` then grant current user full control). If inheritance strip succeeds but the grant fails, cursor-goal logs a loud error — verify you can still access the data directory.
 
 ## Hardening controls
 
 - Prefer argv-safe `--test` commands; compound shell snippets use `shell=True` (`COMSPEC`/cmd on Windows).
-- Set `CURSOR_GOAL_DENY_SHELL=1` to refuse shell-mode validation.
+- Set `CURSOR_GOAL_DENY_SHELL=1` or create with `--deny-shell` (`shell_ok=false`) to refuse shell-mode validation.
 - Create/validate refuse a group/world-writable data directory on Unix.
-- Exclusive `goal.lock` times out after ~10s (Unix and Windows).
+- Exclusive `goal.lock` times out after ~10s (Unix and Windows). Fail-open stop continue counter uses the same lock.
 - Corrupt `goal.json` is quarantined to `goal.json.corrupt.<UTC>`.
 - Field length limits enforced on load and update (`MAX_FIELD_CHARS`).
+- Turn budget and wake budget are independent counters (schema v3).
 - `manage done --force` and `eval signal --force` are recovery escapes and are logged; they are not attestation.
 - Secret-ish tokens in validation commands are redacted in logs/status/prompts (heuristic; incomplete by design). `CURSOR_GOAL_LOG_SECRETS=1` may log full commands at DEBUG.
 - `last-stop-response.json` stores a redacted payload with private file mode when the OS allows.
+- `manage doctor` reports insecure dirs, hook presence, wake health, and shell mode.
 
 ## Reporting a vulnerability
 

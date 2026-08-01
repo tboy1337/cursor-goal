@@ -2,6 +2,12 @@
 
 After `.\scripts\install-goal.ps1`:
 
+0. Run doctor and confirm OK (or OK with warnings):
+
+```powershell
+py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" manage doctor
+```
+
 1. Confirm `~/.cursor/hooks.json` stop command ends with `stop_hook.cmd`.
 2. Confirm `~/.cursor/skills/goal/scripts/stop_hook.cmd` embeds an absolute Python path and `PYTHONUNBUFFERED=1`.
 3. Create a pursuing goal:
@@ -9,6 +15,8 @@ After `.\scripts\install-goal.ps1`:
 ```powershell
 py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" manage create "smoke continue" --budget 5
 ```
+
+Expect `Wake budget: 50` (default `budget * 10`) and schema/status fields via `manage status`.
 
 4. Expect create output to mention wake armed. Start the wake loop in a **background** Cursor Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE`:
 

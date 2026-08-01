@@ -53,6 +53,10 @@ def _print_help() -> None:
     print("Usage: cursor-goal <command> [args...]")
     print('  parse "<raw /goal input>"     Parse input to JSON')
     print("  manage <subcommand> [...]     Goal lifecycle")
+    print(
+        "                                "
+        "(create|status|doctor|pause|resume|done|clear)"
+    )
     print("  eval <subcommand> [...]       Evaluator harness")
     print(
         "                                "

@@ -372,7 +372,20 @@ print(__version__)
     Write-Host ""
     Write-Host "Stop hook command: $hookCommand"
     Write-Host "Verify:"
+    Write-Host ("  {0} -u {1} manage doctor" -f $Python.Exe, (Join-Path $installDir "scripts\run_goal.py"))
     Write-Host ("  {0} -u {1} manage status" -f $Python.Exe, (Join-Path $installDir "scripts\run_goal.py"))
+    Write-GoalInfo "Running manage doctor..."
+    # Pipe through Out-Host so doctor stdout does not become the function return value.
+    & $Python.Exe -u (Join-Path $installDir "scripts\run_goal.py") manage doctor 2>&1 |
+        ForEach-Object { Write-Host $_ }
+    if ($LASTEXITCODE -ne 0) {
+        Write-GoalWarn "manage doctor exited $LASTEXITCODE (install may still be usable)"
+    }
+    Write-Host ""
+    Write-Host "Next steps:"
+    Write-Host "  1) In Cursor: /goal <verifiable condition>"
+    Write-Host "  2) Start wake loop with notify_on_output matching ^AGENT_GOAL_WAKE"
+    Write-Host "  3) If Hooks UI shows {} but last-stop-response.json has followup_message, rely on wake"
     Write-GoalInfo "Windows stop hook uses stop_hook.cmd + stdout drain delay (Cursor capture race mitigation)."
     Write-GoalInfo "Wake watchdog: after create/resume, start wake loop with notify_on_output on ^AGENT_GOAL_WAKE."
     Write-GoalWarn "If stop followups still drop, wake continues the goal; last-stop-response.json is always written."

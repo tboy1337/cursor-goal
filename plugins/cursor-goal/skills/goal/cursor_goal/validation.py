@@ -72,6 +72,13 @@ def deny_shell_enabled() -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def shell_allowed_for_goal(*, shell_ok: bool = True) -> bool:
+    """Return True when shell-mode validation may run for this goal."""
+    if deny_shell_enabled():
+        return False
+    return bool(shell_ok)
+
+
 def try_split_argv(command: str) -> list[str] | None:
     """Best-effort split for simple commands without shell metacharacters."""
     meta = ("|", "&", ";", ">", "<", "`", "\n", "$(", "${")
@@ -103,13 +110,14 @@ def run_validation(
     *,
     timeout_sec: float = DEFAULT_TIMEOUT_SEC,
     cwd: str | None = None,
+    shell_ok: bool = True,
 ) -> ValidationResult:
     """Run a validation command via subprocess.
 
     Prefers ``shell=False`` with argv from :func:`try_split_argv`. Falls back to
     ``shell=True`` for user/agent shell snippets (e.g. ``npm test && npm run lint``)
-    unless ``CURSOR_GOAL_DENY_SHELL`` is set. On Windows, shell mode uses
-    ``COMSPEC`` (cmd.exe), not PowerShell.
+    unless ``CURSOR_GOAL_DENY_SHELL`` is set or ``shell_ok`` is False. On Windows,
+    shell mode uses ``COMSPEC`` (cmd.exe), not PowerShell.
 
     Shell mode is intentional but risky if an attacker controls goal.json.
     """
@@ -128,16 +136,20 @@ def run_validation(
         run_args: str | list[str] = argv
         use_shell = False
     else:
-        if deny_shell_enabled():
+        if not shell_allowed_for_goal(shell_ok=shell_ok):
+            reason = (
+                "CURSOR_GOAL_DENY_SHELL is set"
+                if deny_shell_enabled()
+                else "goal shell_ok=false (--deny-shell)"
+            )
             logger.warning(
-                "Validation refused: shell metacharacters with CURSOR_GOAL_DENY_SHELL"
+                "Validation refused: shell metacharacters with %s", reason
             )
             return ValidationResult(
                 exit_code=1,
                 output=(
                     "[goal-eval] Error: validation command requires a shell, but "
-                    "CURSOR_GOAL_DENY_SHELL is set. Use a simple argv command or "
-                    "unset CURSOR_GOAL_DENY_SHELL."
+                    f"{reason}. Use a simple argv command or allow shell mode."
                 ),
             )
         mode = "shell"

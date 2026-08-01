@@ -166,3 +166,9 @@ def test_run_validation_deny_shell(monkeypatch: pytest.MonkeyPatch) -> None:
     result = run_validation("echo a && echo b")
     assert result.exit_code == 1
     assert "CURSOR_GOAL_DENY_SHELL" in result.output
+
+
+def test_run_validation_shell_ok_false() -> None:
+    result = run_validation("echo a && echo b", shell_ok=False)
+    assert result.exit_code == 1
+    assert "shell_ok=false" in result.output

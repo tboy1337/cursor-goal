@@ -26,6 +26,7 @@ from cursor_goal.logging_config import get_logger
 from cursor_goal.state import (
     GoalState,
     _chmod_private,
+    budgets_exhausted,
     data_dir,
     load_goal,
     mutate_goal,
@@ -255,8 +256,12 @@ def _windows_pid_looks_owned(pid: int) -> bool:
     cmdline = (completed.stdout or "").strip().lower()
     if not cmdline:
         return False
-    markers = ("cursor_goal", "cursor-goal", "wake", "run_goal.py")
-    return any(marker in cmdline for marker in markers)
+    # Require cursor-goal identity — never match bare "wake" (false-positive kill).
+    if "cursor_goal" in cmdline or "cursor-goal" in cmdline:
+        return True
+    if "run_goal.py" in cmdline:
+        return True
+    return False
 
 
 def _kill_pid(pid: int, *, token: str | None = None) -> None:
@@ -336,10 +341,12 @@ def _followup_prompt() -> str:
             "Evaluate completion via subagent when ready."
         )
     remaining = max(0, state.turn_budget - state.turns_used)
+    wake_remaining = max(0, int(state.wake_budget) - int(state.wake_ticks))
     wake_ticks = int(getattr(state, "wake_ticks", 0) or 0)
     return (
         f"[GOAL] Turn {state.turns_used}/{state.turn_budget} "
-        f"({remaining} remaining, wake_ticks={wake_ticks}). "
+        f"({remaining} remaining, wake_ticks={wake_ticks}/"
+        f"{state.wake_budget}, wake_remaining={wake_remaining}). "
         f"Continue working toward: {state.condition}. "
         "Evaluate completion via subagent when ready. "
         "(Wake watchdog — stop-hook followup may have been dropped.)"
@@ -347,9 +354,12 @@ def _followup_prompt() -> str:
 
 
 def _budget_exhausted(state: GoalState) -> bool:
-    return int(state.turns_used) >= int(state.turn_budget) or int(
-        state.wake_ticks
-    ) >= int(state.turn_budget)
+    return budgets_exhausted(
+        state.turns_used,
+        state.turn_budget,
+        state.wake_ticks,
+        state.wake_budget,
+    )
 
 
 def _record_wake_tick() -> GoalState | None:
@@ -362,6 +372,9 @@ def _record_wake_tick() -> GoalState | None:
         if _budget_exhausted(state):
             state.status = "budget-limited"
             state.active = False
+            state.last_reason = (
+                f"wake budget exhausted ({state.wake_ticks}/{state.wake_budget})"
+            )
 
     try:
         return mutate_goal(mutator)
@@ -378,6 +391,19 @@ def emit_wake_line(prompt: str | None = None) -> None:
     payload = json.dumps({"prompt": text}, ensure_ascii=False)
     sys.stdout.write(f"{SENTINEL_PREFIX} {payload}\n")
     sys.stdout.flush()
+    _touch_last_emit()
+
+
+def _touch_last_emit() -> None:
+    """Record last_emit_at on wake.json when armed."""
+    config = _read_wake_config()
+    if config is None:
+        return
+    config["last_emit_at"] = _now_iso()
+    try:
+        _write_wake_config(config)
+    except OSError as exc:
+        logger.debug("Could not update wake last_emit_at: %s", exc)
 
 
 def arm(*, interval: int | None = None) -> dict[str, Any]:
@@ -442,7 +468,7 @@ def tick() -> int:
     state = _record_wake_tick()
     if state is not None and state.status == "budget-limited":
         emit_wake_line(
-            f"[GOAL BUDGET] Wake tick limit ({state.turn_budget}) reached. "
+            f"[GOAL BUDGET] Wake tick limit ({state.wake_budget}) reached. "
             f"Wrap up current work and summarize progress toward: {state.condition}"
         )
         disarm(kill_loop=True)
@@ -457,16 +483,40 @@ def status_report() -> dict[str, Any]:
     config = _read_wake_config()
     record = _read_pid_record()
     pid = int(record["pid"]) if record is not None else None
+    token = str((record or {}).get("token") or (config or {}).get("token") or "")
+    state = load_goal()
+    wake_remaining = None
+    if state is not None:
+        wake_remaining = max(0, int(state.wake_budget) - int(state.wake_ticks))
     return {
         "enabled": wake_enabled(),
         "armed": config is not None,
         "config": config,
         "pid": pid,
-        "token": (record or {}).get("token") if record else None,
+        "token": token or None,
+        "token_prefix": token[:8] if token else None,
         "pid_alive": _pid_alive(pid) if pid is not None else False,
         "goal_pursuing": _goal_is_pursuing(),
+        "interval_s": (config or {}).get("interval_s"),
+        "last_emit_at": (config or {}).get("last_emit_at"),
+        "wake_ticks": None if state is None else state.wake_ticks,
+        "wake_budget": None if state is None else state.wake_budget,
+        "wake_remaining": wake_remaining,
         "sentinel": SENTINEL_PREFIX,
         "notify_pattern": f"^{SENTINEL_PREFIX}",
+    }
+
+
+def status_info() -> dict[str, Any]:
+    """Compact wake health for manage status/doctor."""
+    report = status_report()
+    return {
+        "armed": bool(report.get("armed")),
+        "pid_alive": bool(report.get("pid_alive")),
+        "interval_s": report.get("interval_s"),
+        "token_prefix": report.get("token_prefix"),
+        "last_emit_at": report.get("last_emit_at"),
+        "wake_remaining": report.get("wake_remaining"),
     }
 
 
@@ -529,7 +579,7 @@ def run_loop(*, interval: int | None = None) -> int:
             state = _record_wake_tick()
             if state is not None and state.status == "budget-limited":
                 emit_wake_line(
-                    f"[GOAL BUDGET] Wake tick limit ({state.turn_budget}) reached. "
+                    f"[GOAL BUDGET] Wake tick limit ({state.wake_budget}) reached. "
                     f"Wrap up current work and summarize progress toward: "
                     f"{state.condition}"
                 )

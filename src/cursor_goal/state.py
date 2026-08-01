@@ -25,11 +25,12 @@ logger = get_logger("cursor_goal.state")
 EVAL_FLAG_NAME = "goal-eval-done"
 GOAL_FILE_NAME = "goal.json"
 LOCK_FILE_NAME = "goal.lock"
-SCHEMA_VERSION = 2
-SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2})
+SCHEMA_VERSION = 3
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3})
 MAX_TURN_BUDGET = 500
 MAX_FIELD_CHARS = 4000
 LOCK_TIMEOUT_SEC = 10.0
+WAKE_BUDGET_MULTIPLIER = 10
 _HARDENED_PATHS: set[str] = set()
 ALLOWED_STATUSES = frozenset(
     {
@@ -49,6 +50,8 @@ _UPDATABLE_FIELDS = frozenset(
         "turn_budget",
         "turns_used",
         "wake_ticks",
+        "wake_budget",
+        "shell_ok",
         "status",
         "last_reason",
         "last_validation_output",
@@ -153,6 +156,49 @@ def clamp_turn_budget(value: int) -> int:
     return value
 
 
+def default_wake_budget(turn_budget: int) -> int:
+    """Default wake_budget = clamp(turn_budget * 10, 10, MAX_TURN_BUDGET)."""
+    raw = int(turn_budget) * WAKE_BUDGET_MULTIPLIER
+    return max(10, min(MAX_TURN_BUDGET, raw))
+
+
+def clamp_wake_budget(value: int) -> int:
+    """Clamp wake budget to [1, MAX_TURN_BUDGET]."""
+    if value < 1:
+        raise ValueError(f"Wake budget must be a positive integer, got {value}")
+    if value > MAX_TURN_BUDGET:
+        logger.warning(
+            "wake_budget %s exceeds max %s; clamping", value, MAX_TURN_BUDGET
+        )
+        return MAX_TURN_BUDGET
+    return value
+
+
+def budgets_exhausted(
+    turns_used: int,
+    turn_budget: int,
+    wake_ticks: int,
+    wake_budget: int,
+) -> bool:
+    """True when turn or wake budget is exhausted (independent counters)."""
+    return int(turns_used) >= int(turn_budget) or int(wake_ticks) >= int(wake_budget)
+
+
+def _parse_shell_ok(value: Any) -> bool:
+    """Parse shell_ok from JSON / CLI-ish values."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    raise ValueError(f"shell_ok must be a boolean, got {value!r}")
+
+
 def _chmod_private(path: Path) -> None:
     """Best-effort restrictive permissions (0600) on Unix."""
     if os.name == "nt":
@@ -192,10 +238,12 @@ def _acl_harden_disabled() -> bool:
 
 
 def _harden_windows_acl(path: Path) -> None:
-    """Best-effort grant current user full control via icacls (no hard deps).
+    """Best-effort private ACL via icacls (no hard deps).
 
-    Does not strip inheritance first (that can leave paths inaccessible if the
-    subsequent grant fails). Skip with ``CURSOR_GOAL_SKIP_ACL=1``.
+    Tries ``/inheritance:r`` then grants the current user full control. If the
+    grant fails after inheritance was stripped, logs a loud warning (path may
+    still be reachable via remaining explicit ACEs). Skip with
+    ``CURSOR_GOAL_SKIP_ACL=1``.
     """
     if os.name != "nt" or _acl_harden_disabled():
         return
@@ -213,7 +261,25 @@ def _harden_windows_acl(path: Path) -> None:
         logger.warning("icacls not found on PATH; skip Windows ACL harden for %s", path)
         return
     grant = f"{user}:(OI)(CI)F" if path.is_dir() else f"{user}:F"
+    inheritance_stripped = False
     try:
+        strip = subprocess.run(  # nosec B603
+            [icacls, str(path), "/inheritance:r"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        if strip.returncode == 0:
+            inheritance_stripped = True
+        else:
+            err = (strip.stderr or strip.stdout or "").strip()
+            logger.warning(
+                "Windows ACL inheritance strip failed for %s "
+                "(continuing with grant): %s",
+                path,
+                err[:200] or f"exit={strip.returncode}",
+            )
         completed = subprocess.run(  # nosec B603
             [icacls, str(path), "/grant:r", grant],
             capture_output=True,
@@ -223,6 +289,12 @@ def _harden_windows_acl(path: Path) -> None:
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         logger.warning("Windows ACL harden failed for %s: %s", path, exc)
+        if inheritance_stripped:
+            logger.error(
+                "ACL inheritance was stripped but grant failed for %s; "
+                "verify you can still access the data directory",
+                path,
+            )
         return
     if completed.returncode != 0:
         err = (completed.stderr or completed.stdout or "").strip()
@@ -232,9 +304,20 @@ def _harden_windows_acl(path: Path) -> None:
             path,
             err[:200] or "(no output)",
         )
+        if inheritance_stripped:
+            logger.error(
+                "ACL inheritance was stripped but grant failed for %s; "
+                "verify you can still access the data directory",
+                path,
+            )
         return
     _HARDENED_PATHS.add(key)
-    logger.debug("Windows ACL hardened path=%s user=%s", path, user)
+    logger.debug(
+        "Windows ACL hardened path=%s user=%s inheritance_stripped=%s",
+        path,
+        user,
+        inheritance_stripped,
+    )
 
 
 def _lock_timeout_message() -> str:
@@ -376,6 +459,14 @@ def _set_wake_ticks(state: GoalState, value: Any) -> None:
     state.wake_ticks = ticks
 
 
+def _set_wake_budget(state: GoalState, value: Any) -> None:
+    state.wake_budget = clamp_wake_budget(int(value))
+
+
+def _set_shell_ok(state: GoalState, value: Any) -> None:
+    state.shell_ok = _parse_shell_ok(value)
+
+
 def _set_status(state: GoalState, value: Any) -> None:
     state.status = _parse_status(value)
 
@@ -407,6 +498,8 @@ _FIELD_SETTERS: dict[str, Callable[[GoalState, Any], None]] = {
     "turn_budget": _set_turn_budget,
     "turns_used": _set_turns_used,
     "wake_ticks": _set_wake_ticks,
+    "wake_budget": _set_wake_budget,
+    "shell_ok": _set_shell_ok,
     "status": _set_status,
     "last_reason": _set_last_reason,
     "last_validation_output": _set_last_validation_output,
@@ -432,6 +525,8 @@ class GoalState:  # pylint: disable=too-many-instance-attributes
     turn_budget: int = 20
     turns_used: int = 0
     wake_ticks: int = 0
+    wake_budget: int = 200
+    shell_ok: bool = True
     status: str = "pursuing"
     last_reason: str = ""
     last_validation_output: str = ""
@@ -459,7 +554,37 @@ class GoalState:  # pylint: disable=too-many-instance-attributes
             raise ValueError(f"turns_used must be >= 0, got {turns_used}")
         if wake_ticks < 0:
             raise ValueError(f"wake_ticks must be >= 0, got {wake_ticks}")
-        # Clamp counters that exceed budget (corrupt / race) into budget-limited.
+        if schema_version not in SUPPORTED_SCHEMA_VERSIONS:
+            raise ValueError(
+                f"unsupported schema_version={schema_version}; "
+                f"supported={sorted(SUPPORTED_SCHEMA_VERSIONS)}"
+            )
+
+        # Migrate v1/v2: derive wake_budget / shell_ok when absent.
+        wake_budget_raw = data.get("wake_budget")
+        if wake_budget_raw is None or wake_budget_raw == "":
+            wake_budget = max(default_wake_budget(turn_budget), wake_ticks)
+            if wake_ticks > 0 and wake_ticks > default_wake_budget(turn_budget):
+                logger.info(
+                    "Migrating schema %s: wake_budget raised to wake_ticks=%s",
+                    schema_version,
+                    wake_ticks,
+                )
+        else:
+            try:
+                wake_budget = clamp_wake_budget(int(wake_budget_raw))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"invalid wake_budget: {exc}") from exc
+
+        if "shell_ok" not in data:
+            shell_ok = True
+        else:
+            try:
+                shell_ok = _parse_shell_ok(data.get("shell_ok"))
+            except ValueError as exc:
+                raise ValueError(f"invalid shell_ok: {exc}") from exc
+
+        # Clamp counters that exceed their budgets (corrupt / race).
         if turns_used > turn_budget:
             logger.warning(
                 "turns_used %s > turn_budget %s; clamping",
@@ -467,18 +592,14 @@ class GoalState:  # pylint: disable=too-many-instance-attributes
                 turn_budget,
             )
             turns_used = turn_budget
-        if wake_ticks > turn_budget:
+        if wake_ticks > wake_budget:
             logger.warning(
-                "wake_ticks %s > turn_budget %s; clamping",
+                "wake_ticks %s > wake_budget %s; clamping",
                 wake_ticks,
-                turn_budget,
+                wake_budget,
             )
-            wake_ticks = turn_budget
-        if schema_version not in SUPPORTED_SCHEMA_VERSIONS:
-            raise ValueError(
-                f"unsupported schema_version={schema_version}; "
-                f"supported={sorted(SUPPORTED_SCHEMA_VERSIONS)}"
-            )
+            wake_ticks = wake_budget
+
         exit_raw = data.get("last_validation_exit_code", None)
         exit_code: int | None
         if exit_raw is None or exit_raw == "":
@@ -501,10 +622,12 @@ class GoalState:  # pylint: disable=too-many-instance-attributes
         if (
             status == "pursuing"
             and active
-            and (turns_used >= turn_budget or wake_ticks >= turn_budget)
+            and budgets_exhausted(turns_used, turn_budget, wake_ticks, wake_budget)
         ):
             status = "budget-limited"
             active = False
+        # Persist migrated schema on next save via to_dict(); keep loaded version
+        # but treat as supported. Callers saving rewrite to SCHEMA_VERSION.
         return cls(
             active=active,
             condition=condition,
@@ -513,6 +636,8 @@ class GoalState:  # pylint: disable=too-many-instance-attributes
             turn_budget=turn_budget,
             turns_used=turns_used,
             wake_ticks=wake_ticks,
+            wake_budget=wake_budget,
+            shell_ok=shell_ok,
             status=status,
             last_reason=str(data.get("last_reason") or ""),
             last_validation_output=str(data.get("last_validation_output") or ""),
