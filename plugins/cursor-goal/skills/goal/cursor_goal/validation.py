@@ -142,9 +142,7 @@ def run_validation(
                 if deny_shell_enabled()
                 else "goal shell_ok=false (--deny-shell)"
             )
-            logger.warning(
-                "Validation refused: shell metacharacters with %s", reason
-            )
+            logger.warning("Validation refused: shell metacharacters with %s", reason)
             return ValidationResult(
                 exit_code=1,
                 output=(

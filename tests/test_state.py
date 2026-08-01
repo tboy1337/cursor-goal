@@ -104,6 +104,7 @@ def test_from_dict_migrates_v2_wake_budget(goal_home: Path) -> None:
     assert state.wake_ticks == 5
     assert state.status == "pursuing"
 
+
 def test_load_goal_rejects_unknown_schema(goal_home: Path) -> None:
     (goal_home / "goal.json").write_text(
         json.dumps(

@@ -520,6 +520,7 @@ def test_wake_ticks_do_not_consume_turn_budget(wake_on: Path) -> None:
     assert data["turn_budget"] == 2
     assert data["schema_version"] == 3
 
+
 def test_force_create_disarms_prior_wake(
     wake_on: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

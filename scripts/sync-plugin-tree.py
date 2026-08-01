@@ -128,9 +128,7 @@ def write_plugin(root: Path) -> Path:
     )
     _copy_tree(pkg_src, skill_dest / "cursor_goal")
     # newline="\n" forces LF on Windows so --check matches git (eol=lf).
-    (skill_dest / "VERSION").write_text(
-        version + "\n", encoding="utf-8", newline="\n"
-    )
+    (skill_dest / "VERSION").write_text(version + "\n", encoding="utf-8", newline="\n")
 
     shutil.copy2(agents_src / "goalKeeper.md", agents_dest / "goalKeeper.md")
     shutil.copy2(agents_src / "goal-evaluator.md", agents_dest / "goal-evaluator.md")
@@ -141,17 +139,13 @@ def write_plugin(root: Path) -> Path:
         "hooks": {
             "stop": [
                 {
-                    "command": (
-                        f'cmd /c "{plugin_root_var}/stop_hook.cmd"'
-                    ),
+                    "command": (f'cmd /c "{plugin_root_var}/stop_hook.cmd"'),
                     "loop_limit": None,
                     "timeout": 30,
                     "_cursor_goal": MARKER,
                 },
                 {
-                    "command": (
-                        f"python3 -u {plugin_root_var}/stop_hook.py"
-                    ),
+                    "command": (f"python3 -u {plugin_root_var}/stop_hook.py"),
                     "loop_limit": None,
                     "timeout": 30,
                     "_cursor_goal": MARKER,

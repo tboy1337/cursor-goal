@@ -478,9 +478,7 @@ def cmd_doctor(_argv: list[str]) -> int:
                 "or continuation may stall if stop-hook stdout is dropped"
             )
         elif not wake_info.get("pid_alive"):
-            warnings.append(
-                "Wake armed but loop process not alive — start `wake loop`"
-            )
+            warnings.append("Wake armed but loop process not alive — start `wake loop`")
     elif state is None:
         print("  Goal: none")
     else:

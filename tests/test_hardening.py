@@ -466,6 +466,7 @@ def test_harden_windows_acl_cached(
     assert any("/inheritance:r" in c for c in calls)
     assert any("/grant:r" in c for c in calls)
 
+
 def test_parse_result_path_jail_rejects_outside(
     goal_home: Path, tmp_path: Path
 ) -> None:

@@ -242,7 +242,9 @@ def test_manage_status_corrupt(goal_home: Path) -> None:
     assert "Error" in err
 
 
-def test_manage_doctor_paused_goal(goal_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_manage_doctor_paused_goal(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from cursor_goal import manage as manage_mod
 
     assert run_cli("manage", "create", "p")[0] == 0
