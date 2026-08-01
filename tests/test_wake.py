@@ -587,6 +587,30 @@ def test_windows_ownership_rejects_bare_wake_marker(
     )
     assert wake_mod._windows_pid_looks_owned(12345) is True
 
+    class OwnedPackage:
+        returncode = 0
+        stdout = "python -m cursor_goal wake loop"
+        stderr = ""
+
+    monkeypatch.setattr(
+        wake_mod.subprocess,
+        "run",
+        lambda *_a, **_k: OwnedPackage(),
+    )
+    assert wake_mod._windows_pid_looks_owned(12345) is True
+
+    class OwnedHyphen:
+        returncode = 0
+        stdout = "C:\\tools\\cursor-goal\\wake_loop.cmd"
+        stderr = ""
+
+    monkeypatch.setattr(
+        wake_mod.subprocess,
+        "run",
+        lambda *_a, **_k: OwnedHyphen(),
+    )
+    assert wake_mod._windows_pid_looks_owned(99) is True
+
 
 def test_atomic_write_cleans_tmp_on_replace_fail(
     wake_on: Path, monkeypatch: pytest.MonkeyPatch
@@ -663,6 +687,20 @@ def test_kill_pid_token_guards(wake_on: Path, monkeypatch: pytest.MonkeyPatch) -
     wake_mod._kill_pid(777, token="wrong")
     wake_mod._write_pid_record(888, "same")
     wake_mod._kill_pid(777, token="same")
+    # Matching token+pid falls through to platform kill paths.
+    wake_mod._write_pid_record(777, "same")
+    monkeypatch.setattr(wake_mod, "_windows_pid_looks_owned", lambda _p: True)
+    monkeypatch.setattr(wake_mod.subprocess, "run", lambda *_a, **_k: None)
+    monkeypatch.setattr(wake_mod.os, "kill", lambda *_a, **_k: None)
+    wake_mod._kill_pid(777, token="same")
+
+
+def test_record_wake_tick_inactive(wake_on: Path) -> None:
+    assert run_cli("manage", "create", "inactive tick")[0] == 0
+    assert run_cli("manage", "done", "--force")[0] == 0
+    state = wake_mod._record_wake_tick()
+    assert state is not None
+    assert state.active is False or state.status != "pursuing"
 
 
 def test_kill_existing_loop(wake_on: Path, monkeypatch: pytest.MonkeyPatch) -> None:

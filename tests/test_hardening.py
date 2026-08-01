@@ -649,6 +649,14 @@ def test_default_wake_budget_helpers() -> None:
     assert state.shell_ok is False
     _apply_field(state, "shell_ok", "off")
     assert state.shell_ok is False
+    _apply_field(state, "shell_ok", "true")
+    assert state.shell_ok is True
+    _apply_field(state, "shell_ok", "on")
+    assert state.shell_ok is True
+    _apply_field(state, "shell_ok", 1)
+    assert state.shell_ok is True
+    _apply_field(state, "wake_ticks", 3)
+    assert state.wake_ticks == 3
     try:
         _apply_field(state, "shell_ok", "maybe")
         raise AssertionError("expected ValueError")
