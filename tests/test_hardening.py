@@ -418,7 +418,9 @@ def test_harden_windows_acl_cached(
 
     monkeypatch.setattr(state_mod.os, "name", "nt")
     monkeypatch.setattr(state_mod.subprocess, "run", fake_run)
-    monkeypatch.setattr(state_mod.shutil, "which", lambda _n: r"C:\Windows\System32\icacls.exe")
+    monkeypatch.setattr(
+        state_mod.shutil, "which", lambda _n: r"C:\Windows\System32\icacls.exe"
+    )
     monkeypatch.setenv("USERNAME", "tester")
     monkeypatch.delenv("CURSOR_GOAL_SKIP_ACL", raising=False)
     state_mod._HARDENED_PATHS.clear()
@@ -553,9 +555,7 @@ def test_harden_windows_acl_missing_icacls(
     assert str(goal_home) not in state_mod._HARDENED_PATHS
 
 
-def test_quarantine_collision(
-    goal_home: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_quarantine_collision(goal_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from cursor_goal import state as state_mod
 
     (goal_home / "goal.json").write_text("{bad", encoding="utf-8")

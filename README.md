@@ -30,7 +30,7 @@ Three supported paths:
 | Path | Who | How |
 |------|-----|-----|
 | **Clone + installer** | Individuals | Full clone or GitHub Release archive → `install-goal.sh` / `install-goal.ps1` |
-| **Tagged release** | Individuals | `git clone --branch v1.2.0 …` then installer (see [docs/install.md](docs/install.md)) |
+| **Tagged release** | Individuals | `git clone --branch v1.3.0 …` then installer (see [docs/install.md](docs/install.md)) |
 | **Teams marketplace** | Teams/Enterprise | Import this repo in Cursor Dashboard → Plugins (see `.cursor-plugin/marketplace.json`) |
 
 **Agent install (explicit steps):**
@@ -171,6 +171,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-powershell-tes
 py -3 scripts/verify.py
 py -3 scripts/verify.py --fix   # apply isort/black, then verify
 ```
+
+## Releases
+
+See [CHANGELOG.md](CHANGELOG.md) and the maintainer checklist in [docs/release.md](docs/release.md).
 
 ## License
 

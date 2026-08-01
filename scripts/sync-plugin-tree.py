@@ -24,6 +24,7 @@ import json
 import re
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 PLUGIN_NAME = "cursor-goal"
@@ -193,34 +194,65 @@ def write_plugin(root: Path) -> Path:
         "Individuals: prefer `scripts/install-goal.sh` / `install-goal.ps1` "
         "from a full clone or GitHub Release.\n\n"
         f"Version: **{version}** (AGPL-3.0-only).\n\n"
-        "Stop hook uses `${CURSOR_PLUGIN_ROOT}` and `python3` on PATH. "
-        "In-turn evaluation remains primary; the stop hook is a safety net "
-        "(especially on Windows).\n",
+        "Stop hook uses `${CURSOR_PLUGIN_ROOT}` and `python3` on PATH "
+        "(Unix/Teams-oriented). On native Windows prefer `install-goal.ps1`, "
+        "which writes `stop_hook.cmd` with an absolute interpreter. "
+        "In-turn evaluation remains primary; the stop hook is a safety net.\n",
         encoding="utf-8",
     )
     return plugin_root
 
 
 def _files_to_compare(plugin_root: Path) -> list[Path]:
+    """Return critical single-file paths under the plugin root."""
     paths: list[Path] = []
     for pattern in (
         "skills/goal/SKILL.md",
         "skills/goal/scripts/run_goal.py",
         "skills/goal/scripts/stop_hook.py",
+        "skills/goal/scripts/stop_hook.cmd",
         "skills/goal/VERSION",
         "agents/goalKeeper.md",
         "agents/goal-evaluator.md",
         "hooks/hooks.json",
         ".cursor-plugin/plugin.json",
+        "README.md",
     ):
         paths.append(plugin_root / pattern)
     return paths
 
 
-def check_plugin(root: Path) -> int:
-    """Rebuild into a temp tree and compare critical files."""
-    import tempfile
+def _iter_vendored_files(pkg_root: Path) -> list[Path]:
+    """List files under the vendored cursor_goal package (skip __pycache__)."""
+    if not pkg_root.is_dir():
+        return []
+    files: list[Path] = []
+    for path in sorted(pkg_root.rglob("*")):
+        if not path.is_file():
+            continue
+        if "__pycache__" in path.parts:
+            continue
+        files.append(path)
+    return files
 
+
+def _compare_file(left: Path, right: Path, rel_key: Path) -> str | None:
+    """Return a mismatch label, or None when files match."""
+    if not right.is_file():
+        return f"missing: {rel_key.as_posix()}"
+    if left.suffix == ".json":
+        left_data = json.loads(left.read_text(encoding="utf-8"))
+        right_data = json.loads(right.read_text(encoding="utf-8"))
+        if left_data != right_data:
+            return f"drift: {rel_key.as_posix()}"
+        return None
+    if not filecmp.cmp(left, right, shallow=False):
+        return f"drift: {rel_key.as_posix()}"
+    return None
+
+
+def check_plugin(root: Path) -> int:
+    """Rebuild into a temp tree and compare critical files + vendored package."""
     version = package_version(root)
     plugin_root = root / "plugins" / PLUGIN_NAME
     if not plugin_root.is_dir():
@@ -244,16 +276,33 @@ def check_plugin(root: Path) -> int:
             rel_key = rel.relative_to(expected)
             left = expected / rel_key
             right = plugin_root / rel_key
-            if not right.is_file():
-                mismatches.append(f"missing: {rel_key}")
+            label = _compare_file(left, right, rel_key)
+            if label is not None:
+                mismatches.append(label)
+
+        expected_pkg = expected / "skills" / "goal" / "cursor_goal"
+        actual_pkg = plugin_root / "skills" / "goal" / "cursor_goal"
+        expected_files = {
+            p.relative_to(expected_pkg).as_posix(): p
+            for p in _iter_vendored_files(expected_pkg)
+        }
+        actual_files = {
+            p.relative_to(actual_pkg).as_posix(): p
+            for p in _iter_vendored_files(actual_pkg)
+        }
+        for rel_posix, left in expected_files.items():
+            right = actual_files.get(rel_posix)
+            if right is None:
+                mismatches.append(f"missing: skills/goal/cursor_goal/{rel_posix}")
                 continue
-            if left.suffix == ".json":
-                left_data = json.loads(left.read_text(encoding="utf-8"))
-                right_data = json.loads(right.read_text(encoding="utf-8"))
-                if left_data != right_data:
-                    mismatches.append(f"drift: {rel_key}")
-            elif not filecmp.cmp(left, right, shallow=False):
-                mismatches.append(f"drift: {rel_key}")
+            label = _compare_file(
+                left, right, Path("skills/goal/cursor_goal") / rel_posix
+            )
+            if label is not None:
+                mismatches.append(label)
+        for rel_posix in sorted(set(actual_files) - set(expected_files)):
+            mismatches.append(f"extra: skills/goal/cursor_goal/{rel_posix}")
+
         market_data = json.loads(market.read_text(encoding="utf-8"))
         if market_data.get("metadata", {}).get("version") != version:
             mismatches.append("marketplace metadata.version drift")

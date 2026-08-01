@@ -10,6 +10,7 @@ cursor-goal targets **Cursor IDE only**. The harness is a **Python 3.12+** packa
 |----------|------------|---------------|-----------|--------|
 | Cursor IDE (Unix) | `goalKeeper.md` + `goal-evaluator.md` | `Task` | `hooks.json` → `stop_hook.py` | **Harness YES**; stop followups **YES** |
 | Cursor IDE (Windows) | same | `Task` | `hooks.json` → `stop_hook.cmd` (+ drain delay) | Harness YES; race mitigated ([forum](https://forum.cursor.com/t/race-condition-silently-disables-hooks-that-exit-quickly/165818)); still prefer in-turn eval |
+| Teams marketplace plugin | same | `Task` | `python3` + `${CURSOR_PLUGIN_ROOT}` | Harness YES; Windows users should prefer `install-goal.ps1` for stop hooks |
 | Cursor CLI | same | `Task` | `hooks.json` | NO (E2E) |
 
 ## Installed Layout

@@ -4,6 +4,7 @@
 Checks:
   - pyproject.toml ``version`` == ``cursor_goal.__version__``
   - docs/install.md tagged clone pin ``vX.Y.Z`` matches (when present)
+  - README.md tagged clone pin ``vX.Y.Z`` matches (when present)
   - plugins/cursor-goal/.cursor-plugin/plugin.json ``version`` matches (when present)
   - .cursor-plugin/marketplace.json plugin entry version matches (when present)
 """
@@ -14,6 +15,8 @@ import json
 import re
 import sys
 from pathlib import Path
+
+_TAGGED_CLONE_PIN = re.compile(r"git clone --branch v(\d+\.\d+\.\d+)")
 
 
 def _read_pyproject_version(root: Path) -> str:
@@ -32,19 +35,26 @@ def _read_init_version(root: Path) -> str:
     return match.group(1)
 
 
-def _read_docs_pin(root: Path) -> str | None:
-    path = root / "docs" / "install.md"
+def _read_tagged_clone_pin(path: Path, *, label: str) -> str | None:
+    """Return the unique ``git clone --branch vX.Y.Z`` pin from *path*, if any."""
     if not path.is_file():
         return None
     text = path.read_text(encoding="utf-8")
-    matches = re.findall(r"git clone --branch v(\d+\.\d+\.\d+)", text)
+    matches = _TAGGED_CLONE_PIN.findall(text)
     if not matches:
         return None
-    # All pins in the doc must agree.
     unique = set(matches)
     if len(unique) != 1:
-        raise ValueError(f"Conflicting docs version pins: {sorted(unique)}")
+        raise ValueError(f"Conflicting {label} version pins: {sorted(unique)}")
     return next(iter(unique))
+
+
+def _read_docs_pin(root: Path) -> str | None:
+    return _read_tagged_clone_pin(root / "docs" / "install.md", label="docs")
+
+
+def _read_readme_pin(root: Path) -> str | None:
+    return _read_tagged_clone_pin(root / "README.md", label="README")
 
 
 def _read_plugin_version(root: Path) -> str | None:
@@ -102,6 +112,14 @@ def main() -> int:
         errors.append(f"docs pin v{docs} != package {proj}")
 
     try:
+        readme = _read_readme_pin(root)
+    except ValueError as exc:
+        errors.append(str(exc))
+        readme = None
+    if readme is not None and readme != proj:
+        errors.append(f"README pin v{readme} != package {proj}")
+
+    try:
         plugin = _read_plugin_version(root)
     except ValueError as exc:
         errors.append(str(exc))
@@ -126,6 +144,8 @@ def main() -> int:
     extras = []
     if docs is not None:
         extras.append(f"docs=v{docs}")
+    if readme is not None:
+        extras.append(f"README=v{readme}")
     if plugin is not None:
         extras.append(f"plugin={plugin}")
     if market is not None:

@@ -4,6 +4,6 @@ Teams/Enterprise: import this repository as a Team Marketplace (see repo `.curso
 
 Individuals: prefer `scripts/install-goal.sh` / `install-goal.ps1` from a full clone or GitHub Release.
 
-Version: **1.2.0** (AGPL-3.0-only).
+Version: **1.3.0** (AGPL-3.0-only).
 
-Stop hook uses `${CURSOR_PLUGIN_ROOT}` and `python3` on PATH. In-turn evaluation remains primary; the stop hook is a safety net (especially on Windows).
+Stop hook uses `${CURSOR_PLUGIN_ROOT}` and `python3` on PATH (Unix/Teams-oriented). On native Windows prefer `install-goal.ps1`, which writes `stop_hook.cmd` with an absolute interpreter. In-turn evaluation remains primary; the stop hook is a safety net.

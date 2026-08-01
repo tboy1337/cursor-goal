@@ -12,7 +12,7 @@ jobs:
   release:
     name: Build and publish GitHub Release
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
@@ -43,6 +43,12 @@ jobs:
           fi
           echo "Tag OK: $TAG"
 
+      - name: Pytest
+        run: pytest tests -q --tb=short
+
+      - name: Coverage metrics (>=95% statement/branch/function/combined)
+        run: python scripts/check_coverage_metrics.py --threshold 95
+
       - name: Build sdist and wheel
         run: python -m build
 
@@ -64,7 +70,7 @@ jobs:
             "1. Download the source archive or clone \`--branch ${TAG}\`" \
             "2. Run \`./scripts/install-goal.sh\` or \`scripts/install-goal.ps1\`" \
             "" \
-            "See [docs/install.md](https://github.com/tboy1337/cursor-goal/blob/${TAG}/docs/install.md)." \
+            "See [docs/install.md](https://github.com/tboy1337/cursor-goal/blob/${TAG}/docs/install.md) and [CHANGELOG.md](https://github.com/tboy1337/cursor-goal/blob/${TAG}/CHANGELOG.md)." \
           )"
           gh release create "$TAG" \
             --title "cursor-goal ${TAG}" \

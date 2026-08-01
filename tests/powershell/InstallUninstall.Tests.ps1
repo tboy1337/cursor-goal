@@ -237,6 +237,39 @@ Describe 'Invoke-GoalInstall' {
         $code = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $emptyRepo -Python (Find-GoalPython)
         $code | Should -Be 1
     }
+
+    It 'returns 1 when SKILL.md is missing but package exists' {
+        $partial = Join-Path $TempHome 'partial-repo'
+        $pkg = Join-Path $partial 'src\cursor_goal'
+        New-Item -ItemType Directory -Force -Path $pkg | Out-Null
+        Set-Content -Path (Join-Path $pkg '__init__.py') -Value '__version__ = "0.0.0"'
+        $code = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $partial -Python (Find-GoalPython)
+        $code | Should -Be 1
+    }
+
+    It 'returns 1 when goalKeeper agent is missing' {
+        $partial = Join-Path $TempHome 'no-keeper'
+        New-Item -ItemType Directory -Force -Path (Join-Path $partial 'src\cursor_goal') | Out-Null
+        Set-Content -Path (Join-Path $partial 'src\cursor_goal\__init__.py') -Value '__version__ = "0.0.0"'
+        New-Item -ItemType Directory -Force -Path (Join-Path $partial '.cursor\skills\goal') | Out-Null
+        Set-Content -Path (Join-Path $partial '.cursor\skills\goal\SKILL.md') -Value 'skill'
+        New-Item -ItemType Directory -Force -Path (Join-Path $partial '.cursor\agents') | Out-Null
+        Set-Content -Path (Join-Path $partial '.cursor\agents\goal-evaluator.md') -Value 'eval'
+        $code = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $partial -Python (Find-GoalPython)
+        $code | Should -Be 1
+    }
+
+    It 'returns 1 when goal-evaluator agent is missing' {
+        $partial = Join-Path $TempHome 'no-eval'
+        New-Item -ItemType Directory -Force -Path (Join-Path $partial 'src\cursor_goal') | Out-Null
+        Set-Content -Path (Join-Path $partial 'src\cursor_goal\__init__.py') -Value '__version__ = "0.0.0"'
+        New-Item -ItemType Directory -Force -Path (Join-Path $partial '.cursor\skills\goal') | Out-Null
+        Set-Content -Path (Join-Path $partial '.cursor\skills\goal\SKILL.md') -Value 'skill'
+        New-Item -ItemType Directory -Force -Path (Join-Path $partial '.cursor\agents') | Out-Null
+        Set-Content -Path (Join-Path $partial '.cursor\agents\goalKeeper.md') -Value 'keeper'
+        $code = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $partial -Python (Find-GoalPython)
+        $code | Should -Be 1
+    }
 }
 
 Describe 'Select-GoalStopHooksRemaining' {
@@ -328,6 +361,38 @@ Describe 'Invoke-GoalHooksConfigMerge failure' {
             if (Test-Path $TempHome) { Remove-Item -Recurse -Force $TempHome }
         }
     }
+
+    It 'restores hooks.json and skill backup when merge fails after upgrade' {
+        Mock Invoke-GoalHooksConfigMerge { return 1 }
+        $TempHome = Join-Path ([IO.Path]::GetTempPath()) ("cg-mergerestore-" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $TempHome | Out-Null
+        try {
+            # Seed a prior install + hooks so backups exist and restore paths run.
+            $installDir = Join-Path $TempHome '.cursor\skills\goal'
+            New-Item -ItemType Directory -Force -Path (Join-Path $installDir 'scripts') | Out-Null
+            Set-Content -Path (Join-Path $installDir 'SKILL.md') -Value 'prior-skill'
+            Set-Content -Path (Join-Path $installDir 'scripts\marker.txt') -Value 'prior'
+            $hooksPath = Join-Path $TempHome '.cursor\hooks.json'
+            New-Item -ItemType Directory -Force -Path (Split-Path $hooksPath) | Out-Null
+            @{
+                version = 1
+                hooks   = @{
+                    stop = @(@{ command = './prior-keep.sh' })
+                }
+            } | ConvertTo-Json -Depth 10 | Set-Content -Path $hooksPath -Encoding utf8
+
+            $code = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $RepoRoot -Python (Find-GoalPython)
+            $code | Should -Be 1
+            Test-Path (Join-Path $installDir 'SKILL.md') | Should -BeTrue
+            (Get-Content -Raw (Join-Path $installDir 'SKILL.md')).Trim() | Should -Be 'prior-skill'
+            $hooks = Get-Content -Raw $hooksPath | ConvertFrom-Json
+            $cmds = @($hooks.hooks.stop | ForEach-Object { $_.command })
+            $cmds | Should -Contain './prior-keep.sh'
+        }
+        finally {
+            if (Test-Path $TempHome) { Remove-Item -Recurse -Force $TempHome }
+        }
+    }
 }
 
 Describe 'Invoke-GoalUninstall python fallback' {
@@ -342,6 +407,29 @@ Describe 'Invoke-GoalUninstall python fallback' {
             $code | Should -Be 0
             $hooks = Get-Content -Raw (Join-Path $TempHome '.cursor\hooks.json') | ConvertFrom-Json
             @($hooks.hooks.stop).Count | Should -Be 0
+        }
+        finally {
+            if (Test-Path $TempHome) { Remove-Item -Recurse -Force $TempHome }
+        }
+    }
+
+    It 'prefers python when py launcher is unavailable' {
+        $TempHome = Join-Path ([IO.Path]::GetTempPath()) ("cg-pyfallback-" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $TempHome | Out-Null
+        try {
+            $null = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $RepoRoot -Python (Find-GoalPython)
+            $pythonExe = (Find-GoalPython).Exe
+            Mock Get-Command {
+                param($Name, $ErrorAction)
+                if ($Name -eq 'py') { return $null }
+                if ($Name -eq 'python') {
+                    return [pscustomobject]@{ Name = 'python'; Source = $pythonExe }
+                }
+                return $null
+            }
+            $code = Invoke-GoalUninstall -HomeDir $TempHome
+            $code | Should -Be 0
+            Test-Path (Join-Path $TempHome '.cursor\skills\goal') | Should -BeFalse
         }
         finally {
             if (Test-Path $TempHome) { Remove-Item -Recurse -Force $TempHome }

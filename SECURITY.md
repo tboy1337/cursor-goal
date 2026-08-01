@@ -42,3 +42,4 @@ Do not file public issues for unfixed vulnerabilities.
 - Multi-tenant / shared-host isolation
 - Cursor IDE / Task / stop-hook platform bugs (report upstream when possible)
 - Compromised Cursor session model or agent that already has Shell access
+- Team Marketplace plugin stop hook on native Windows when `python3` is absent from `PATH` (use `install-goal.ps1` instead)

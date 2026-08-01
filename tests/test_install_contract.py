@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -202,3 +204,68 @@ def test_sync_plugin_tree_check() -> None:
         text=True,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+def test_sync_plugin_tree_check_detects_vendored_drift(tmp_path: Path) -> None:
+    """Isolated fake repo: vendored package drift must fail --check (no live-tree mutation)."""
+    root = Path(__file__).resolve().parents[1]
+    script = root / "scripts" / "sync-plugin-tree.py"
+    spec = importlib.util.spec_from_file_location("sync_plugin_tree", script)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    fake = tmp_path / "repo"
+    shutil.copytree(root / "src" / "cursor_goal", fake / "src" / "cursor_goal")
+    shutil.copytree(root / ".cursor", fake / ".cursor")
+    mod.write_plugin(fake)
+    assert mod.check_plugin(fake) == 0
+
+    target = (
+        fake
+        / "plugins"
+        / "cursor-goal"
+        / "skills"
+        / "goal"
+        / "cursor_goal"
+        / "__init__.py"
+    )
+    text = target.read_text(encoding="utf-8")
+    target.write_text(
+        text.replace('__version__ = "', '__version__ = "9.9.9-drift-', 1),
+        encoding="utf-8",
+    )
+    assert mod.check_plugin(fake) == 1
+
+
+def test_check_version_sync_detects_readme_pin_drift(tmp_path: Path) -> None:
+    """README tagged-clone pin must match package version."""
+    root = Path(__file__).resolve().parents[1]
+    script = root / "scripts" / "check_version_sync.py"
+    spec = importlib.util.spec_from_file_location("check_version_sync", script)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    # Smoke: live repo is in sync (README pin included after Phase 1).
+    completed = subprocess.run(
+        [sys.executable, str(script)],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "README=v" in completed.stdout
+
+    pin = mod._read_readme_pin(root)
+    assert pin == __version__
+
+    # Isolated helper: conflicting pins raise.
+    bad = tmp_path / "README.md"
+    bad.write_text(
+        "git clone --branch v1.0.0 x\ngit clone --branch v2.0.0 y\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="Conflicting README"):
+        mod._read_tagged_clone_pin(bad, label="README")
