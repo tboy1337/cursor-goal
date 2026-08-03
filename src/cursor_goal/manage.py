@@ -1,5 +1,7 @@
 """Goal lifecycle: create, status, pause, resume, done, clear, doctor."""
 
+# pylint: disable=too-many-lines
+
 from __future__ import annotations
 
 import os
@@ -8,6 +10,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from cursor_goal.logging_config import get_logger
 from cursor_goal.paths import (
@@ -44,8 +47,10 @@ from cursor_goal.validation import (
     redact_secrets,
     try_split_argv,
 )
+from cursor_goal.wake import NOTIFY_PATTERN
 from cursor_goal.wake import arm as wake_arm
 from cursor_goal.wake import disarm as wake_disarm
+from cursor_goal.wake import format_wake_required_line
 from cursor_goal.wake import status_info as wake_status_info
 from cursor_goal.wake import wake_enabled
 
@@ -61,6 +66,15 @@ class _CreateArgs:
     shell_ok: bool
     workdir: str
     force: bool
+
+
+@dataclass(frozen=True)
+class _ArmWakeResult:
+    """Outcome of post-create/resume wake arming."""
+
+    status: str  # ok | disabled | failed
+    detail: str = ""
+    config: dict[str, Any] | None = None
 
 
 def _parse_budget(raw: str, *, label: str = "Budget") -> int:
@@ -292,11 +306,13 @@ def cmd_create(argv: list[str]) -> int:  # pylint: disable=too-many-branches
     print(f"  Wake budget: {wake_budget} ticks")
     print(f"  Shell ok: {str(args.shell_ok).lower()}")
     print("  Status: pursuing")
-    _maybe_arm_wake()
+    arm_result = _maybe_arm_wake()
+    if arm_result.status == "failed":
+        return _pause_after_arm_failure(arm_result.detail)
     return 0
 
 
-def cmd_status(_argv: list[str]) -> int:
+def cmd_status(_argv: list[str]) -> int:  # pylint: disable=too-many-branches
     try:
         state = snapshot_goal(raise_corrupt=True)
     except CorruptGoalError as exc:
@@ -335,7 +351,9 @@ def cmd_status(_argv: list[str]) -> int:
         print(f"  Validation: {redact_command(state.validation_command)}")
         if state.last_validation_exit_code is not None:
             print(f"  Last validation exit: {state.last_validation_exit_code}")
-    if wake_info.get("armed"):
+    if not wake_enabled():
+        print("  Wake service: disabled (CURSOR_GOAL_WAKE=0)")
+    elif wake_info.get("armed"):
         alive = "yes" if wake_info.get("pid_alive") else "no"
         print(
             f"  Wake service: armed gen={wake_info.get('token_prefix', '?')} "
@@ -343,19 +361,28 @@ def cmd_status(_argv: list[str]) -> int:
         )
     else:
         print("  Wake service: not armed")
-    if display_active and wake_enabled():
-        hint = _wake_loop_shell_hint()
-        if not wake_info.get("armed"):
+    ready = bool(wake_info.get("continuation_ready"))
+    reason = str(wake_info.get("continuation_reason") or "")
+    print(f"  Continuation ready: {str(ready).lower()} ({reason})")
+    if wake_info.get("heartbeat_stale"):
+        print(
+            "  Warning: wake heartbeat_stale — loop PID is alive but "
+            "last_emit_at is older than 2× interval; restart wake loop if stalled"
+        )
+    if display_active and wake_enabled() and not ready:
+        hint = str(wake_info.get("command") or _wake_loop_shell_hint())
+        pattern = str(wake_info.get("notify_pattern") or NOTIFY_PATTERN)
+        if reason == "not_armed" or not wake_info.get("armed"):
             print(
                 "  ACTION REQUIRED: wake not armed while pursuing — start background "
-                f"Shell `{hint}` with notify_on_output matching ^AGENT_GOAL_WAKE, "
-                "then confirm `wake status` shows pid_alive=true"
+                f"Shell `{hint}` with notify_on_output matching {pattern}, "
+                "then confirm `wake status` shows continuation_ready=true"
             )
-        elif not wake_info.get("pid_alive"):
+        else:
             print(
                 "  ACTION REQUIRED: wake loop not alive — start background Shell "
-                f"`{hint}` with notify_on_output matching ^AGENT_GOAL_WAKE, "
-                "then confirm pid_alive=true"
+                f"`{hint}` with notify_on_output matching {pattern}, "
+                "then confirm continuation_ready=true / pid_alive=true"
             )
     if state.last_reason:
         print(f"  Last evaluation: {redact_secrets(state.last_reason, max_chars=500)}")
@@ -420,7 +447,9 @@ def cmd_resume(_argv: list[str]) -> int:
         print("[goal] No goal to resume.")
         return 1
     print(f"[goal] Goal resumed. Continuing toward: {result.condition}")
-    _maybe_arm_wake()
+    arm_result = _maybe_arm_wake()
+    if arm_result.status == "failed":
+        return _pause_after_arm_failure(arm_result.detail)
     return 0
 
 
@@ -576,7 +605,7 @@ def _hooks_stacking_failure() -> str | None:
 
 
 def _hooks_stacking_warning() -> str | None:
-    """Compatibility alias — stacking is a doctor hard-fail via ``_hooks_stacking_failure``."""
+    """Alias — stacking is a doctor hard-fail via ``_hooks_stacking_failure``."""
     return _hooks_stacking_failure()
 
 
@@ -738,25 +767,40 @@ def cmd_doctor(_argv: list[str]) -> int:
                 assert_workdir_usable(state.workdir)
             except ValueError as exc:
                 warnings.append(str(exc))
-        if not wake_info.get("armed"):
-            hard_fails.append(
-                "Wake not armed while pursuing — BLOCKING: start background Shell: "
-                f"`{_wake_loop_shell_hint()}` with notify_on_output "
-                "matching ^AGENT_GOAL_WAKE, then confirm wake status pid_alive=true "
-                "before other work"
-            )
-        elif not wake_info.get("pid_alive"):
-            hard_fails.append(
-                "Wake armed but loop not alive — BLOCKING: start: "
-                f"`{_wake_loop_shell_hint()}` with notify_on_output "
-                "matching ^AGENT_GOAL_WAKE, then confirm pid_alive=true"
-            )
+        if wake_enabled():
+            ready = bool(wake_info.get("continuation_ready"))
+            reason = str(wake_info.get("continuation_reason") or "")
+            print(f"  Continuation ready: {str(ready).lower()} ({reason})")
+            hint = str(wake_info.get("command") or _wake_loop_shell_hint())
+            pattern = str(wake_info.get("notify_pattern") or NOTIFY_PATTERN)
+            if not wake_info.get("armed") or reason == "not_armed":
+                hard_fails.append(
+                    "Wake not armed while pursuing — BLOCKING: start background Shell: "
+                    f"`{hint}` with notify_on_output matching {pattern}, then confirm "
+                    "wake status continuation_ready=true before other work"
+                )
+            elif not wake_info.get("pid_alive") or reason == "pid_dead":
+                hard_fails.append(
+                    "Wake armed but loop not alive — BLOCKING: start: "
+                    f"`{hint}` with notify_on_output matching {pattern}, then confirm "
+                    "continuation_ready=true / pid_alive=true"
+                )
+            if wake_info.get("heartbeat_stale"):
+                warnings.append(
+                    "Wake heartbeat_stale — PID alive but last_emit_at older than "
+                    "2× interval; restart wake loop if continuation stalls"
+                )
+        else:
+            print("  Continuation ready: true (disabled)")
+            print("  Wake: disabled (CURSOR_GOAL_WAKE=0) — liveness gate skipped")
     elif state is None:
         print("  Goal: none")
     else:
         print(f"  Goal: {state.status}")
 
-    if wake_info.get("armed"):
+    if not wake_enabled():
+        print("  Wake: disabled")
+    elif wake_info.get("armed"):
         print(
             f"  Wake: armed interval_s={wake_info.get('interval_s')} "
             f"alive={wake_info.get('pid_alive')} "
@@ -816,29 +860,81 @@ def cmd_doctor(_argv: list[str]) -> int:
     return 0
 
 
-def _maybe_arm_wake() -> None:
-    """Arm wake.json after create/resume; agent must start ``wake loop``."""
+def _pause_after_arm_failure(detail: str) -> int:
+    """Leave goal paused after wake arm failure; never pursue unprotected."""
+    reason = f"wake arm failed: {detail}"[:500]
+
+    def mutator(state: GoalState) -> None:
+        state.status = "paused"
+        state.active = False
+        state.last_reason = reason
+
+    try:
+        mutate_goal(mutator)
+    except GoalLockTimeoutError as exc:
+        print(
+            f"[goal] Error: wake arm failed and pause also failed: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        wake_disarm(kill_loop=True)
+    except OSError as exc:
+        logger.debug("Disarm after arm failure: %s", exc)
+    print(
+        f"[goal] Error: wake arm failed — goal paused (not pursuing). {detail}",
+        file=sys.stderr,
+    )
+    print(
+        "[goal] Fix data-dir/ACL issues, then `manage resume` "
+        "(or set CURSOR_GOAL_WAKE=0 to opt out of wake).",
+        file=sys.stderr,
+    )
+    return 1
+
+
+def _maybe_arm_wake() -> _ArmWakeResult:
+    """Arm wake.json after create/resume; emit GOAL_WAKE_REQUIRED on success.
+
+    Returns ok / disabled / failed. Callers must pause+exit 1 on failed so a
+    pursuing goal is never left without an armed wake when wake is enabled.
+    """
     if not wake_enabled():
-        return
+        print(
+            "[goal] Wake: disabled (CURSOR_GOAL_WAKE=0). "
+            "Continuation relies on in-turn evaluation and stop hook only."
+        )
+        return _ArmWakeResult(status="disabled")
     try:
         config = wake_arm()
     except OSError as exc:
         logger.warning("Could not arm wake watchdog: %s", exc)
-        return
+        return _ArmWakeResult(status="failed", detail=str(exc))
     if not config:
-        return
+        print(
+            "[goal] Wake: disabled (CURSOR_GOAL_WAKE=0). "
+            "Continuation relies on in-turn evaluation and stop hook only."
+        )
+        return _ArmWakeResult(status="disabled")
+
+    print(format_wake_required_line(config))
     hint = _wake_loop_shell_hint()
+    pattern = str(config.get("notify_pattern") or NOTIFY_PATTERN)
     print(
         f"[goal] Wake armed (every {config['interval_s']}s). "
         "REQUIRED next step: start `wake loop` in a background Shell with "
-        f"notify_on_output matching {config['notify_pattern']}:"
+        f"notify_on_output matching {pattern}:"
     )
     print(f"  {hint}")
     print("[goal] BLOCKING CHECKLIST — do not start other goal work until all pass:")
     print(f"  1) Background Shell: {hint}")
-    print(f"     with notify_on_output matching {config['notify_pattern']}")
-    print("  2) Run `wake status` and confirm pid_alive=true (and armed=true)")
+    print(f"     with notify_on_output matching {pattern}")
+    print(
+        "  2) Run `wake status` and confirm continuation_ready=true "
+        "(pid_alive=true and armed=true)"
+    )
     print("  3) Only then continue working toward the condition")
+    return _ArmWakeResult(status="ok", config=config)
 
 
 def _baked_python_from_cmd(

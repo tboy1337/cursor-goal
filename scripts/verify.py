@@ -177,6 +177,14 @@ def build_steps(
             [py, COVERAGE_CHECK, "--json", COVERAGE_JSON, "--threshold", "95"],
         )
     )
+    wake_smoke = root / "scripts" / "wake-smoke.py"
+    if wake_smoke.is_file():
+        steps.append(
+            (
+                "wake-smoke",
+                [py, str(wake_smoke)],
+            )
+        )
 
     if not skip_shell:
         shellcheck = shutil.which("shellcheck")

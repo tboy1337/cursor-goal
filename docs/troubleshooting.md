@@ -17,8 +17,8 @@ Stall checklist (Hooks `{}`, no continuation): work the steps below before filin
 ## Hooks Execution Log shows `{}` but the goal should continue
 
 1. Check `~/.cursor-goal/data/last-stop-response.json`. If it contains `followup_message` while Hooks shows `{}`, you hit the [Cursor stdout race](cursor-windows-stop-hook-race.md).
-2. Ensure wake is armed and the loop is alive (`manage status` / `manage doctor`). Doctor **FAIL**s while `pursuing` if wake is missing or dead.
-3. Start background Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE`:
+2. Ensure wake is armed and the loop is alive (`manage status` / `manage doctor`). Doctor **FAIL**s while `pursuing` if wake is enabled and `continuation_ready=false` (missing or dead loop). Doctor skips that gate when `CURSOR_GOAL_WAKE=0`.
+3. Prefer the `command` from create/resume's `GOAL_WAKE_REQUIRED` line (or `wake status` JSON). Start background Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE`:
 
 ```text
 # Unix
@@ -30,11 +30,11 @@ python3 -u ~/.cursor/skills/goal/scripts/run_goal.py wake loop
 py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" wake loop
 ```
 
-4. Confirm `wake status` shows `pid_alive=true`.
+4. Confirm `wake status` shows `continuation_ready=true` (and `pid_alive=true`).
 
-## Wake not armed / `pid_alive=false`
+## Wake not armed / `continuation_ready=false`
 
-Doctor **hard-fails** when a goal is `pursuing` without a live wake loop. `manage status` prints an **ACTION REQUIRED** recovery command. Immediately start `wake loop` as above. Disable only with `CURSOR_GOAL_WAKE=0` (not recommended while the stop race remains).
+Doctor **hard-fails** when a goal is `pursuing`, wake is enabled, and the loop is missing or dead. `manage status` prints an **ACTION REQUIRED** recovery command and `Continuation ready: false (…)`. Immediately start `wake loop` as above. If create/resume exited 1 with the goal paused, fix data-dir/ACL issues then `manage resume`. Disable wake only with `CURSOR_GOAL_WAKE=0` (not recommended while the stop race remains).
 
 ## Classic + marketplace hooks stacked
 

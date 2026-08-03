@@ -91,6 +91,7 @@ def test_wake_tick_disarms_when_paused(wake_on: Path) -> None:
 def test_manage_create_arms_wake(wake_on: Path) -> None:
     code, out, _err = run_cli("manage", "create", "armed")
     assert code == 0
+    assert "GOAL_WAKE_REQUIRED " in out
     assert "Wake armed" in out
     assert "REQUIRED next step" in out
     assert "wake loop" in out
@@ -125,6 +126,11 @@ def test_wake_status_json(wake_on: Path) -> None:
     assert data["armed"] is True
     assert data["goal_pursuing"] is True
     assert data["sentinel"] == "AGENT_GOAL_WAKE"
+    assert data["notify_pattern"] == "^AGENT_GOAL_WAKE"
+    assert "command" in data and "wake" in data["command"]
+    assert data["continuation_ready"] is False
+    assert data["continuation_reason"] == "pid_dead"
+    assert data["heartbeat_stale"] is False
 
 
 def test_wake_unknown_and_help(goal_home: Path) -> None:
@@ -391,9 +397,13 @@ def test_manage_arm_wake_oserror(
         raise OSError("cannot arm")
 
     monkeypatch.setattr(manage_mod, "wake_arm", boom)
-    code, out, _err = run_cli("manage", "create", "arm fail unique", "--force")
-    assert code == 0
+    code, out, err = run_cli("manage", "create", "arm fail unique", "--force")
+    assert code == 1
     assert "Wake armed" not in out
+    assert "GOAL_WAKE_REQUIRED" not in out
+    assert "paused" in err.lower() or "arm failed" in err.lower()
+    data = json.loads((wake_on / "goal.json").read_text(encoding="utf-8"))
+    assert data["status"] == "paused"
 
 
 def test_disarm_kills_foreign_pid(
@@ -1150,13 +1160,13 @@ def test_refuse_if_wake_dead_when_pid_alive(
     assert (wake_on / "wake.json").is_file()
     monkeypatch.setattr(
         wake_mod,
-        "status_info",
-        lambda: {
-            "armed": True,
-            "pid_alive": True,
-            "interval_s": 5,
-            "token_prefix": "x",
-            "last_emit_at": None,
+        "continuation_readiness",
+        lambda **_kwargs: {
+            "continuation_ready": True,
+            "reason": "ready",
+            "heartbeat_stale": False,
+            "command": "wake loop",
+            "pattern": "^AGENT_GOAL_WAKE",
         },
     )
     assert wake_mod.refuse_if_wake_dead() is None
@@ -1169,18 +1179,57 @@ def test_refuse_if_wake_dead_when_unarmed(
     assert run_cli("manage", "create", "unarmed")[0] == 0
     monkeypatch.setattr(
         wake_mod,
-        "status_info",
-        lambda: {
-            "armed": False,
-            "pid_alive": False,
-            "interval_s": 5,
-            "token_prefix": "x",
-            "last_emit_at": None,
+        "continuation_readiness",
+        lambda **_kwargs: {
+            "continuation_ready": False,
+            "reason": "not_armed",
+            "heartbeat_stale": False,
+            "command": "wake loop",
+            "pattern": "^AGENT_GOAL_WAKE",
         },
     )
     msg = wake_mod.refuse_if_wake_dead()
     assert msg is not None
     assert "not armed" in msg.lower()
+    assert "continuation_ready=false" in msg
+
+
+def test_continuation_readiness_disabled(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del wake_on
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "0")
+    ready = wake_mod.continuation_readiness()
+    assert ready["continuation_ready"] is True
+    assert ready["reason"] == "disabled"
+
+
+def test_continuation_readiness_heartbeat_stale(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert run_cli("manage", "create", "stale")[0] == 0
+    ready = wake_mod.continuation_readiness(
+        enabled=True,
+        armed=True,
+        pid_alive=True,
+        goal_pursuing=True,
+        last_emit_at="2000-01-01T00:00:00+00:00",
+        interval_s=5,
+    )
+    assert ready["continuation_ready"] is True
+    assert ready["heartbeat_stale"] is True
+    assert ready["reason"] == "heartbeat_stale"
+
+
+def test_format_wake_required_line(wake_on: Path) -> None:
+    del wake_on
+    line = wake_mod.format_wake_required_line(
+        {"notify_pattern": "^AGENT_GOAL_WAKE", "interval_s": 15}
+    )
+    assert line.startswith("GOAL_WAKE_REQUIRED ")
+    payload = json.loads(line[len("GOAL_WAKE_REQUIRED ") :])
+    assert payload["pattern"] == "^AGENT_GOAL_WAKE"
+    assert payload["interval_s"] == 15
 
 
 def test_record_agent_nudge_no_config(wake_on: Path) -> None:

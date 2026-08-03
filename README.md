@@ -30,7 +30,7 @@ Three supported paths:
 | Path | Who | How |
 |------|-----|-----|
 | **Clone + installer** | Individuals | Clone `main` (or a GitHub Release source archive) → `install-goal.sh` / `install-goal.ps1` |
-| **Tagged release** | Individuals | When tag `v2.10.0` exists on GitHub: `git clone --branch v2.10.0 …` then installer (see [docs/install.md](docs/install.md)). If that tag is not published yet, use **Clone + installer** from `main`. |
+| **Tagged release** | Individuals | When tag `v2.11.0` exists on GitHub: `git clone --branch v2.11.0 …` then installer (see [docs/install.md](docs/install.md)). If that tag is not published yet, use **Clone + installer** from `main`. |
 | **Teams marketplace** | Teams/Enterprise | Import this repo in Cursor Dashboard → Plugins (see `.cursor-plugin/marketplace.json`) |
 
 **Agent install (explicit steps):**
@@ -76,7 +76,7 @@ Uninstall: `./scripts/uninstall-goal.sh` or `.\scripts\uninstall-goal.ps1` (add 
 1. Install for your OS (classic installer above, or Teams marketplace import).
 2. Run `manage doctor` — fix any FAIL lines before starting a goal.
 3. In Cursor: `/goal "demo done" --test "py -3 -c \"raise SystemExit(0)\""` (Unix: `python3 -c 'raise SystemExit(0)'`).
-4. Start `wake loop` in a background Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE`; confirm `wake status` shows `pid_alive=true`.
+4. Parse `GOAL_WAKE_REQUIRED` from create output; start that `command` in a background Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE`; confirm `wake status` shows `continuation_ready=true`.
 5. On evaluator YES, `manage done`. If Hooks UI shows `{}`, rely on wake — see [known limitations](docs/known-limitations.md).
 
 Security: see [SECURITY.md](SECURITY.md). Platform notes: [docs/platform-compatibility.md](docs/platform-compatibility.md). Known limits: [docs/known-limitations.md](docs/known-limitations.md). Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md). Teams/AGPL: [docs/teams-agpl.md](docs/teams-agpl.md).
@@ -121,7 +121,7 @@ Flags / natural language:
 /goal fix bugs, verified by pytest, stop after 15 turns
 ```
 
-**2.10.0:** wake coalesce is wake→wake only (stop stamps no longer delay the race-immune path); classic Windows `stop_hook.cmd` / `wake_loop.cmd` bake marketplace-parity absolute + Python 3.12+ checks for `CURSOR_GOAL_PYTHON`; Unix install fails hard if data-dir `chmod 700` fails and skips `wake_loop.cmd`. Builds on **2.10.0** hardening (wake liveness gate, workdir jail, prompt/disk redaction split, `shell_ok=false` default).
+**2.11.0:** wake handshake emits machine-readable `GOAL_WAKE_REQUIRED`; create/resume pauses (exit 1) if arm fails; `continuation_ready` in status/doctor; doctor respects `CURSOR_GOAL_WAKE=0`; uninstall aborts when hook cleanup fails. Builds on **2.11.0** (wake→wake coalesce, classic Windows absolute Python bake, Unix chmod harden).
 
 ## Multi-model (maker ≠ checker)
 

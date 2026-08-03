@@ -4,17 +4,19 @@ Operational limits of cursor-goal for real-world use. See also [troubleshooting]
 
 ## Continuation depends on more than the stop hook
 
-Cursor can drop stop-hook stdout (`followup_message`) on Windows and Linux (upstream race: process `exit` vs stream `close`). See [cursor-windows-stop-hook-race.md](cursor-windows-stop-hook-race.md).
+Cursor can drop stop-hook stdout (`followup_message`) on Windows and Linux (upstream race: process `exit` vs stream `close`). Confirmed still open in Cursor forum reports through mid-2026. See [cursor-windows-stop-hook-race.md](cursor-windows-stop-hook-race.md). Drain delays in the stop hook are mitigations only.
 
-**Durable continuation requires:**
+**Durable continuation requires (operational prerequisite while pursuing):**
 
 1. In-turn `goal-evaluator` Task evaluation (primary)
-2. Wake watchdog armed with Shell `notify_on_output` matching `^AGENT_GOAL_WAKE` (tertiary, race-immune)
+2. Wake watchdog: `manage create`/`resume` prints `GOAL_WAKE_REQUIRED`; agent starts that `command` in a background Shell with `notify_on_output` matching `pattern` (`^AGENT_GOAL_WAKE`), then confirms `wake status` `continuation_ready=true` (race-immune)
 3. Stop `followup_message` (secondary, best-effort)
 
-If wake is not started while a goal is `pursuing`, goals can stall when Hooks show `{}`. `eval validate` refuses while pursuing without a live wake loop unless `CURSOR_GOAL_ALLOW_DEAD_WAKE=1` (or wake is disabled via `CURSOR_GOAL_WAKE=0`).
+If wake is not started while a goal is `pursuing`, goals can stall when Hooks show `{}`. `eval validate` refuses while pursuing without a live wake loop unless `CURSOR_GOAL_ALLOW_DEAD_WAKE=1` (or wake is disabled via `CURSOR_GOAL_WAKE=0`). Doctor skips wake liveness hard-fails when wake is disabled.
 
-When wake emits a sentinel and ticks again within one wake interval, wake **coalesces** (skips emit and `wake_ticks++`) to avoid double wake nudges. Stop-hook followup stamps do **not** suppress wake — so a dropped stop stdout cannot delay the race-immune path for a full interval.
+Manual `wake tick` **coalesces** (skips emit) when a recent *wake*-sourced nudge falls inside one interval. The background `wake loop` emits on its own cadence and does not use that coalesce window. Stop-hook followup stamps do **not** suppress wake — so a dropped stop stdout cannot delay the race-immune path for a full interval.
+
+If wake arm fails during create/resume, the harness leaves the goal **`paused`** (exit 1) rather than pursuing without an armed wake.
 
 ## Shell validation defaults to denied
 
@@ -38,7 +40,7 @@ No multi-tenant / shared-host isolation. Anyone who can write `~/.cursor-goal/da
 
 ## Marketplace vs classic Windows install
 
-Marketplace `stop_hook.cmd` / `wake_loop.cmd` resolve Python via `CURSOR_GOAL_PYTHON` (must be absolute when set) or PATH. Classic `install-goal.ps1` bakes an absolute interpreter — preferred for individuals on Windows.
+Marketplace `stop_hook.cmd` / `wake_loop.cmd` may fall back to PATH discovery, but **`manage doctor` requires an absolute `CURSOR_GOAL_PYTHON` (Python 3.12+)** for Windows marketplace installs — PATH-only is not treated as success. Classic `install-goal.ps1` bakes an absolute interpreter — preferred for individuals on Windows.
 
 Teams marketplace installs are **standalone**: resolve the harness with `manage harness-cmd` or `$CURSOR_PLUGIN_ROOT/skills/goal/scripts/run_goal.py`. Do not stack classic `~/.cursor/hooks.json` entries with marketplace plugin hooks — `manage doctor` **FAIL**s when both look configured. See [teams-agpl.md](teams-agpl.md).
 

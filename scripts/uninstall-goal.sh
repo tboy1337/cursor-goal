@@ -8,6 +8,7 @@ AGENTS_DIR="${HOME}/.cursor/agents"
 DATA_DIR="${HOME}/.cursor-goal/data"
 CURSOR_HOOKS_FILE="${HOME}/.cursor/hooks.json"
 REMOVE_DATA="${1:-}"
+HOOKS_CLEAN_OK=1
 
 detect_python() {
   local cand abs
@@ -26,8 +27,8 @@ detect_python() {
 }
 
 if [ -f "$CURSOR_HOOKS_FILE" ]; then
+  HOOKS_CLEAN_OK=0
   if PY="$(detect_python)"; then
-    hooks_ok=0
     if [ -d "${INSTALL_DIR}/cursor_goal" ]; then
       if "$PY" - "$INSTALL_DIR" "$CURSOR_HOOKS_FILE" <<'PY'
 import sys
@@ -40,7 +41,7 @@ remove_hooks_at_path(Path(sys.argv[2]))
 print("hooks cleaned")
 PY
       then
-        hooks_ok=1
+        HOOKS_CLEAN_OK=1
       fi
     else
       if "$PY" - "$CURSOR_HOOKS_FILE" <<'PY'
@@ -76,20 +77,18 @@ tmp.replace(path)
 print("hooks cleaned")
 PY
       then
-        hooks_ok=1
+        HOOKS_CLEAN_OK=1
       fi
     fi
-    if [ "$hooks_ok" -eq 1 ]; then
-      echo "[uninstall-goal] Removed stop hook entries from hooks.json"
-    else
-      echo "[uninstall-goal] ACTION REQUIRED: could not clean stop hooks from:"
-      echo "  $CURSOR_HOOKS_FILE"
-      echo "  Skill tree deletion continues. Remove cursor-goal stop hook entries manually."
-    fi
+  fi
+  if [ "$HOOKS_CLEAN_OK" -eq 1 ]; then
+    echo "[uninstall-goal] Removed stop hook entries from hooks.json"
   else
-    echo "[uninstall-goal] ACTION REQUIRED: Python not found; remove stop hook entries manually from:"
+    echo "[uninstall-goal] ACTION REQUIRED: could not clean stop hooks from:"
     echo "  $CURSOR_HOOKS_FILE"
-    echo "  Skill tree deletion continues."
+    echo "  Leaving skill tree in place so hooks do not point at deleted files."
+    echo "  Remove cursor-goal stop hook entries manually, then re-run uninstall."
+    exit 1
   fi
 fi
 

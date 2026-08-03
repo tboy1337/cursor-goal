@@ -56,10 +56,10 @@ On upgrade, a previous skill tree is copied to `~/.cursor/skills/goal.bak.<UTC>`
 
 ### Install from a tagged release
 
-Package version **2.10.0** pins the clone branch below. Use it **only when tag `v2.10.0` exists** on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If the tag is not published yet (or `git clone --branch` fails), clone `main` with the Quick install steps above — the tree on `main` is the same package version until maintainers cut the tag ([release.md](release.md)).
+Package version **2.11.0** pins the clone branch below. Use it **only when tag `v2.11.0` exists** on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If the tag is not published yet (or `git clone --branch` fails), clone `main` with the Quick install steps above — the tree on `main` is the same package version until maintainers cut the tag ([release.md](release.md)).
 
 ```bash
-git clone --branch v2.10.0 https://github.com/tboy1337/cursor-goal.git
+git clone --branch v2.11.0 https://github.com/tboy1337/cursor-goal.git
 cd cursor-goal
 ./scripts/install-goal.sh   # or install-goal.ps1 on Windows
 ```
@@ -126,7 +126,7 @@ Resolve harness commands with `manage harness-cmd` (works from `${CURSOR_PLUGIN_
 
 Do **not** hand-edit diverging copies — regenerate via installer or `sync-plugin-tree.py`.
 
-**Windows:** Marketplace dual-entry hooks work when `CURSOR_GOAL_PYTHON` is set to an **absolute** Python 3.12+ path, or when `py`/`python`/`python3` is on `PATH` (PATH fallback prints a warning). Individuals should prefer `install-goal.ps1` for an absolute interpreter bake and the stdout drain mitigation. This plugin is **AGPL-3.0-only** — see [known-limitations.md](known-limitations.md#license-teams--redistribution).
+**Windows:** Marketplace dual-entry hooks can resolve Python via absolute `CURSOR_GOAL_PYTHON` or PATH, but **`manage doctor` FAILs** on Windows marketplace installs unless `CURSOR_GOAL_PYTHON` is set to an **absolute** Python 3.12+ path — PATH fallback alone is not treated as success. Individuals should prefer `install-goal.ps1` for an absolute interpreter bake and the stdout drain mitigation. This plugin is **AGPL-3.0-only** — see [known-limitations.md](known-limitations.md#license-teams--redistribution).
 
 Keep the plugin tree in sync after editing skill/agents/package sources:
 

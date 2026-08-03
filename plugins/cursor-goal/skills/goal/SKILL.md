@@ -83,7 +83,7 @@ Then:
 - If `action` is `status|pause|resume|clear` → `manage <action>`
 - If `action` is `create` → `manage create "<condition>" [--test "<cmd>"] [--budget N] [--workdir <path>] [--allow-shell]`
 
-After **every** `create` or `resume`, complete the **Wake Watchdog blocking checklist** below (start `wake loop` + verify `pid_alive`) **before** other work. **Do not skip.** If `wake status` shows `pid_alive=false` while pursuing, refuse further goal work until the loop is alive. Then start working toward the condition.
+After **every** `create` or `resume`, complete the **Wake handshake** below **before** other work. **Do not skip.** If create/resume exits non-zero (wake arm failed → goal paused), fix the error and `manage resume` — do not work as if pursuing. If `wake status` shows `continuation_ready=false` while pursuing, refuse further goal work until the loop is alive. Then start working toward the condition.
 
 ## Command Reference
 
@@ -181,27 +181,27 @@ When you see a `[GOAL]` prefix, resume working toward the condition immediately.
 
 ## Wake Watchdog (race-immune continuation)
 
-Cursor may drop stop-hook stdout (see repo `docs/cursor-windows-stop-hook-race.md`). `manage create` / `resume` arms wake state.
+**Operational prerequisite:** while a goal is `pursuing` and wake is enabled, a live Shell wake loop with `notify_on_output` is required. Cursor may drop stop-hook stdout (see repo `docs/cursor-windows-stop-hook-race.md`); wake is the durable path. Opt out only with `CURSOR_GOAL_WAKE=0`.
 
-### Wake checklist (mandatory after every create/resume)
+`manage create` / `resume` arms wake state and prints one machine-readable line agents must consume:
 
-Do **not** skip. Until `pid_alive=true`, refuse other goal work (`eval validate` will refuse unless `CURSOR_GOAL_ALLOW_DEAD_WAKE=1`).
-
-1. **Background Shell** — start wake loop with `notify_on_output` matching `^AGENT_GOAL_WAKE`:
-
-```bash
-# Unix / macOS / WSL
-python3 -u ~/.cursor/skills/goal/scripts/run_goal.py wake loop
+```text
+GOAL_WAKE_REQUIRED {"command":"<shell command>","pattern":"^AGENT_GOAL_WAKE","interval_s":15}
 ```
 
-```powershell
-# Windows
-py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" wake loop
-```
+If arm fails, create/resume **exits 1**, leaves the goal **`paused`**, and does not print `GOAL_WAKE_REQUIRED`.
 
-2. **Verify:** `wake status` → `pid_alive=true` (and `armed=true`).
-3. **On wake:** read sentinel JSON `prompt`, `manage status`, continue if still `pursuing`.
-4. `manage done` / `pause` / `clear` disarms. Disable with `CURSOR_GOAL_WAKE=0`.
+### Wake handshake (mandatory after every create/resume)
+
+Do **not** skip. Until `continuation_ready=true` (implies `pid_alive=true`), refuse other goal work (`eval validate` will refuse unless `CURSOR_GOAL_ALLOW_DEAD_WAKE=1` or wake is disabled).
+
+1. **Parse** the `GOAL_WAKE_REQUIRED` line from create/resume stdout (JSON after the prefix). If missing and wake is enabled, run `wake status` and use its `command` + `notify_pattern` fields (or `manage harness-cmd` → Wake loop line). Prefer the event `command` over hardcoded paths.
+2. **Background Shell tool call** — immediately start that `command` with `notify_on_output` matching the event `pattern` (always `^AGENT_GOAL_WAKE` unless the event says otherwise). This must be a real Shell tool invocation; the harness cannot attach Cursor notifications for you.
+3. **Verify:** `wake status` → `continuation_ready=true` (also `armed=true`, `pid_alive=true`). If `heartbeat_stale` is true, restart the loop.
+4. **On wake:** when Shell notifies on `AGENT_GOAL_WAKE`, read the sentinel JSON `prompt`, run `manage status`, continue if still `pursuing`.
+5. `manage done` / `pause` / `clear` disarms. Disable with `CURSOR_GOAL_WAKE=0` (doctor skips wake liveness when disabled).
+
+Manual `wake tick` coalesces when a recent *wake*-sourced nudge falls inside one interval (avoids double ticks). The background `wake loop` emits on its own cadence and does not apply that coalesce window. Stop-hook stamps never suppress wake.
 
 Interval: `CURSOR_GOAL_WAKE_INTERVAL_S` (default 15, min 5, max 600). Each wake emission increments `wake_ticks` against **`wake_budget`** (independent of turn budget). Default `wake_budget = turn_budget * 10` (min 10, max 500). Override with `--wake-budget N`.
 
@@ -215,11 +215,12 @@ Default turn budget is 20 (max 500). Customize with `--budget N` or natural lang
 |---------|--------------|--------|
 | Goal ends quickly with low `turns_used` | `wake_budget` exhausted | Raise `--wake-budget` or interval |
 | Hooks UI `{}` but `last-stop-response.json` has followup | Cursor stdout race | Rely on wake loop (stop stamps do not suppress wake) |
-| Wake armed but no continuation | Loop not started / `pid_alive=false` | Start `wake loop` with `notify_on_output` |
-| Double continuation soon after wake tick | Wake→wake coalesce window | Expected if stop also delivered; wake skips only after its own emit |
-| `manage status` ACTION REQUIRED / doctor FAIL wake | Wake not armed or dead while pursuing | Blocking: start wake loop, confirm `pid_alive=true` |
+| Wake armed but no continuation | Loop not started / notify not attached | Start `command` from `GOAL_WAKE_REQUIRED` with `notify_on_output` |
+| Create/resume exit 1, status paused | Wake arm failed | Fix data-dir/ACL, then `manage resume` |
+| Double continuation soon after manual `wake tick` | Wake→wake coalesce on `tick` only | Expected; loop cadence is unchanged |
+| `manage status` ACTION REQUIRED / doctor FAIL wake | `continuation_ready=false` while pursuing | Blocking: start wake loop, confirm `continuation_ready=true` |
 | Doctor FAIL classic + marketplace | Stacked install paths | Uninstall classic hooks **or** disable marketplace plugin |
-| Marketplace hooks fail on Windows | Missing absolute `CURSOR_GOAL_PYTHON` | Set absolute env or prefer `install-goal.ps1` |
+| Marketplace hooks fail on Windows | Missing absolute `CURSOR_GOAL_PYTHON` | Set absolute env (required for doctor OK) or prefer `install-goal.ps1` |
 | Validation refused (shell) | `--deny-shell` or `CURSOR_GOAL_DENY_SHELL` | Use argv-safe `--test` or allow shell |
 | Doctor FAIL insecure data dir | World-writable `CURSOR_GOAL_DATA` | `chmod 700` / private path |
 

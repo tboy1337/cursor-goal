@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -403,12 +404,19 @@ def test_status_action_required_when_wake_dead(
             "interval_s": None,
             "token_prefix": None,
             "last_emit_at": None,
+            "enabled": True,
+            "continuation_ready": False,
+            "continuation_reason": "not_armed",
+            "heartbeat_stale": False,
+            "command": "wake loop",
+            "notify_pattern": "^AGENT_GOAL_WAKE",
         },
     )
     code, out, _err = run_cli("manage", "status")
     assert code == 0
     assert "ACTION REQUIRED" in out
     assert "wake" in out.lower()
+    assert "Continuation ready: false (not_armed)" in out
 
 
 def test_status_action_required_when_wake_armed_dead(
@@ -427,12 +435,19 @@ def test_status_action_required_when_wake_armed_dead(
             "interval_s": 15,
             "token_prefix": "abcd",
             "last_emit_at": None,
+            "enabled": True,
+            "continuation_ready": False,
+            "continuation_reason": "pid_dead",
+            "heartbeat_stale": False,
+            "command": "wake loop",
+            "notify_pattern": "^AGENT_GOAL_WAKE",
         },
     )
     code, out, _err = run_cli("manage", "status")
     assert code == 0
     assert "ACTION REQUIRED" in out
     assert "not alive" in out.lower()
+    assert "Continuation ready: false (pid_dead)" in out
 
 
 def test_doctor_wake_not_armed_hard_fail(
@@ -440,6 +455,7 @@ def test_doctor_wake_not_armed_hard_fail(
 ) -> None:
     from cursor_goal import manage as manage_mod
 
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
     assert run_cli("manage", "create", "no wake")[0] == 0
     monkeypatch.setattr(manage_mod, "_hooks_look_configured", lambda: True)
     monkeypatch.setattr(
@@ -451,6 +467,12 @@ def test_doctor_wake_not_armed_hard_fail(
             "interval_s": None,
             "token_prefix": None,
             "last_emit_at": None,
+            "enabled": True,
+            "continuation_ready": False,
+            "continuation_reason": "not_armed",
+            "heartbeat_stale": False,
+            "command": "wake loop",
+            "notify_pattern": "^AGENT_GOAL_WAKE",
         },
     )
     code, _out, err = run_cli("manage", "doctor")
@@ -464,6 +486,7 @@ def test_manage_doctor_wake_armed_dead(
     from cursor_goal import manage as manage_mod
     from cursor_goal import wake as wake_mod
 
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
     assert run_cli("manage", "create", "armed")[0] == 0
     wake_mod.arm(interval=5)
     monkeypatch.setattr(manage_mod, "_hooks_look_configured", lambda: True)
@@ -476,11 +499,32 @@ def test_manage_doctor_wake_armed_dead(
             "interval_s": 15,
             "token_prefix": "abcd",
             "last_emit_at": None,
+            "enabled": True,
+            "continuation_ready": False,
+            "continuation_reason": "pid_dead",
+            "heartbeat_stale": False,
+            "command": "wake loop",
+            "notify_pattern": "^AGENT_GOAL_WAKE",
         },
     )
     code, out, err = run_cli("manage", "doctor")
     assert code == 1
     assert "not alive" in out or "not alive" in err or "FAIL" in err
+
+
+def test_doctor_wake_disabled_ok_while_pursuing(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "0")
+    assert run_cli("manage", "create", "no wake needed")[0] == 0
+    monkeypatch.setattr(manage_mod, "_hooks_look_configured", lambda: True)
+    code, out, err = run_cli("manage", "doctor")
+    combined = f"{out}\n{err}"
+    assert code == 0
+    assert "disabled" in combined.lower()
+    assert "Wake not armed" not in err
 
 
 def test_manage_harness_cmd(goal_home: Path) -> None:
@@ -897,8 +941,17 @@ def test_blocking_checklist_on_create(
     monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
     code, out, _err = run_cli("manage", "create", "checklist")
     assert code == 0
+    assert "GOAL_WAKE_REQUIRED " in out
     assert "BLOCKING CHECKLIST" in out
-    assert "pid_alive" in out
+    assert "continuation_ready" in out or "pid_alive" in out
+    # Machine-readable event must be parseable JSON after the prefix.
+    line = next(
+        line for line in out.splitlines() if line.startswith("GOAL_WAKE_REQUIRED ")
+    )
+    payload = json.loads(line[len("GOAL_WAKE_REQUIRED ") :])
+    assert payload["pattern"] == "^AGENT_GOAL_WAKE"
+    assert "wake" in payload["command"] and "loop" in payload["command"]
+    assert "interval_s" in payload
 
 
 def test_normalize_workdir_relative_and_empty(
@@ -1077,9 +1130,66 @@ def test_maybe_arm_wake_oserror(
         raise OSError("arm failed")
 
     monkeypatch.setattr(manage_mod, "wake_arm", boom)
-    code, out, _err = run_cli("manage", "create", "arm-fail")
-    assert code == 0
+    code, out, err = run_cli("manage", "create", "arm-fail")
+    assert code == 1
+    assert "GOAL_WAKE_REQUIRED" not in out
     assert "BLOCKING CHECKLIST" not in out
+    assert "wake arm failed" in err.lower() or "paused" in err.lower()
+    data = load_goal_json(goal_home)
+    assert data["status"] == "paused"
+    assert data["active"] is False
+    assert "wake arm failed" in data["last_reason"]
+
+
+def test_resume_arm_failure_pauses(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "0")
+    assert run_cli("manage", "create", "resume-arm")[0] == 0
+    assert run_cli("manage", "pause")[0] == 0
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+
+    def boom() -> dict[str, object]:
+        raise OSError("resume arm failed")
+
+    monkeypatch.setattr(manage_mod, "wake_arm", boom)
+    code, _out, err = run_cli("manage", "resume")
+    assert code == 1
+    assert "paused" in err.lower() or "arm failed" in err.lower()
+    data = load_goal_json(goal_home)
+    assert data["status"] == "paused"
+
+
+def test_status_continuation_ready_and_heartbeat_stale(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+    assert run_cli("manage", "create", "stale hb")[0] == 0
+    monkeypatch.setattr(
+        manage_mod,
+        "wake_status_info",
+        lambda: {
+            "armed": True,
+            "pid_alive": True,
+            "interval_s": 15,
+            "token_prefix": "abcd",
+            "last_emit_at": "2000-01-01T00:00:00+00:00",
+            "enabled": True,
+            "continuation_ready": True,
+            "continuation_reason": "heartbeat_stale",
+            "heartbeat_stale": True,
+            "command": "wake loop",
+            "notify_pattern": "^AGENT_GOAL_WAKE",
+        },
+    )
+    code, out, _err = run_cli("manage", "status")
+    assert code == 0
+    assert "Continuation ready: true (heartbeat_stale)" in out
+    assert "heartbeat_stale" in out
 
 
 def test_validation_mode_shell_branch() -> None:

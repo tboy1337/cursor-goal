@@ -2,19 +2,19 @@
 
 Checklist for cutting a tagged GitHub Release (`vX.Y.Z`).
 
-Current package version is **2.10.0**. The next public GitHub tag should be **`v2.10.0`**. Until that tag is published, README/install tell users to clone `main` (or the latest Release archive) if `git clone --branch v2.10.0` fails; an older tag such as `v1.1.1` may still be marked Latest on GitHub. After tagging, the same pin works without further doc edits.
+Current package version is **2.11.0**. The next public GitHub tag should be **`v2.11.0`**. Until that tag is published, README/install tell users to clone `main` (or the latest Release archive) if `git clone --branch v2.11.0` fails; an older tag such as `v1.1.1` may still be marked Latest on GitHub. After tagging, the same pin works without further doc edits.
 
 ## Manual Cursor IDE smoke (before tagging)
 
 Harness unit tests do not cover the IDE. After install, smoke in Cursor:
 
 1. `/goal` create with an argv-safe `--test` (e.g. `py -3 -c "raise SystemExit(0)"`)
-2. Start `wake loop` in a background Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE`
-3. Confirm `wake status` shows `pid_alive=true`
+2. Parse `GOAL_WAKE_REQUIRED`; start its `command` in a background Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE`
+3. Confirm `wake status` shows `continuation_ready=true` / `pid_alive=true`
 4. Run `eval validate`, spawn `goal-evaluator`, `manage done` on YES
 5. On Windows: if Hooks UI shows `{}` while `last-stop-response.json` has `followup_message`, confirm wake still continues the goal
 
-Non-IDE wake smoke (optional): `python scripts/wake-smoke.py`
+Non-IDE wake smoke: `python scripts/wake-smoke.py` (also run by `scripts/verify.py`)
 
 ## Prerequisites
 

@@ -9,6 +9,8 @@ Ownership uses a generation token shared by ``wake.json`` and ``wake.pid`` so
 restarts cannot leave orphan loops or clear a newer loop's PID file.
 """
 
+# pylint: disable=too-many-lines
+
 from __future__ import annotations
 
 import json
@@ -42,10 +44,13 @@ logger = get_logger("cursor_goal.wake")
 WAKE_JSON_NAME = "wake.json"
 WAKE_PID_NAME = "wake.pid"
 SENTINEL_PREFIX = "AGENT_GOAL_WAKE"
+NOTIFY_PATTERN = f"^{SENTINEL_PREFIX}"
+GOAL_WAKE_REQUIRED_PREFIX = "GOAL_WAKE_REQUIRED"
 DEFAULT_INTERVAL_S = 15
 MIN_INTERVAL_S = 5
 MAX_INTERVAL_S = 600
 SLEEP_SLICE_S = 0.5
+HEARTBEAT_STALE_MULTIPLIER = 2
 
 
 def wake_enabled() -> bool:
@@ -464,20 +469,25 @@ def refuse_if_wake_dead() -> str | None:
     state = snapshot_goal()
     if state is None or not state.active or state.status != "pursuing":
         return None
-    info = status_info()
-    if info.get("pid_alive"):
+    readiness = continuation_readiness(goal_pursuing=True)
+    if readiness.get("continuation_ready"):
         return None
-    hint = wake_loop_invocation()
-    if info.get("armed"):
+    reason = str(readiness.get("reason") or "pid_dead")
+    hint = str(readiness.get("command") or _wake_loop_command())
+    pattern = str(readiness.get("pattern") or NOTIFY_PATTERN)
+    if reason == "not_armed":
         return (
-            "[goal] Error: wake loop not alive while pursuing. "
-            f"Start background Shell: `{hint}` with notify_on_output "
-            "matching ^AGENT_GOAL_WAKE, then confirm wake status pid_alive=true. "
+            "[goal] Error: wake not armed while pursuing "
+            f"(continuation_ready=false reason=not_armed). "
+            f"Arm and start: `{hint}` with notify_on_output matching {pattern}. "
             "Or set CURSOR_GOAL_ALLOW_DEAD_WAKE=1 to override."
         )
     return (
-        "[goal] Error: wake not armed / loop not alive while pursuing. "
-        f"Arm and start: `{hint}` with notify_on_output matching ^AGENT_GOAL_WAKE. "
+        "[goal] Error: wake loop not alive while pursuing "
+        f"(continuation_ready=false reason={reason}). "
+        f"Start background Shell: `{hint}` with notify_on_output "
+        f"matching {pattern}, then confirm wake status "
+        "continuation_ready=true / pid_alive=true. "
         "Or set CURSOR_GOAL_ALLOW_DEAD_WAKE=1 to override."
     )
 
@@ -578,7 +588,7 @@ def arm(*, interval: int | None = None) -> dict[str, Any]:
         "armed_at": _now_iso(),
         "interval_s": seconds,
         "sentinel": SENTINEL_PREFIX,
-        "notify_pattern": f"^{SENTINEL_PREFIX}",
+        "notify_pattern": NOTIFY_PATTERN,
         "token": token,
     }
     with goal_lock():
@@ -657,6 +667,146 @@ def tick() -> int:
     return 0
 
 
+def _wake_loop_command() -> str:
+    """Best-effort Shell command string for starting the wake loop."""
+    try:
+        return wake_loop_invocation()
+    except ValueError as exc:
+        logger.warning("Could not resolve wake loop command: %s", exc)
+        return "<unresolved-skill>/scripts/run_goal.py wake loop"
+
+
+def _heartbeat_stale(
+    *,
+    armed: bool,
+    pid_alive: bool,
+    last_emit_at: object,
+    interval_s: object,
+) -> bool:
+    """True when the loop is alive but last_emit_at is older than 2× interval.
+
+    Missing ``last_emit_at`` (armed but not yet emitted) is not stale.
+    """
+    if not armed or not pid_alive:
+        return False
+    if not last_emit_at or not isinstance(last_emit_at, str):
+        return False
+    try:
+        stamped = datetime.fromisoformat(last_emit_at.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    raw_interval = DEFAULT_INTERVAL_S
+    if isinstance(interval_s, int) and not isinstance(interval_s, bool):
+        raw_interval = interval_s
+    elif isinstance(interval_s, str):
+        try:
+            raw_interval = int(interval_s)
+        except ValueError:
+            raw_interval = DEFAULT_INTERVAL_S
+    interval = _clamp_interval(raw_interval)
+    age = (
+        datetime.now(timezone.utc) - stamped.astimezone(timezone.utc)
+    ).total_seconds()
+    return age > float(HEARTBEAT_STALE_MULTIPLIER * interval)
+
+
+def continuation_readiness(  # pylint: disable=too-many-return-statements
+    *,
+    enabled: bool | None = None,
+    armed: bool | None = None,
+    pid_alive: bool | None = None,
+    goal_pursuing: bool | None = None,
+    last_emit_at: object = None,
+    interval_s: object = None,
+) -> dict[str, Any]:
+    """Single continuation-readiness verdict for status/doctor/agents.
+
+    ``continuation_ready`` is false only while pursuing with wake enabled and
+    the loop missing (not armed or PID dead). Heartbeat staleness is a warning
+    only (ready stays true, ``reason`` may be ``heartbeat_stale``).
+    """
+    is_enabled = wake_enabled() if enabled is None else enabled
+    command = _wake_loop_command()
+    pattern = NOTIFY_PATTERN
+    if not is_enabled:
+        return {
+            "continuation_ready": True,
+            "reason": "disabled",
+            "heartbeat_stale": False,
+            "command": command,
+            "pattern": pattern,
+        }
+    pursuing = _goal_is_pursuing() if goal_pursuing is None else goal_pursuing
+    if not pursuing:
+        return {
+            "continuation_ready": True,
+            "reason": "not_pursuing",
+            "heartbeat_stale": False,
+            "command": command,
+            "pattern": pattern,
+        }
+    config = _read_wake_config() if armed is None else None
+    is_armed = (config is not None) if armed is None else armed
+    if pid_alive is None:
+        record = _read_pid_record()
+        pid = int(record["pid"]) if record is not None else None
+        is_alive = _pid_alive(pid) if pid is not None else False
+    else:
+        is_alive = pid_alive
+    emit_at = last_emit_at
+    interval = interval_s
+    if config is not None:
+        if emit_at is None:
+            emit_at = config.get("last_emit_at")
+        if interval is None:
+            interval = config.get("interval_s")
+    if not is_armed:
+        return {
+            "continuation_ready": False,
+            "reason": "not_armed",
+            "heartbeat_stale": False,
+            "command": command,
+            "pattern": pattern,
+        }
+    if not is_alive:
+        return {
+            "continuation_ready": False,
+            "reason": "pid_dead",
+            "heartbeat_stale": False,
+            "command": command,
+            "pattern": pattern,
+        }
+    stale = _heartbeat_stale(
+        armed=True,
+        pid_alive=True,
+        last_emit_at=emit_at,
+        interval_s=interval,
+    )
+    return {
+        "continuation_ready": True,
+        "reason": "heartbeat_stale" if stale else "ready",
+        "heartbeat_stale": stale,
+        "command": command,
+        "pattern": pattern,
+    }
+
+
+def wake_required_event(config: dict[str, Any]) -> dict[str, Any]:
+    """Payload for the ``GOAL_WAKE_REQUIRED`` machine-readable create/resume line."""
+    pattern = str(config.get("notify_pattern") or NOTIFY_PATTERN)
+    return {
+        "command": _wake_loop_command(),
+        "pattern": pattern,
+        "interval_s": config.get("interval_s"),
+    }
+
+
+def format_wake_required_line(config: dict[str, Any]) -> str:
+    """One stdout line agents can parse after successful arm."""
+    payload = json.dumps(wake_required_event(config), ensure_ascii=False)
+    return f"{GOAL_WAKE_REQUIRED_PREFIX} {payload}"
+
+
 def status_report() -> dict[str, Any]:
     """Return wake status as a JSON-serializable dict."""
     config = _read_wake_config()
@@ -667,6 +817,18 @@ def status_report() -> dict[str, Any]:
     wake_remaining = None
     if state is not None:
         wake_remaining = max(0, int(state.wake_budget) - int(state.wake_ticks))
+    pid_alive = _pid_alive(pid) if pid is not None else False
+    pursuing = _goal_is_pursuing()
+    interval_s = (config or {}).get("interval_s")
+    last_emit_at = (config or {}).get("last_emit_at")
+    readiness = continuation_readiness(
+        enabled=wake_enabled(),
+        armed=config is not None,
+        pid_alive=pid_alive,
+        goal_pursuing=pursuing,
+        last_emit_at=last_emit_at,
+        interval_s=interval_s,
+    )
     # Do not expose full generation token in status JSON (prefix only).
     return {
         "enabled": wake_enabled(),
@@ -679,15 +841,19 @@ def status_report() -> dict[str, Any]:
         "pid": pid,
         "token": (token[:8] + "…") if token else None,
         "token_prefix": token[:8] if token else None,
-        "pid_alive": _pid_alive(pid) if pid is not None else False,
-        "goal_pursuing": _goal_is_pursuing(),
-        "interval_s": (config or {}).get("interval_s"),
-        "last_emit_at": (config or {}).get("last_emit_at"),
+        "pid_alive": pid_alive,
+        "goal_pursuing": pursuing,
+        "interval_s": interval_s,
+        "last_emit_at": last_emit_at,
         "wake_ticks": None if state is None else state.wake_ticks,
         "wake_budget": None if state is None else state.wake_budget,
         "wake_remaining": wake_remaining,
         "sentinel": SENTINEL_PREFIX,
-        "notify_pattern": f"^{SENTINEL_PREFIX}",
+        "notify_pattern": NOTIFY_PATTERN,
+        "command": readiness["command"],
+        "continuation_ready": readiness["continuation_ready"],
+        "continuation_reason": readiness["reason"],
+        "heartbeat_stale": readiness["heartbeat_stale"],
     }
 
 
@@ -701,6 +867,12 @@ def status_info() -> dict[str, Any]:
         "token_prefix": report.get("token_prefix"),
         "last_emit_at": report.get("last_emit_at"),
         "wake_remaining": report.get("wake_remaining"),
+        "enabled": bool(report.get("enabled")),
+        "command": report.get("command"),
+        "notify_pattern": report.get("notify_pattern"),
+        "continuation_ready": bool(report.get("continuation_ready")),
+        "continuation_reason": report.get("continuation_reason"),
+        "heartbeat_stale": bool(report.get("heartbeat_stale")),
     }
 
 

@@ -1015,8 +1015,14 @@ def test_create_refuses_acl_harden_failure(
     assert "ACL harden" in err
 
 
-def test_doctor_wake_warning_includes_command(goal_home: Path) -> None:
+def test_doctor_wake_warning_includes_command(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
     run_cli("manage", "create", "doctor wake")
+    monkeypatch.setattr(manage_mod, "_hooks_look_configured", lambda: True)
     # Armed but no loop pid → hard-fail with exact command
     code, out, err = run_cli("manage", "doctor")
     assert code == 1
@@ -1025,6 +1031,7 @@ def test_doctor_wake_warning_includes_command(goal_home: Path) -> None:
         "wake loop" in combined.lower()
         or "REQUIRED" in combined
         or "start" in combined.lower()
+        or "continuation" in combined.lower()
     )
 
 

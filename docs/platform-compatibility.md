@@ -12,7 +12,7 @@ Also: [known-limitations.md](known-limitations.md) · [troubleshooting.md](troub
 |----------|------------|---------------|-----------|--------|
 | Cursor IDE (Unix) | `goalKeeper.md` + `goal-evaluator.md` | `Task` | `hooks.json` → `stop_hook.py` | **Harness YES**; stop followups best-effort (residual race — use wake) |
 | Cursor IDE (Windows) | same | `Task` | `stop_hook.cmd` (+ drain) + wake watchdog | Harness YES; race mitigated; wake bypass ([research](cursor-windows-stop-hook-race.md)) |
-| Teams marketplace plugin | same | `Task` | Dual `stop_hook.cmd` + `python3` + singleflight; wake watchdog | Harness YES; set absolute `CURSOR_GOAL_PYTHON` or ensure PATH |
+| Teams marketplace plugin | same | `Task` | Dual `stop_hook.cmd` + `python3` + singleflight; wake watchdog | Harness YES; set absolute `CURSOR_GOAL_PYTHON` (doctor requires it on Windows marketplace) |
 | Cursor CLI | same | `Task` | `hooks.json` | NO (E2E) |
 
 ## Installed Layout

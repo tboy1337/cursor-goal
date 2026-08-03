@@ -161,7 +161,9 @@ print("hooks cleaned")
         if (-not $cleaned) {
             Write-Host "[uninstall-goal] ACTION REQUIRED: could not clean stop hooks from:"
             Write-Host "  $hooksFile"
-            Write-Host "  Skill tree deletion continues. Remove cursor-goal stop hook entries manually."
+            Write-Host "  Leaving skill tree in place so hooks do not point at deleted files."
+            Write-Host "  Remove cursor-goal stop hook entries manually, then re-run uninstall."
+            return 1
         }
         else {
             Write-Host "[uninstall-goal] Removed stop hook entries from hooks.json"

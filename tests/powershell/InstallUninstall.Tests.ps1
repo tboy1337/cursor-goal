@@ -502,6 +502,26 @@ Describe 'Invoke-GoalUninstall python fallback' {
             if (Test-Path $TempHome) { Remove-Item -Recurse -Force $TempHome }
         }
     }
+
+    It 'keeps skill tree when hook cleanup cannot run' {
+        $TempHome = Join-Path ([IO.Path]::GetTempPath()) ("cg-unhooks-fail-" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $TempHome | Out-Null
+        try {
+            $null = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $RepoRoot -Python (Find-GoalPython)
+            # Remove package and block both py/python so neither hooks_config nor
+            # inline JSON cleanup can run — uninstall must abort and keep the skill.
+            Remove-Item -Recurse -Force (Join-Path $TempHome '.cursor\skills\goal\cursor_goal')
+            Mock Get-Command { return $null }
+            $code = Invoke-GoalUninstall -HomeDir $TempHome
+            $code | Should -Be 1
+            Test-Path (Join-Path $TempHome '.cursor\skills\goal') | Should -BeTrue
+            $hooks = Get-Content -Raw (Join-Path $TempHome '.cursor\hooks.json') | ConvertFrom-Json
+            @($hooks.hooks.stop).Count | Should -BeGreaterThan 0
+        }
+        finally {
+            if (Test-Path $TempHome) { Remove-Item -Recurse -Force $TempHome }
+        }
+    }
 }
 
 Describe 'Find-GoalPython failure path' {
