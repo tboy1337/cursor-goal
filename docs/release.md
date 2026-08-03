@@ -2,7 +2,7 @@
 
 Checklist for cutting a tagged GitHub Release (`vX.Y.Z`).
 
-Tagging `v2.6.0` was the first public 2.x release. Current package version is **2.6.0**.
+Tagging `v2.7.0` was the first public 2.x release. Current package version is **2.7.0**.
 
 ## Manual Cursor IDE smoke (before tagging)
 

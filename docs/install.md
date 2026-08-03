@@ -57,7 +57,7 @@ On upgrade, a previous skill tree is copied to `~/.cursor/skills/goal.bak.<UTC>`
 ### Install from a tagged release
 
 ```bash
-git clone --branch v2.6.0 https://github.com/tboy1337/cursor-goal.git
+git clone --branch v2.7.0 https://github.com/tboy1337/cursor-goal.git
 cd cursor-goal
 ./scripts/install-goal.sh   # or install-goal.ps1 on Windows
 ```

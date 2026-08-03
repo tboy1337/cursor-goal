@@ -20,7 +20,7 @@ def test_manage_create(goal_home: Path) -> None:
     assert data["turn_budget"] == 20
     assert data["wake_budget"] == 200
     assert data["shell_ok"] is False
-    assert data["schema_version"] == 4
+    assert data["schema_version"] == 1
     assert data["active"] is True
     assert data["workdir"]
     assert Path(data["workdir"]).is_absolute()
@@ -42,7 +42,7 @@ def test_manage_create_allow_shell(goal_home: Path) -> None:
     assert code == 0
     data = load_goal_json(goal_home)
     assert data["shell_ok"] is True
-    assert data["schema_version"] == 4
+    assert data["schema_version"] == 1
     assert "Shell ok: true" in out
     assert "Validation mode: shell" in out
 

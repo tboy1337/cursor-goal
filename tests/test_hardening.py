@@ -58,7 +58,7 @@ def test_load_goal_negative_turns(goal_home: Path) -> None:
                 "turns_used": -1,
                 "status": "pursuing",
                 "active": True,
-                "schema_version": 2,
+                "schema_version": 1,
             }
         ),
         encoding="utf-8",
@@ -368,7 +368,7 @@ def test_from_dict_clamps_oversized_condition(goal_home: Path) -> None:
             "turn_budget": 5,
             "turns_used": 0,
             "status": "pursuing",
-            "schema_version": 2,
+            "schema_version": 1,
         }
     )
     assert len(state.condition) == MAX_FIELD_CHARS
@@ -394,7 +394,7 @@ def test_from_dict_clamps_turns_over_budget(goal_home: Path) -> None:
             "turns_used": 99,
             "wake_ticks": 0,
             "status": "pursuing",
-            "schema_version": 2,
+            "schema_version": 1,
         }
     )
     assert state.turns_used == 3
@@ -760,7 +760,7 @@ def test_from_dict_invalid_shell_ok_and_wake_budget() -> None:
                 "condition": "x",
                 "turn_budget": 5,
                 "turns_used": 0,
-                "schema_version": 3,
+                "schema_version": 1,
                 "shell_ok": "maybe",
                 "status": "pursuing",
             }
@@ -771,7 +771,7 @@ def test_from_dict_invalid_shell_ok_and_wake_budget() -> None:
                 "condition": "x",
                 "turn_budget": 5,
                 "turns_used": 0,
-                "schema_version": 3,
+                "schema_version": 1,
                 "wake_budget": "nope",
                 "status": "pursuing",
             }

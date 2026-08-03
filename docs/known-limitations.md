@@ -16,7 +16,7 @@ If wake is not started while a goal is `pursuing`, goals can stall when Hooks sh
 
 ## Shell validation defaults to denied
 
-New goals use `shell_ok=false`. `--test` commands that need shell metacharacters require `--allow-shell` (or a global allow — not recommended). Prefer argv-safe commands, or set `CURSOR_GOAL_DENY_SHELL=1` as a hard global refuse. Older goal.json files without `shell_ok` still load as `shell_ok=true` for compatibility.
+New goals use `shell_ok=false`. `--test` commands that need shell metacharacters require `--allow-shell` (or a global allow — not recommended). Prefer argv-safe commands, or set `CURSOR_GOAL_DENY_SHELL=1` as a hard global refuse. Only schema v1 `goal.json` is supported — clear or recreate incompatible state files.
 
 ## Secret redaction is heuristic
 

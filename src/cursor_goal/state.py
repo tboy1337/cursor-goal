@@ -44,8 +44,8 @@ __all__ = (
 EVAL_FLAG_NAME = "goal-eval-done"
 GOAL_FILE_NAME = "goal.json"
 LOCK_FILE_NAME = "goal.lock"
-SCHEMA_VERSION = 4
-SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4})
+SCHEMA_VERSION = 1
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1})
 MAX_TURN_BUDGET = 500
 MAX_FIELD_CHARS = 4000
 LOCK_TIMEOUT_SEC = 10.0
@@ -649,7 +649,7 @@ class GoalState:  # pylint: disable=too-many-instance-attributes
             turn_budget = clamp_turn_budget(int(data.get("turn_budget", 20)))
             turns_used = int(data.get("turns_used", 0))
             wake_ticks = int(data.get("wake_ticks", 0))
-            schema_version = int(data.get("schema_version", 1))
+            schema_version = int(data.get("schema_version", SCHEMA_VERSION))
         except (TypeError, ValueError) as exc:
             raise ValueError(f"invalid goal.json numeric fields: {exc}") from exc
         if turns_used < 0:
@@ -659,28 +659,21 @@ class GoalState:  # pylint: disable=too-many-instance-attributes
         if schema_version not in SUPPORTED_SCHEMA_VERSIONS:
             raise ValueError(
                 f"unsupported schema_version={schema_version}; "
-                f"supported={sorted(SUPPORTED_SCHEMA_VERSIONS)}"
+                f"supported={sorted(SUPPORTED_SCHEMA_VERSIONS)} "
+                "(clear ~/.cursor-goal/data/goal.json or recreate the goal)"
             )
 
-        # Migrate v1/v2: derive wake_budget / shell_ok when absent.
         wake_budget_raw = data.get("wake_budget")
         if wake_budget_raw is None or wake_budget_raw == "":
-            wake_budget = max(default_wake_budget(turn_budget), wake_ticks)
-            if wake_ticks > 0 and wake_ticks > default_wake_budget(turn_budget):
-                logger.info(
-                    "Migrating schema %s: wake_budget raised to wake_ticks=%s",
-                    schema_version,
-                    wake_ticks,
-                )
+            wake_budget = default_wake_budget(turn_budget)
         else:
             try:
                 wake_budget = clamp_wake_budget(int(wake_budget_raw))
             except (TypeError, ValueError) as exc:
                 raise ValueError(f"invalid wake_budget: {exc}") from exc
 
-        # Pre-v4 goals without shell_ok keep historical True; new creates default False.
         if "shell_ok" not in data:
-            shell_ok = True
+            shell_ok = False
         else:
             try:
                 shell_ok = _parse_shell_ok(data.get("shell_ok"))
@@ -737,8 +730,6 @@ class GoalState:  # pylint: disable=too-many-instance-attributes
         ):
             status = "budget-limited"
             active = False
-        # Persist migrated schema on next save via to_dict(); keep loaded version
-        # but treat as supported. Callers saving rewrite to SCHEMA_VERSION.
         return cls(
             active=active,
             condition=condition,
@@ -764,7 +755,7 @@ class GoalState:  # pylint: disable=too-many-instance-attributes
             last_eval_verdict=_clamp_field_chars(
                 "last_eval_verdict", str(data.get("last_eval_verdict") or "")
             ),
-            schema_version=schema_version,
+            schema_version=SCHEMA_VERSION,
         )
 
     def content_hash(self) -> str:

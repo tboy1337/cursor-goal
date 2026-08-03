@@ -30,7 +30,7 @@ Three supported paths:
 | Path | Who | How |
 |------|-----|-----|
 | **Clone + installer** | Individuals | Full clone or GitHub Release archive → `install-goal.sh` / `install-goal.ps1` |
-| **Tagged release** | Individuals | `git clone --branch v2.6.0 …` then installer (see [docs/install.md](docs/install.md)) |
+| **Tagged release** | Individuals | `git clone --branch v2.7.0 …` then installer (see [docs/install.md](docs/install.md)) |
 | **Teams marketplace** | Teams/Enterprise | Import this repo in Cursor Dashboard → Plugins (see `.cursor-plugin/marketplace.json`) |
 
 **Agent install (explicit steps):**
@@ -104,7 +104,7 @@ Flags / natural language:
 /goal fix bugs, verified by pytest, stop after 15 turns
 ```
 
-**2.6.0:** new goals default to `shell_ok=false` (pass `--allow-shell` for shell-mode validation); installers exit non-zero when `manage doctor` hard-fails; validation can bind a `--workdir`.
+**2.7.0:** new goals default to `shell_ok=false` (pass `--allow-shell` for shell-mode validation); installers exit non-zero when `manage doctor` hard-fails; validation can bind a `--workdir`.
 
 ## Multi-model (maker ≠ checker)
 

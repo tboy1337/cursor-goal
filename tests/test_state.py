@@ -138,50 +138,74 @@ def test_load_goal_corrupt_numeric_fields(goal_home: Path) -> None:
 def test_save_goal_writes_schema_version(goal_home: Path) -> None:
     save_goal(GoalState(condition="c", created_at="t", status="pursuing"))
     raw = json.loads((goal_home / "goal.json").read_text(encoding="utf-8"))
-    assert raw["schema_version"] == 4
+    assert raw["schema_version"] == 1
     assert raw["wake_budget"] == 200
     assert raw["shell_ok"] is False
     assert raw.get("workdir", "") == ""
 
 
-def test_from_dict_migrates_v2_wake_budget(goal_home: Path) -> None:
+def test_from_dict_defaults_and_rejects_unsupported_schema(goal_home: Path) -> None:
     del goal_home  # fixture sets CURSOR_GOAL_DATA
     state = GoalState.from_dict(
         {
-            "condition": "legacy",
+            "condition": "current",
             "turn_budget": 20,
             "turns_used": 0,
             "wake_ticks": 5,
-            "schema_version": 2,
+            "schema_version": 1,
             "status": "pursuing",
             "active": True,
         }
     )
     assert state.wake_budget == 200
-    # Old goals without shell_ok key still migrate to True.
-    assert state.shell_ok is True
+    # Missing shell_ok defaults to False.
+    assert state.shell_ok is False
     assert state.wake_ticks == 5
     assert state.status == "pursuing"
     assert state.workdir == ""
+    assert state.schema_version == 1
+
+    with pytest.raises(ValueError, match="unsupported schema_version"):
+        GoalState.from_dict(
+            {
+                "condition": "old",
+                "turn_budget": 20,
+                "turns_used": 0,
+                "schema_version": 2,
+                "status": "pursuing",
+                "active": True,
+            }
+        )
+    with pytest.raises(ValueError, match="unsupported schema_version"):
+        GoalState.from_dict(
+            {
+                "condition": "old",
+                "turn_budget": 20,
+                "turns_used": 0,
+                "schema_version": 4,
+                "status": "pursuing",
+                "active": True,
+            }
+        )
 
 
-def test_from_dict_accepts_schema_version_4(goal_home: Path) -> None:
+def test_from_dict_accepts_schema_version_1(goal_home: Path) -> None:
     del goal_home
     state = GoalState.from_dict(
         {
-            "condition": "v4",
+            "condition": "v1",
             "turn_budget": 10,
             "turns_used": 0,
             "wake_ticks": 0,
             "wake_budget": 100,
             "shell_ok": False,
             "workdir": "/tmp/work",
-            "schema_version": 4,
+            "schema_version": 1,
             "status": "pursuing",
             "active": True,
         }
     )
-    assert state.schema_version == 4
+    assert state.schema_version == 1
     assert state.shell_ok is False
     assert state.workdir == "/tmp/work"
 
@@ -456,7 +480,7 @@ def test_active_string_false_is_corrupt(goal_home: Path) -> None:
                 "turn_budget": 5,
                 "turns_used": 0,
                 "status": "pursuing",
-                "schema_version": 2,
+                "schema_version": 1,
             }
         ),
         encoding="utf-8",
@@ -624,7 +648,7 @@ def test_from_dict_clamps_oversized_condition() -> None:
             "turn_budget": 5,
             "turns_used": 0,
             "status": "pursuing",
-            "schema_version": 4,
+            "schema_version": 1,
             "workdir": "w" * (MAX_FIELD_CHARS + 5),
         }
     )
