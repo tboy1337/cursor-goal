@@ -56,8 +56,10 @@ On upgrade, a previous skill tree is copied to `~/.cursor/skills/goal.bak.<UTC>`
 
 ### Install from a tagged release
 
+Package version **2.9.0** pins the clone branch below. Use it **only when tag `v2.9.0` exists** on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If the tag is not published yet (or `git clone --branch` fails), clone `main` with the Quick install steps above — the tree on `main` is the same package version until maintainers cut the tag ([release.md](release.md)).
+
 ```bash
-git clone --branch v2.8.0 https://github.com/tboy1337/cursor-goal.git
+git clone --branch v2.9.0 https://github.com/tboy1337/cursor-goal.git
 cd cursor-goal
 ./scripts/install-goal.sh   # or install-goal.ps1 on Windows
 ```
@@ -66,14 +68,25 @@ Or download the source archive from the GitHub Release for that tag and run the 
 
 ## Verify
 
+Unix / macOS / WSL:
+
 ```bash
 python3 -u ~/.cursor/skills/goal/scripts/run_goal.py manage status
 python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval spawn-config
 python3 -u ~/.cursor/skills/goal/scripts/run_goal.py manage doctor
 ```
 
+Windows PowerShell:
+
+```powershell
+py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" manage status
+py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" eval spawn-config
+py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" manage doctor
+```
+
 Expected status: `[goal] No active goal.`  
-Expected spawn-config: JSON with `"subagent_type":"goal-evaluator"` and `"model":"fast"` (unless overridden).
+Expected spawn-config: JSON with `"subagent_type":"goal-evaluator"` and `"model":"fast"` (unless overridden).  
+Doctor should print `Doctor: OK` (fix any `FAIL` lines before starting a goal).
 
 Then in Agent chat: `/goal status`
 
@@ -101,7 +114,7 @@ On Cursor **Teams** / **Enterprise**, admins can import this repository as a Tea
 
 The plugin ships skill, agents, vendored harness, and marketplace stop hooks that register both `stop_hook.cmd` (Windows via `cmd /c`) and `python3 -u "…/stop_hook.py"` (Unix). On each OS one entry typically fails (expected). A singleflight lock ensures only one hook mutates turn state and writes stdout; the loser exits silently (no `{}`, no `last-stop-response.json` overwrite). Prefer in-turn evaluation; the stop hook remains a safety net. Classic `install-goal.ps1` still writes a single absolute `stop_hook.cmd` and `wake_loop.cmd` (best path on native Windows).
 
-Resolve harness commands with `manage harness-cmd` (works from `${CURSOR_PLUGIN_ROOT}/skills/goal` without a classic install). Do **not** stack classic installer hooks with marketplace hooks — pick one path.
+Resolve harness commands with `manage harness-cmd` (works from `${CURSOR_PLUGIN_ROOT}/skills/goal` without a classic install). Do **not** stack classic installer hooks with marketplace hooks — pick one path. `manage doctor` **FAIL**s when both look configured.
 
 ### Three `stop_hook.cmd` roles (do not conflate)
 
@@ -130,9 +143,9 @@ License remains **AGPL-3.0-only** for both distribution paths.
 
 | Platform | Install notes |
 |----------|----------------|
-| Cursor IDE (Unix/macOS) | Fully supported |
+| Cursor IDE (Unix/macOS) | Supported — harness unit-tested; stop hook works but Cursor may still drop `followup_message` stdout (upstream race). **Always arm `wake loop`** with `notify_on_output` matching `^AGENT_GOAL_WAKE` while pursuing (see [known-limitations.md](known-limitations.md)). |
 | Cursor IDE (Windows) | Use `install-goal.ps1` only. Writes absolute-baked `stop_hook.cmd` and `wake_loop.cmd`, plus a ~250ms stdout drain delay to mitigate Cursor’s capture race. Always writes redacted `last-stop-response.json`. Prefer in-turn evaluation; arm `wake loop` with `notify_on_output` for race-immune continuation (see [cursor-windows-stop-hook-race.md](cursor-windows-stop-hook-race.md)). Re-run the installer after moving/upgrading Python. `install-goal.sh` from Git Bash is refused. |
-| Teams marketplace | Import this repo; dual stop entries (`stop_hook.cmd` + `python3`) with singleflight. Classic installer still recommended for absolute Python bake. |
+| Teams marketplace | Import this repo; dual stop entries (`stop_hook.cmd` + `python3`) with singleflight. Set absolute `CURSOR_GOAL_PYTHON` on Windows, or prefer classic `install-goal.ps1` for individuals. Do not stack with classic hooks. |
 | WSL | Use `./scripts/install-goal.sh` inside WSL with a WSL home for WSL Cursor. Do not point `$HOME` at `/mnt/c/...` for native Windows Cursor — use `install-goal.ps1` instead. |
 
 ## Contributor install

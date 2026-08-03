@@ -2,7 +2,7 @@
 
 Checklist for cutting a tagged GitHub Release (`vX.Y.Z`).
 
-Current package version is **2.8.0**. The first public 2.x GitHub tag should be **`v2.8.0`** (until then, docs pins reference this version; only `v1.1.1` may exist on the remote).
+Current package version is **2.9.0**. The first public 2.x GitHub tag should be **`v2.9.0`**. Until that tag is published, README/install tell users to clone `main` (or the latest Release archive) if `git clone --branch v2.9.0` fails; only `v1.1.1` may exist on the remote today. After tagging, the same pin works without further doc edits.
 
 ## Manual Cursor IDE smoke (before tagging)
 

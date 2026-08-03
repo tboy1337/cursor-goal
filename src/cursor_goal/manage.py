@@ -343,6 +343,20 @@ def cmd_status(_argv: list[str]) -> int:
         )
     else:
         print("  Wake service: not armed")
+    if display_active and wake_enabled():
+        hint = _wake_loop_shell_hint()
+        if not wake_info.get("armed"):
+            print(
+                "  ACTION REQUIRED: wake not armed while pursuing — start background "
+                f"Shell `{hint}` with notify_on_output matching ^AGENT_GOAL_WAKE, "
+                "then confirm `wake status` shows pid_alive=true"
+            )
+        elif not wake_info.get("pid_alive"):
+            print(
+                "  ACTION REQUIRED: wake loop not alive — start background Shell "
+                f"`{hint}` with notify_on_output matching ^AGENT_GOAL_WAKE, "
+                "then confirm pid_alive=true"
+            )
     if state.last_reason:
         print(f"  Last evaluation: {redact_secrets(state.last_reason, max_chars=500)}")
     if state.last_eval_verdict:
@@ -548,16 +562,22 @@ def _hooks_look_configured() -> bool | None:
     return None
 
 
-def _hooks_stacking_warning() -> str | None:
-    """Warn when classic and marketplace stop hooks both appear active."""
+def _hooks_stacking_failure() -> str | None:
+    """Hard-fail message when classic and marketplace stop hooks both appear active."""
     classic = _classic_hooks_configured()
     market = _marketplace_hooks_configured()
     if classic is True and market is True:
         return (
             "Classic (~/.cursor/hooks.json) and marketplace plugin stop hooks both "
-            "look configured — pick one install path to avoid duplicate hook runs"
+            "look configured — FAIL: pick one install path (uninstall classic hooks "
+            "or disable the marketplace plugin) to avoid duplicate hook runs"
         )
     return None
+
+
+def _hooks_stacking_warning() -> str | None:
+    """Compatibility alias — stacking is a doctor hard-fail via ``_hooks_stacking_failure``."""
+    return _hooks_stacking_failure()
 
 
 def _is_absolute_interpreter_path(value: str) -> bool:
@@ -636,9 +656,9 @@ def cmd_doctor(_argv: list[str]) -> int:
             "Could not confirm stop hook configuration "
             "(classic hooks.json missing/unreadable and no marketplace plugin root)"
         )
-    stacked = _hooks_stacking_warning()
+    stacked = _hooks_stacking_failure()
     if stacked is not None:
-        warnings.append(stacked)
+        hard_fails.append(stacked)
 
     try:
         report = harness_cmd_report()

@@ -3,24 +3,42 @@
 Quick fixes for common install and continuation failures. Also run:
 
 ```bash
+# Unix / macOS / WSL
 python3 -u ~/.cursor/skills/goal/scripts/run_goal.py manage doctor
 ```
+
+```powershell
+# Windows
+py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" manage doctor
+```
+
+Stall checklist (Hooks `{}`, no continuation): work the steps below before filing a GitHub issue.
 
 ## Hooks Execution Log shows `{}` but the goal should continue
 
 1. Check `~/.cursor-goal/data/last-stop-response.json`. If it contains `followup_message` while Hooks shows `{}`, you hit the [Cursor stdout race](cursor-windows-stop-hook-race.md).
-2. Ensure wake is armed and the loop is alive (`manage status` / `manage doctor`).
+2. Ensure wake is armed and the loop is alive (`manage status` / `manage doctor`). Doctor **FAIL**s while `pursuing` if wake is missing or dead.
 3. Start background Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE`:
 
 ```text
+# Unix
 python3 -u ~/.cursor/skills/goal/scripts/run_goal.py wake loop
 ```
 
-On Windows classic install, prefer the baked `wake_loop.cmd`.
+```powershell
+# Windows classic — prefer baked wake_loop.cmd when present
+py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" wake loop
+```
+
+4. Confirm `wake status` shows `pid_alive=true`.
 
 ## Wake not armed / `pid_alive=false`
 
-Doctor warns when a goal is `pursuing` without a live wake loop. Immediately start `wake loop` as above. Disable only with `CURSOR_GOAL_WAKE=0` (not recommended while the stop race remains).
+Doctor **hard-fails** when a goal is `pursuing` without a live wake loop. `manage status` prints an **ACTION REQUIRED** recovery command. Immediately start `wake loop` as above. Disable only with `CURSOR_GOAL_WAKE=0` (not recommended while the stop race remains).
+
+## Classic + marketplace hooks stacked
+
+Doctor **FAIL**s when both classic `~/.cursor/hooks.json` stop entries and Teams marketplace plugin hooks look configured. Pick **one** install path: uninstall classic hooks (`uninstall-goal.*` without necessarily purging data) **or** disable the marketplace plugin — do not run both.
 
 ## `manage doctor` FAIL: insecure data directory
 
@@ -32,13 +50,18 @@ Override with `CURSOR_GOAL_DATA` to a private directory.
 
 ## Marketplace stop/wake fails to find Python (Windows)
 
-Set an **absolute** path:
+**Recommended fix path (pick one):**
+
+1. **Individuals:** prefer classic `install-goal.ps1`, which bakes an absolute interpreter into `stop_hook.cmd` / `wake_loop.cmd`.
+2. **Teams marketplace:** set an **absolute** `CURSOR_GOAL_PYTHON` (user or system env), then restart Cursor:
 
 ```powershell
 $env:CURSOR_GOAL_PYTHON = 'C:\Path\To\python.exe'
+# Persist for your user, then restart Cursor:
+[Environment]::SetEnvironmentVariable('CURSOR_GOAL_PYTHON', 'C:\Path\To\python.exe', 'User')
 ```
 
-Relative or bare `python` values are rejected. Prefer classic `install-goal.ps1`, which bakes absolute Python into the launchers.
+Relative or bare `python` values are rejected. Doctor **FAIL**s on Windows when marketplace hooks are detected and `CURSOR_GOAL_PYTHON` is unset or non-absolute — PATH-only resolution is fragile and not treated as success for marketplace installs.
 
 ## Wrong installer / WSL mix-up
 

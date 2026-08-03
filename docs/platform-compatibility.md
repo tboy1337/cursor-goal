@@ -50,12 +50,16 @@ Some Cursor plans only accept Task `model: "fast"`; specific model IDs work when
 | Variable | Purpose |
 |----------|---------|
 | `CURSOR_GOAL_DATA` | Absolute override for `~/.cursor-goal/data` |
+| `CURSOR_GOAL_HOME` | Absolute override for skill/home resolution used by path helpers (when set) |
+| `CURSOR_GOAL_PYTHON` | Absolute Python 3.12+ interpreter for marketplace/classic Windows `.cmd` launchers (required for reliable Teams marketplace on Windows) |
 | `CURSOR_GOAL_EVAL_MODEL` | Evaluator model slug for `eval spawn-config` (default `fast`) |
 | `CURSOR_GOAL_LOG` | Log level (`WARNING` default; invalid values fall back to WARNING). `last-stop-response.json` is always written on stop emit (redacted) |
 | `CURSOR_GOAL_LOG_FILE` | Optional durable log path, or `1`/`.` for `cursor-goal.log` under the data dir |
 | `CURSOR_GOAL_STOP_DRAIN_MS` | Stop-hook stdout drain delay before exit (default ~250 on Windows, ~100 elsewhere; max 2000) |
 | `CURSOR_GOAL_WAKE` | When `0`/`false`/`off`, disable wake watchdog arming |
 | `CURSOR_GOAL_WAKE_INTERVAL_S` | Wake loop interval seconds (default 15, min 5, max 600) |
+| `CURSOR_GOAL_ALLOW_DEAD_WAKE` | When `1`/`true`/`yes`/`on`, allow `eval validate` while pursuing without a live wake loop (not recommended) |
+| `CURSOR_GOAL_ALLOW_ANY_WORKDIR` | When set, allow `--workdir` outside the create-time process cwd (still rejects symlink/junction/reparse) |
 | `CURSOR_GOAL_DENY_SHELL` | When `1`/`true`/`yes`/`on`, refuse shell-mode validation (argv only) |
 | `CURSOR_GOAL_LOG_SECRETS` | When set, DEBUG may log full validation commands (default: never) |
 | `CURSOR_GOAL_SKIP_ACL` | When set, skip Windows `icacls` data-dir harden (used by tests) |

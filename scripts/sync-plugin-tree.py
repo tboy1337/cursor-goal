@@ -187,11 +187,15 @@ def write_plugin(root: Path) -> Path:
         "stop-hook stdout. In-turn evaluation remains primary; the stop hook "
         "is a safety net.\n\n"
         "Set `CURSOR_GOAL_PYTHON` to an **absolute** Python 3.12+ path on "
-        "Windows Teams installs (PATH fallback is fragile). Resolve the "
+        "Windows Teams installs — `manage doctor` **FAIL**s when marketplace "
+        "hooks are detected without it (PATH fallback is fragile and not "
+        "treated as success). Individuals should prefer classic "
+        "`install-goal.ps1` (absolute interpreter bake). Resolve the "
         "harness with `manage harness-cmd` — skill/agent commands work from "
         "`${CURSOR_PLUGIN_ROOT}/skills/goal` without a classic install.\n\n"
         "Do **not** stack classic `install-goal.*` hooks with marketplace "
-        "hooks; pick one path.\n",
+        "hooks; `manage doctor` **FAIL**s when both look configured — pick "
+        "one path.\n",
         encoding="utf-8",
         newline="\n",
     )

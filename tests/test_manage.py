@@ -326,7 +326,36 @@ def test_marketplace_hooks_and_stacking(
     monkeypatch.setenv("CURSOR_PLUGIN_ROOT", str(plugin))
     assert manage_mod._marketplace_hooks_configured() is True
     assert manage_mod._classic_hooks_configured() is True
+    assert manage_mod._hooks_stacking_failure() is not None
     assert manage_mod._hooks_stacking_warning() is not None
+
+
+def test_doctor_marketplace_python_unset_hard_fail(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    assert run_cli("manage", "create", "mkt py")[0] == 0
+    monkeypatch.setattr(manage_mod, "_classic_hooks_configured", lambda: False)
+    monkeypatch.setattr(manage_mod, "_marketplace_hooks_configured", lambda: True)
+    monkeypatch.setattr(manage_mod, "_hooks_look_configured", lambda: True)
+    monkeypatch.setattr(manage_mod.os, "name", "nt")
+    monkeypatch.delenv("CURSOR_GOAL_PYTHON", raising=False)
+    monkeypatch.setattr(
+        manage_mod,
+        "wake_status_info",
+        lambda: {
+            "armed": True,
+            "pid_alive": True,
+            "interval_s": 15,
+            "token_prefix": "abcd",
+            "last_emit_at": "t",
+        },
+    )
+    monkeypatch.setattr(manage_mod, "_stale_baked_python_failures", list)
+    code, _out, err = run_cli("manage", "doctor")
+    assert code == 1
+    assert "CURSOR_GOAL_PYTHON unset" in err
 
 
 def test_doctor_marketplace_and_stacking_messages(
@@ -350,10 +379,60 @@ def test_doctor_marketplace_and_stacking_messages(
         },
     )
     monkeypatch.setenv("CURSOR_GOAL_PYTHON", sys.executable)
-    code, out, _err = run_cli("manage", "doctor")
+    code, out, err = run_cli("manage", "doctor")
+    assert code == 1
+    combined = f"{out}\n{err}".lower()
+    assert "marketplace" in combined or "classic" in combined
+    assert "pick one" in combined
+    assert "fail" in combined
+
+
+def test_status_action_required_when_wake_dead(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+    assert run_cli("manage", "create", "need wake")[0] == 0
+    monkeypatch.setattr(
+        manage_mod,
+        "wake_status_info",
+        lambda: {
+            "armed": False,
+            "pid_alive": False,
+            "interval_s": None,
+            "token_prefix": None,
+            "last_emit_at": None,
+        },
+    )
+    code, out, _err = run_cli("manage", "status")
     assert code == 0
-    assert "marketplace" in out.lower() or "classic" in out.lower()
-    assert "pick one" in out.lower() or "Warning" in out
+    assert "ACTION REQUIRED" in out
+    assert "wake" in out.lower()
+
+
+def test_status_action_required_when_wake_armed_dead(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+    assert run_cli("manage", "create", "dead loop")[0] == 0
+    monkeypatch.setattr(
+        manage_mod,
+        "wake_status_info",
+        lambda: {
+            "armed": True,
+            "pid_alive": False,
+            "interval_s": 15,
+            "token_prefix": "abcd",
+            "last_emit_at": None,
+        },
+    )
+    code, out, _err = run_cli("manage", "status")
+    assert code == 0
+    assert "ACTION REQUIRED" in out
+    assert "not alive" in out.lower()
 
 
 def test_doctor_wake_not_armed_hard_fail(

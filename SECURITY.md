@@ -33,7 +33,7 @@ If another user or process can write your goal data directory, they can cause co
 - When `CURSOR_GOAL_PYTHON` is set (marketplace/classic Windows launchers), it must be an absolute path to Python 3.12+.
 - When `CURSOR_GOAL_DATA` is set, it must be an absolute path (same policy as `CURSOR_GOAL_HOME`).
 - `--workdir` must not be a symlink/junction/reparse and, unless `CURSOR_GOAL_ALLOW_ANY_WORKDIR=1`, must stay under the create-time process cwd. `eval validate` fails closed if a configured workdir is missing or insecure.
-- `manage doctor` reports insecure dirs, Windows ACL harden failures, stale baked Python in `.cmd` launchers, PATH vs absolute Python, hook presence, wake health (with exact wake-loop command), fail-open continue counter, and shell mode. Installers exit non-zero when doctor hard-fails.
+- `manage doctor` reports insecure dirs, Windows ACL harden failures, stale baked Python in `.cmd` launchers, PATH vs absolute Python, hook presence, classic+marketplace stacking (hard fail), wake health (with exact wake-loop command; hard fail while pursuing without live wake), fail-open continue counter, and shell mode. Installers exit non-zero when doctor hard-fails.
 
 ## Reporting a vulnerability
 

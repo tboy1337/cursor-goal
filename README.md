@@ -29,13 +29,13 @@ Three supported paths:
 
 | Path | Who | How |
 |------|-----|-----|
-| **Clone + installer** | Individuals | Full clone or GitHub Release archive → `install-goal.sh` / `install-goal.ps1` |
-| **Tagged release** | Individuals | `git clone --branch v2.8.0 …` then installer (see [docs/install.md](docs/install.md)) |
+| **Clone + installer** | Individuals | Clone `main` (or a GitHub Release source archive) → `install-goal.sh` / `install-goal.ps1` |
+| **Tagged release** | Individuals | When tag `v2.9.0` exists on GitHub: `git clone --branch v2.9.0 …` then installer (see [docs/install.md](docs/install.md)). If that tag is not published yet, use **Clone + installer** from `main`. |
 | **Teams marketplace** | Teams/Enterprise | Import this repo in Cursor Dashboard → Plugins (see `.cursor-plugin/marketplace.json`) |
 
 **Agent install (explicit steps):**
 
-1. Clone `https://github.com/tboy1337/cursor-goal` (or download a tagged source archive from GitHub Releases).
+1. Clone `https://github.com/tboy1337/cursor-goal` (default branch `main`). Prefer a tagged source archive only when that tag exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases).
 2. Run the OS installer from the repo root (`install-goal.sh` on Unix/macOS; `install-goal.ps1` on native Windows).
 3. Verify with `manage status` and `eval spawn-config` (commands below).
 
@@ -85,13 +85,22 @@ Note: an unrelated npm package is also named `cursor-goal`; this project is the 
 
 **Teams / AGPL:** marketplace import redistributes AGPL-3.0 code — review [docs/teams-agpl.md](docs/teams-agpl.md) and [COPYING](COPYING) before enterprise use.
 
-Verify:
+Verify (Unix / macOS / WSL):
 
 ```bash
 python3 -u ~/.cursor/skills/goal/scripts/run_goal.py manage status
 # → [goal] No active goal.
 python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval spawn-config
 # → {"subagent_type":"goal-evaluator","model":"fast","readonly":true}
+python3 -u ~/.cursor/skills/goal/scripts/run_goal.py manage doctor
+```
+
+Verify (Windows PowerShell):
+
+```powershell
+py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" manage status
+py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" eval spawn-config
+py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" manage doctor
 ```
 
 ## Usage
@@ -112,7 +121,7 @@ Flags / natural language:
 /goal fix bugs, verified by pytest, stop after 15 turns
 ```
 
-**2.8.0:** production hardening (wake liveness gate, stop/wake coalesce, workdir jail, prompt/disk redaction split). New goals still default to `shell_ok=false` (pass `--allow-shell` for shell-mode validation); installers exit non-zero when `manage doctor` hard-fails; validation can bind a `--workdir`.
+**2.9.0:** production hardening (wake liveness gate, stop/wake coalesce, workdir jail, prompt/disk redaction split). New goals still default to `shell_ok=false` (pass `--allow-shell` for shell-mode validation); installers exit non-zero when `manage doctor` hard-fails; validation can bind a `--workdir`.
 
 ## Multi-model (maker ≠ checker)
 
