@@ -369,3 +369,26 @@ def test_eval_check_no_signal_and_ok(goal_home: Path) -> None:
     code2, out2, _err2 = run_cli("eval", "check")
     assert code2 == 0
     assert "OK" in out2
+
+
+def test_eval_prompt_refuses_dead_wake(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+    monkeypatch.delenv("CURSOR_GOAL_ALLOW_DEAD_WAKE", raising=False)
+    assert run_cli("manage", "create", "need eval")[0] == 0
+    # Create with wake=1 arms wake.json but no live loop PID → not ready.
+    code, _out, err = run_cli("eval", "prompt")
+    assert code == 1
+    assert "wake" in err.lower()
+
+
+def test_eval_spawn_config_refuses_dead_wake(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+    monkeypatch.delenv("CURSOR_GOAL_ALLOW_DEAD_WAKE", raising=False)
+    assert run_cli("manage", "create", "need spawn")[0] == 0
+    code, _out, err = run_cli("eval", "spawn-config")
+    assert code == 1
+    assert "wake" in err.lower()

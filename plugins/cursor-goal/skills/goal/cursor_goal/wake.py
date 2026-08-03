@@ -735,6 +735,7 @@ def continuation_readiness(  # pylint: disable=too-many-return-statements
             "heartbeat_stale": False,
             "command": command,
             "pattern": pattern,
+            "notify_pattern": pattern,
         }
     pursuing = _goal_is_pursuing() if goal_pursuing is None else goal_pursuing
     if not pursuing:
@@ -744,6 +745,7 @@ def continuation_readiness(  # pylint: disable=too-many-return-statements
             "heartbeat_stale": False,
             "command": command,
             "pattern": pattern,
+            "notify_pattern": pattern,
         }
     config = _read_wake_config() if armed is None else None
     is_armed = (config is not None) if armed is None else armed
@@ -767,6 +769,7 @@ def continuation_readiness(  # pylint: disable=too-many-return-statements
             "heartbeat_stale": False,
             "command": command,
             "pattern": pattern,
+            "notify_pattern": pattern,
         }
     if not is_alive:
         return {
@@ -775,6 +778,7 @@ def continuation_readiness(  # pylint: disable=too-many-return-statements
             "heartbeat_stale": False,
             "command": command,
             "pattern": pattern,
+            "notify_pattern": pattern,
         }
     stale = _heartbeat_stale(
         armed=True,
@@ -788,6 +792,7 @@ def continuation_readiness(  # pylint: disable=too-many-return-statements
         "heartbeat_stale": stale,
         "command": command,
         "pattern": pattern,
+        "notify_pattern": pattern,
     }
 
 
@@ -797,6 +802,7 @@ def wake_required_event(config: dict[str, Any]) -> dict[str, Any]:
     return {
         "command": _wake_loop_command(),
         "pattern": pattern,
+        "notify_pattern": pattern,
         "interval_s": config.get("interval_s"),
     }
 
@@ -850,6 +856,7 @@ def status_report() -> dict[str, Any]:
         "wake_remaining": wake_remaining,
         "sentinel": SENTINEL_PREFIX,
         "notify_pattern": NOTIFY_PATTERN,
+        "pattern": NOTIFY_PATTERN,
         "command": readiness["command"],
         "continuation_ready": readiness["continuation_ready"],
         "continuation_reason": readiness["reason"],
@@ -870,6 +877,7 @@ def status_info() -> dict[str, Any]:
         "enabled": bool(report.get("enabled")),
         "command": report.get("command"),
         "notify_pattern": report.get("notify_pattern"),
+        "pattern": report.get("pattern") or report.get("notify_pattern"),
         "continuation_ready": bool(report.get("continuation_ready")),
         "continuation_reason": report.get("continuation_reason"),
         "heartbeat_stale": bool(report.get("heartbeat_stale")),

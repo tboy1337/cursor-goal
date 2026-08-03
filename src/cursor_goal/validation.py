@@ -189,7 +189,7 @@ def deny_shell_enabled() -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
-def shell_allowed_for_goal(*, shell_ok: bool = True) -> bool:
+def shell_allowed_for_goal(*, shell_ok: bool = False) -> bool:
     """Return True when shell-mode validation may run for this goal."""
     if deny_shell_enabled():
         return False

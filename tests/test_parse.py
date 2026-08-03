@@ -156,3 +156,66 @@ def test_parse_cli_missing_arg() -> None:
     code, _out, err = run_cli("parse")
     assert code == 1
     assert "Usage" in err
+
+
+def test_parse_allow_shell_not_in_condition() -> None:
+    result = parse_raw('compound check --test "npm test && npm run lint" --allow-shell')
+    assert result["condition"] == "compound check"
+    assert result["test_cmd"] == "npm test && npm run lint"
+    assert result["allow_shell"] is True
+    assert "--allow-shell" not in result["condition"]
+
+
+def test_parse_deny_shell_flag() -> None:
+    result = parse_raw("ship it --deny-shell --test pytest")
+    assert result["condition"] == "ship it"
+    assert result["allow_shell"] is False
+    assert "--deny-shell" not in result["condition"]
+
+
+def test_parse_force_flag() -> None:
+    result = parse_raw('ship it --test "pytest -q" --force')
+    assert result["condition"] == "ship it"
+    assert result["force"] is True
+    assert "--force" not in result["condition"]
+
+
+def test_parse_wake_budget_flag() -> None:
+    result = parse_raw("ship it --wake-budget 50 --budget 5")
+    assert result["condition"] == "ship it"
+    assert result["wake_budget"] == 50
+    assert result["budget"] == 5
+    assert "--wake-budget" not in result["condition"]
+
+
+def test_parse_rejects_invalid_wake_budget() -> None:
+    with pytest.raises(ValueError, match="Wake budget"):
+        parse_raw("ship --wake-budget 0")
+    with pytest.raises(ValueError, match="Wake budget"):
+        parse_raw("ship --wake-budget 9999")
+
+
+def test_parse_workdir_quoted_and_bare() -> None:
+    quoted = parse_raw('ship --workdir "/tmp/my project" --test pytest')
+    assert quoted["workdir"] == "/tmp/my project"
+    assert quoted["condition"] == "ship"
+    bare = parse_raw("ship --workdir /tmp/proj --test pytest")
+    assert bare["workdir"] == "/tmp/proj"
+    assert bare["condition"] == "ship"
+
+
+def test_parse_quoted_condition_with_flags() -> None:
+    result = parse_raw('/goal "quoted cond" --test "pytest -q" --force')
+    assert result["condition"] == "quoted cond"
+    assert result["test_cmd"] == "pytest -q"
+    assert result["force"] is True
+    assert "--force" not in result["condition"]
+    assert '"' not in result["condition"]
+
+
+def test_parse_omits_unset_optional_flags() -> None:
+    result = parse_raw("fix the login bug")
+    assert "allow_shell" not in result
+    assert "force" not in result
+    assert "wake_budget" not in result
+    assert "workdir" not in result

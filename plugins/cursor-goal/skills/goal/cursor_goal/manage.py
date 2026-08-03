@@ -221,6 +221,22 @@ def cmd_create(argv: list[str]) -> int:  # pylint: disable=too-many-branches
         print(error, file=sys.stderr)
         return 1
 
+    # Refuse shell-metachar validation when shell_ok is false (fail closed).
+    if args.test_cmd and not args.shell_ok and try_split_argv(args.test_cmd) is None:
+        if deny_shell_enabled():
+            print(
+                "[goal] Error: validation requires shell metacharacters but "
+                "CURSOR_GOAL_DENY_SHELL is set. Use an argv-safe --test.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "[goal] Error: validation requires shell metacharacters but "
+                "shell_ok=false. Pass --allow-shell or use an argv-safe --test.",
+                file=sys.stderr,
+            )
+        return 1
+
     turn_budget = clamp_turn_budget(args.budget)
     wake_budget = (
         clamp_wake_budget(args.wake_budget)
@@ -295,11 +311,6 @@ def cmd_create(argv: list[str]) -> int:  # pylint: disable=too-many-branches
                 "Prefer argv-safe commands; shell was explicitly enabled "
                 "with --allow-shell."
             )
-        elif mode == "denied":
-            print(
-                "  Warning: validation requires shell metacharacters but "
-                "shell_ok=false. Pass --allow-shell or use an argv-safe --test."
-            )
     if workdir:
         print(f"  Workdir: {workdir}")
     print(f"  Budget: {turn_budget} turns")
@@ -371,7 +382,11 @@ def cmd_status(_argv: list[str]) -> int:  # pylint: disable=too-many-branches
         )
     if display_active and wake_enabled() and not ready:
         hint = str(wake_info.get("command") or _wake_loop_shell_hint())
-        pattern = str(wake_info.get("notify_pattern") or NOTIFY_PATTERN)
+        pattern = str(
+            wake_info.get("notify_pattern")
+            or wake_info.get("pattern")
+            or NOTIFY_PATTERN
+        )
         if reason == "not_armed" or not wake_info.get("armed"):
             print(
                 "  ACTION REQUIRED: wake not armed while pursuing — start background "
@@ -389,6 +404,8 @@ def cmd_status(_argv: list[str]) -> int:  # pylint: disable=too-many-branches
     if state.last_eval_verdict:
         print(f"  Last verdict: {state.last_eval_verdict}")
     print(f"  Created: {state.created_at}")
+    if display_active and wake_enabled() and not ready:
+        return 1
     return 0
 
 
@@ -693,6 +710,13 @@ def cmd_doctor(_argv: list[str]) -> int:
         report = harness_cmd_report()
         print(f"  Harness: {report['run_goal']} (exists={report['exists']})")
         print(f"  Wake loop cmd: {report['wake_loop']}")
+        if not report["exists"]:
+            hard_fails.append(
+                f"run_goal.py missing at {report['run_goal']}. "
+                "Run the classic installer, enable the Teams marketplace plugin, "
+                "or set CURSOR_GOAL_HOME / CURSOR_PLUGIN_ROOT to a tree that "
+                "contains skills/goal/scripts/run_goal.py"
+            )
     except ValueError as exc:
         warnings.append(f"Harness path unresolved: {exc}")
 
@@ -844,6 +868,17 @@ def cmd_doctor(_argv: list[str]) -> int:
     log_file = os.environ.get("CURSOR_GOAL_LOG_FILE", "").strip()
     if log_file:
         print(f"  Durable log: CURSOR_GOAL_LOG_FILE={log_file}")
+    else:
+        log_level = os.environ.get("CURSOR_GOAL_LOG", "").strip()
+        if not log_level:
+            tip = (
+                "For richer diagnostics set CURSOR_GOAL_LOG=INFO "
+                "or CURSOR_GOAL_LOG_FILE=1"
+            )
+            if state is not None and state.active and state.status == "pursuing":
+                warnings.append(tip)
+            else:
+                print(f"  Tip: {tip}")
 
     for item in warnings:
         print(f"  Warning: {item}")
@@ -1018,6 +1053,16 @@ def cmd_harness_cmd(_argv: list[str]) -> int:
         print(f"[goal] CURSOR_GOAL_HOME: {report['cursor_goal_home']}")
     if report["cursor_plugin_root"]:
         print(f"[goal] CURSOR_PLUGIN_ROOT: {report['cursor_plugin_root']}")
+    if not report["exists"]:
+        print(
+            "[goal] Error: run_goal.py does not exist at the resolved path. "
+            "Install the skill (install-goal.sh / install-goal.ps1), enable the "
+            "Teams marketplace plugin, or set CURSOR_GOAL_HOME / "
+            "CURSOR_PLUGIN_ROOT to a tree containing "
+            "skills/goal/scripts/run_goal.py.",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 

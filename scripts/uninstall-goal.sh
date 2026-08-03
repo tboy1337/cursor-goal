@@ -56,20 +56,29 @@ data = json.loads(path.read_text(encoding="utf-8"))
 hooks = data.get("hooks") or {}
 stop = hooks.get("stop") or []
 
-def is_goal_hook(item: object) -> bool:
+def is_goal_hook(item: object, *, allow_legacy: bool = True) -> bool:
     if not isinstance(item, dict):
+        return False
+    if item.get("_cursor_goal") == "cursor_goal_stop_hook":
+        return True
+    if not allow_legacy:
         return False
     cmd = str(item.get("command", ""))
     return (
-        item.get("_cursor_goal") == "cursor_goal_stop_hook"
-        or "goal-stop.sh" in cmd
+        "goal-stop.sh" in cmd
         or "stop_hook.py" in cmd
         or "stop_hook.cmd" in cmd
         or "cursor_goal stop" in cmd
         or "cursor-goal stop" in cmd
     )
 
-hooks["stop"] = [item for item in stop if not is_goal_hook(item)]
+has_marked = any(
+    isinstance(item, dict) and item.get("_cursor_goal") == "cursor_goal_stop_hook"
+    for item in stop
+)
+hooks["stop"] = [
+    item for item in stop if not is_goal_hook(item, allow_legacy=not has_marked)
+]
 data["hooks"] = hooks
 tmp = path.with_name(f"{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
 tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

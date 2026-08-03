@@ -9,7 +9,7 @@ Cursor can drop stop-hook stdout (`followup_message`) on Windows and Linux (upst
 **Durable continuation requires (operational prerequisite while pursuing):**
 
 1. In-turn `goal-evaluator` Task evaluation (primary)
-2. Wake watchdog: `manage create`/`resume` prints `GOAL_WAKE_REQUIRED`; agent starts that `command` in a background Shell with `notify_on_output` matching `pattern` (`^AGENT_GOAL_WAKE`), then confirms `wake status` `continuation_ready=true` (race-immune)
+2. Wake watchdog: `manage create`/`resume` prints `GOAL_WAKE_REQUIRED`; agent starts that `command` in a background Shell with `notify_on_output` matching `pattern` or `notify_pattern` (`^AGENT_GOAL_WAKE`), then confirms `wake status` `continuation_ready=true` (race-immune)
 3. Stop `followup_message` (secondary, best-effort)
 
 If wake is not started while a goal is `pursuing`, goals can stall when Hooks show `{}`. `eval validate` refuses while pursuing without a live wake loop unless `CURSOR_GOAL_ALLOW_DEAD_WAKE=1` (or wake is disabled via `CURSOR_GOAL_WAKE=0`). Doctor skips wake liveness hard-fails when wake is disabled.
@@ -20,7 +20,7 @@ If wake arm fails during create/resume, the harness leaves the goal **`paused`**
 
 ## Shell validation defaults to denied
 
-New goals use `shell_ok=false`. `--test` commands that need shell metacharacters require `--allow-shell` (or a global allow — not recommended). Prefer argv-safe commands, or set `CURSOR_GOAL_DENY_SHELL=1` as a hard global refuse. Only schema v1 `goal.json` is supported — clear or recreate incompatible state files.
+New goals use `shell_ok=false`. `--test` commands that need shell metacharacters require `--allow-shell` at create time (create **refuses** otherwise). Prefer argv-safe commands, or set `CURSOR_GOAL_DENY_SHELL=1` as a hard global refuse. Only schema v1 `goal.json` is supported — clear or recreate incompatible state files. `parse` extracts `--allow-shell` / `--deny-shell` / `--workdir` / `--wake-budget` / `--force` into JSON so agents can forward them to `manage create`.
 
 ## Secret redaction is heuristic
 

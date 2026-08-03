@@ -226,6 +226,16 @@ PY
 
 print_summary() {
   echo ""
+  echo "Running manage doctor..."
+  if ! "$PYTHON_BIN" -u "$INSTALL_DIR/scripts/run_goal.py" manage doctor; then
+    echo ""
+    echo -e "${RED}manage doctor FAILED — install files were written, but the harness is not healthy.${NC}"
+    echo "Fix the FAIL lines above, then re-run doctor or uninstall and retry:"
+    echo "  $(shell_quote "$PYTHON_BIN") -u $(shell_quote "$INSTALL_DIR/scripts/run_goal.py") manage doctor"
+    echo "  $(shell_quote "$SCRIPT_DIR/uninstall-goal.sh")"
+    exit 1
+  fi
+  echo ""
   echo -e "${GREEN}============================================${NC}"
   echo -e "${GREEN} /goal Autonomous Loop - Installed!         ${NC}"
   echo -e "${GREEN}============================================${NC}"
@@ -241,15 +251,6 @@ print_summary() {
   echo "Verify:"
   echo "  $(shell_quote "$PYTHON_BIN") -u $(shell_quote "$INSTALL_DIR/scripts/run_goal.py") manage doctor"
   echo "  $(shell_quote "$PYTHON_BIN") -u $(shell_quote "$INSTALL_DIR/scripts/run_goal.py") manage status"
-  echo ""
-  echo "Running manage doctor..."
-  if ! "$PYTHON_BIN" -u "$INSTALL_DIR/scripts/run_goal.py" manage doctor; then
-    echo ""
-    echo -e "${RED}manage doctor FAILED — install files were written, but the harness is not healthy.${NC}"
-    echo "Fix the FAIL lines above, then re-run:"
-    echo "  $(shell_quote "$PYTHON_BIN") -u $(shell_quote "$INSTALL_DIR/scripts/run_goal.py") manage doctor"
-    exit 1
-  fi
   echo ""
   echo "Next steps:"
   echo "  1) In Cursor: /goal <verifiable condition>"

@@ -34,7 +34,7 @@ py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" wake loop
 
 ## Wake not armed / `continuation_ready=false`
 
-Doctor **hard-fails** when a goal is `pursuing`, wake is enabled, and the loop is missing or dead. `manage status` prints an **ACTION REQUIRED** recovery command and `Continuation ready: false (…)`. Immediately start `wake loop` as above. If create/resume exited 1 with the goal paused, fix data-dir/ACL issues then `manage resume`. Disable wake only with `CURSOR_GOAL_WAKE=0` (not recommended while the stop race remains).
+Doctor **hard-fails** when a goal is `pursuing`, wake is enabled, and the loop is missing or dead. `manage status` prints an **ACTION REQUIRED** recovery command, `Continuation ready: false (…)`, and exits **1**. Immediately start `wake loop` as above. If create/resume exited 1 with the goal paused, fix data-dir/ACL issues then `manage resume`. Disable wake only with `CURSOR_GOAL_WAKE=0` (not recommended while the stop race remains).
 
 ## Classic + marketplace hooks stacked
 
@@ -74,7 +74,7 @@ Relative or bare `python` values are rejected. Doctor **FAIL**s on Windows when 
 
 ## Shell-mode validation warning
 
-Doctor warns when validation uses shell mode. New goals default to `shell_ok=false`; prefer argv-safe `--test` or keep deny-shell. Use `--allow-shell` only when compound shell is required.
+Doctor warns when validation uses shell mode. New goals default to `shell_ok=false`; create **refuses** shell-metachar `--test` without `--allow-shell`. Prefer argv-safe `--test` or keep deny-shell. Use `--allow-shell` only when compound shell is required.
 
 ## Task / evaluator model errors
 

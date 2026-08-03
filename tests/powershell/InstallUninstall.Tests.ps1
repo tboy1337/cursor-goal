@@ -340,13 +340,31 @@ Describe 'Invoke-GoalInstall' {
 }
 
 Describe 'Select-GoalStopHooksRemaining' {
-    It 'drops marker and path-matched hooks' {
+    It 'prefers marker-only removal when a marked entry exists' {
         $data = [pscustomobject]@{
             hooks = [pscustomobject]@{
                 stop = @(
                     [pscustomobject]@{ command = './keep.sh' },
                     [pscustomobject]@{ command = 'x'; _cursor_goal = 'cursor_goal_stop_hook' },
-                    [pscustomobject]@{ command = 'cursor-goal stop' }
+                    # Substring match alone must not drop when marked entries exist
+                    # (avoids nuking unrelated hooks that happen to mention stop_hook).
+                    [pscustomobject]@{ command = 'my-tool --path=/opt/stop_hook.py' }
+                )
+            }
+        }
+        $cleaned = Select-GoalStopHooksRemaining -Data $data -Marker 'cursor_goal_stop_hook'
+        @($cleaned.hooks.stop).Count | Should -Be 2
+        $cleaned.hooks.stop[0].command | Should -Be './keep.sh'
+        $cleaned.hooks.stop[1].command | Should -Be 'my-tool --path=/opt/stop_hook.py'
+    }
+
+    It 'uses legacy substring match when no marked entries exist' {
+        $data = [pscustomobject]@{
+            hooks = [pscustomobject]@{
+                stop = @(
+                    [pscustomobject]@{ command = './keep.sh' },
+                    [pscustomobject]@{ command = 'cursor-goal stop' },
+                    [pscustomobject]@{ command = 'python stop_hook.py' }
                 )
             }
         }

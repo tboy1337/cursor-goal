@@ -44,6 +44,12 @@ _BUDGET_NL = re.compile(
 _TEST_FLAG_QUOTED = re.compile(r'--test\s+"([^"]+)"')
 _TEST_FLAG_BARE = re.compile(r"--test\s+(\S+)")
 _BUDGET_FLAG = re.compile(r"--budget\s+(\d+)")
+_WAKE_BUDGET_FLAG = re.compile(r"--wake-budget\s+(\d+)")
+_WORKDIR_QUOTED = re.compile(r'--workdir\s+"([^"]+)"')
+_WORKDIR_BARE = re.compile(r"--workdir\s+(\S+)")
+_ALLOW_SHELL_FLAG = re.compile(r"--allow-shell\b")
+_DENY_SHELL_FLAG = re.compile(r"--deny-shell\b")
+_FORCE_FLAG = re.compile(r"--force\b")
 _VALIDATION_HINTS = [
     re.compile(
         rf",?\s*(?:verified\s+by|run|check\s+with|using|via)\s+"
@@ -85,6 +91,49 @@ def _extract_budget(condition: str, default: int = 20) -> tuple[int, str]:
     return budget, condition
 
 
+def _extract_wake_budget(condition: str) -> tuple[int | None, str]:
+    """Pull ``--wake-budget N``; return (value or None, remaining)."""
+    match = _WAKE_BUDGET_FLAG.search(condition)
+    if not match:
+        return None, condition
+    return int(match.group(1)), _WAKE_BUDGET_FLAG.sub("", condition)
+
+
+def _extract_workdir(condition: str) -> tuple[str | None, str]:
+    """Pull ``--workdir`` (quoted or bare); return (path or None, remaining)."""
+    match = _WORKDIR_QUOTED.search(condition)
+    if match:
+        return match.group(1), _WORKDIR_QUOTED.sub("", condition)
+    match = _WORKDIR_BARE.search(condition)
+    if match:
+        return match.group(1), _WORKDIR_BARE.sub("", condition)
+    return None, condition
+
+
+def _extract_bool_flags(condition: str) -> tuple[bool | None, bool, str]:
+    """Pull shell/force flags.
+
+    Returns ``(allow_shell, force, remaining)`` where *allow_shell* is
+    ``True``/``False`` when a shell flag was present, else ``None``.
+    When both ``--allow-shell`` and ``--deny-shell`` appear, the last one wins.
+    """
+    allow_shell: bool | None = None
+    force = False
+    # Scan left-to-right so later flags override earlier ones.
+    for match in re.finditer(r"--(?:allow-shell|deny-shell|force)\b", condition):
+        token = match.group(0)
+        if token == "--allow-shell":  # nosec B105 — CLI flag, not a password
+            allow_shell = True
+        elif token == "--deny-shell":  # nosec B105 — CLI flag, not a password
+            allow_shell = False
+        elif token == "--force":  # nosec B105 — CLI flag, not a password
+            force = True
+    remaining = _ALLOW_SHELL_FLAG.sub("", condition)
+    remaining = _DENY_SHELL_FLAG.sub("", remaining)
+    remaining = _FORCE_FLAG.sub("", remaining)
+    return allow_shell, force, remaining
+
+
 def _truncate_shell_chain(candidate: str) -> str:
     """Keep only the first segment before common shell chain operators."""
     for sep in ("&&", "||", ";", "|"):
@@ -124,11 +173,17 @@ def _extract_validation_hint(condition: str) -> tuple[str, str, str | None]:
 
 
 def _normalize_condition(condition: str) -> str:
-    cleaned = condition.strip().strip('",').strip()
+    """Collapse whitespace and strip a single wrapping quote pair if present."""
+    cleaned = condition.strip()
+    if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in "\"'":
+        cleaned = cleaned[1:-1].strip()
+    else:
+        # Leftover unmatched quotes from partial stripping (legacy agents).
+        cleaned = cleaned.strip('",').strip()
     return re.sub(r"\s+", " ", cleaned)
 
 
-def parse_raw(raw: str) -> dict[str, Any]:
+def parse_raw(raw: str) -> dict[str, Any]:  # pylint: disable=too-many-branches
     """Parse /goal input into a JSON-serializable dict."""
     text = raw.strip()
     if not text:
@@ -150,6 +205,9 @@ def parse_raw(raw: str) -> dict[str, Any]:
 
     test_cmd, condition = _extract_test_flag(text)
     budget, condition = _extract_budget(condition)
+    wake_budget, condition = _extract_wake_budget(condition)
+    workdir, condition = _extract_workdir(condition)
+    allow_shell, force, condition = _extract_bool_flags(condition)
     warning: str | None = None
     if not test_cmd:
         test_cmd, condition, warning = _extract_validation_hint(condition)
@@ -162,6 +220,16 @@ def parse_raw(raw: str) -> dict[str, Any]:
     if budget > MAX_TURN_BUDGET:
         raise ValueError(f"Budget must be <= {MAX_TURN_BUDGET}, got {budget}")
     budget = clamp_turn_budget(budget)
+    if wake_budget is not None:
+        if wake_budget < 1:
+            raise ValueError(
+                f"Wake budget must be a positive integer, got {wake_budget}"
+            )
+        if wake_budget > MAX_TURN_BUDGET:
+            raise ValueError(
+                f"Wake budget must be <= {MAX_TURN_BUDGET}, got {wake_budget}"
+            )
+        wake_budget = clamp_turn_budget(wake_budget)
 
     result = {
         "subcommand": None,
@@ -170,13 +238,26 @@ def parse_raw(raw: str) -> dict[str, Any]:
         "test_cmd": test_cmd or None,
         "budget": budget,
     }
+    if allow_shell is not None:
+        result["allow_shell"] = allow_shell
+    if force:
+        result["force"] = True
+    if wake_budget is not None:
+        result["wake_budget"] = wake_budget
+    if workdir is not None:
+        result["workdir"] = workdir
     if warning:
         result["warning"] = warning
     logger.info(
-        "Parsed create condition=%r test=%r budget=%s warning=%s",
+        "Parsed create condition=%r test=%r budget=%s allow_shell=%s "
+        "force=%s wake_budget=%s workdir=%r warning=%s",
         condition,
         redact_command(test_cmd) if test_cmd else "",
         budget,
+        allow_shell,
+        force,
+        wake_budget,
+        workdir or "",
         warning or "",
     )
     return result

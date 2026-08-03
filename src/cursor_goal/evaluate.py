@@ -32,6 +32,11 @@ MAX_PARSE_RESULT_BYTES = 2 * 1024 * 1024
 
 
 def cmd_prompt(argv: list[str]) -> int:
+    wake_dead = refuse_if_wake_dead()
+    if wake_dead is not None:
+        print(wake_dead.replace("[goal]", "[goal-eval]"), file=sys.stderr)
+        return 1
+
     state = snapshot_goal()
     if state is None:
         print(
@@ -102,6 +107,10 @@ def cmd_prompt(argv: list[str]) -> int:
 
 def cmd_spawn_config(_argv: list[str]) -> int:
     """Print JSON Task parameters for the readonly goal evaluator."""
+    wake_dead = refuse_if_wake_dead()
+    if wake_dead is not None:
+        print(wake_dead.replace("[goal]", "[goal-eval]"), file=sys.stderr)
+        return 1
     config = spawn_config_dict()
     logger.info(
         "spawn-config subagent_type=%s model=%s readonly=%s",

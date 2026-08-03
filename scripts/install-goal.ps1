@@ -444,10 +444,6 @@ print(__version__)
     Write-GoalInfo "Merged/upgraded stop hook in hooks.json"
 
     Write-Host ""
-    Write-Host "============================================" -ForegroundColor Green
-    Write-Host " /goal Autonomous Loop - Installed!" -ForegroundColor Green
-    Write-Host "============================================" -ForegroundColor Green
-    Write-Host ""
     Write-Host "Stop hook command: $hookCommand"
     Write-Host "Verify:"
     Write-Host ("  {0} -u {1} manage doctor" -f $Python.Exe, (Join-Path $installDir "scripts\run_goal.py"))
@@ -459,8 +455,13 @@ print(__version__)
     if ($LASTEXITCODE -ne 0) {
         Write-GoalErr "manage doctor FAILED (exit $LASTEXITCODE) - install files were written, but the harness is not healthy."
         Write-Host ("Fix FAIL lines above, then re-run: {0} -u {1} manage doctor" -f $Python.Exe, (Join-Path $installDir "scripts\run_goal.py"))
+        Write-Host ("Or uninstall and retry: powershell -NoProfile -ExecutionPolicy Bypass -File {0}" -f (Join-Path $PSScriptRoot "uninstall-goal.ps1"))
         return 1
     }
+    Write-Host ""
+    Write-Host "============================================" -ForegroundColor Green
+    Write-Host " /goal Autonomous Loop - Installed!" -ForegroundColor Green
+    Write-Host "============================================" -ForegroundColor Green
     Write-Host ""
     Write-Host "Next steps:"
     Write-Host "  1) In Cursor: /goal <verifiable condition>"

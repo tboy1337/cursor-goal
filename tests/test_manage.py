@@ -70,7 +70,7 @@ def test_manage_create_wake_budget_and_deny_shell(goal_home: Path) -> None:
         "create",
         "secure",
         "--test",
-        "echo a && echo b",
+        "pytest -q",
         "--budget",
         "5",
         "--wake-budget",
@@ -83,7 +83,7 @@ def test_manage_create_wake_budget_and_deny_shell(goal_home: Path) -> None:
     assert data["shell_ok"] is False
     assert data["turn_budget"] == 5
     assert "Shell ok: false" in out
-    assert "Validation mode: denied" in out or "Validation mode: argv" in out
+    assert "Validation mode: argv" in out
 
 
 def test_create_force_wake_disarm_oserror(
@@ -413,7 +413,7 @@ def test_status_action_required_when_wake_dead(
         },
     )
     code, out, _err = run_cli("manage", "status")
-    assert code == 0
+    assert code == 1
     assert "ACTION REQUIRED" in out
     assert "wake" in out.lower()
     assert "Continuation ready: false (not_armed)" in out
@@ -444,7 +444,7 @@ def test_status_action_required_when_wake_armed_dead(
         },
     )
     code, out, _err = run_cli("manage", "status")
-    assert code == 0
+    assert code == 1
     assert "ACTION REQUIRED" in out
     assert "not alive" in out.lower()
     assert "Continuation ready: false (pid_dead)" in out
@@ -872,19 +872,32 @@ def test_manage_create_invalid_workdir(goal_home: Path, tmp_path: Path) -> None:
     assert "workdir" in err.lower()
 
 
-def test_manage_create_denied_shell_warning(goal_home: Path) -> None:
-    code, out, _err = run_cli(
+def test_manage_create_denied_shell_refuses(goal_home: Path) -> None:
+    code, _out, err = run_cli(
         "manage",
         "create",
         "need shell",
         "--test",
         "echo a && echo b",
     )
+    assert code == 1
+    assert "--allow-shell" in err or "shell_ok=false" in err
+    assert not (goal_home / "goal.json").is_file()
+
+
+def test_manage_create_allow_shell_succeeds(goal_home: Path) -> None:
+    code, out, _err = run_cli(
+        "manage",
+        "create",
+        "need shell",
+        "--test",
+        "echo a && echo b",
+        "--allow-shell",
+    )
     assert code == 0
     data = load_goal_json(goal_home)
-    assert data["shell_ok"] is False
-    assert "Validation mode: denied" in out
-    assert "shell_ok=false" in out or "--allow-shell" in out
+    assert data["shell_ok"] is True
+    assert "Validation mode: shell" in out
 
 
 def test_baked_python_from_cmd(tmp_path: Path) -> None:
@@ -950,6 +963,7 @@ def test_blocking_checklist_on_create(
     )
     payload = json.loads(line[len("GOAL_WAKE_REQUIRED ") :])
     assert payload["pattern"] == "^AGENT_GOAL_WAKE"
+    assert payload["notify_pattern"] == payload["pattern"]
     assert "wake" in payload["command"] and "loop" in payload["command"]
     assert "interval_s" in payload
 
@@ -1242,3 +1256,54 @@ def test_data_dir_symlink_leaf_posix(
     monkeypatch.setattr(state_mod, "path_has_symlink_or_reparse", lambda _p: False)
     monkeypatch.setattr(type(goal_home), "is_symlink", lambda self: True)
     assert state_mod.data_dir_is_insecure(goal_home) is True
+
+
+def test_harness_cmd_missing_run_goal(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    del goal_home
+    monkeypatch.setattr(
+        manage_mod,
+        "harness_cmd_report",
+        lambda: {
+            "skill_root": "/missing/skill",
+            "run_goal": "/missing/skill/scripts/run_goal.py",
+            "exists": False,
+            "invocation": "python -u /missing/...",
+            "wake_loop": "wake loop",
+            "cursor_goal_home": None,
+            "cursor_plugin_root": None,
+        },
+    )
+    code, out, err = run_cli("manage", "harness-cmd")
+    assert code == 1
+    assert "exists=False" in out or "exists=false" in out.lower()
+    assert "run_goal.py" in err.lower() or "CURSOR_GOAL" in err
+
+
+def test_doctor_missing_run_goal_hard_fail(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    monkeypatch.setattr(manage_mod, "_hooks_look_configured", lambda: True)
+    monkeypatch.setattr(
+        manage_mod,
+        "harness_cmd_report",
+        lambda: {
+            "skill_root": "/missing/skill",
+            "run_goal": "/missing/run_goal.py",
+            "exists": False,
+            "invocation": "python -u /missing/...",
+            "wake_loop": "wake loop",
+            "cursor_goal_home": None,
+            "cursor_plugin_root": None,
+        },
+    )
+    code, out, err = run_cli("manage", "doctor")
+    assert code == 1
+    assert "exists=False" in out or "exists=false" in out.lower()
+    combined = out + err
+    assert "run_goal.py missing" in combined or "FAIL" in combined

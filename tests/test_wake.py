@@ -1229,6 +1229,7 @@ def test_format_wake_required_line(wake_on: Path) -> None:
     assert line.startswith("GOAL_WAKE_REQUIRED ")
     payload = json.loads(line[len("GOAL_WAKE_REQUIRED ") :])
     assert payload["pattern"] == "^AGENT_GOAL_WAKE"
+    assert payload["notify_pattern"] == "^AGENT_GOAL_WAKE"
     assert payload["interval_s"] == 15
 
 

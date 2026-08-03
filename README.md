@@ -30,7 +30,7 @@ Three supported paths:
 | Path | Who | How |
 |------|-----|-----|
 | **Clone + installer** | Individuals | Clone `main` (or a GitHub Release source archive) → `install-goal.sh` / `install-goal.ps1` |
-| **Tagged release** | Individuals | When tag `v2.11.0` exists on GitHub: `git clone --branch v2.11.0 …` then installer (see [docs/install.md](docs/install.md)). If that tag is not published yet, use **Clone + installer** from `main`. |
+| **Tagged release** | Individuals | When tag `v2.12.0` exists on GitHub: `git clone --branch v2.12.0 …` then installer (see [docs/install.md](docs/install.md)). If that tag is not published yet, use **Clone + installer** from `main`. |
 | **Teams marketplace** | Teams/Enterprise | Import this repo in Cursor Dashboard → Plugins (see `.cursor-plugin/marketplace.json`) |
 
 **Agent install (explicit steps):**
@@ -121,7 +121,9 @@ Flags / natural language:
 /goal fix bugs, verified by pytest, stop after 15 turns
 ```
 
-**2.11.0:** wake handshake emits machine-readable `GOAL_WAKE_REQUIRED`; create/resume pauses (exit 1) if arm fails; `continuation_ready` in status/doctor; doctor respects `CURSOR_GOAL_WAKE=0`; uninstall aborts when hook cleanup fails. Builds on **2.11.0** (wake→wake coalesce, classic Windows absolute Python bake, Unix chmod harden).
+**2.12.0:** `parse` extracts `--allow-shell` / `--deny-shell` / `--workdir` / `--wake-budget` / `--force` (no flag leakage into condition); create refuses shell-metachar `--test` without `--allow-shell`; `manage status` exits 1 on ACTION REQUIRED; doctor/harness-cmd hard-fail when `run_goal.py` is missing; `GOAL_WAKE_REQUIRED` emits both `pattern` and `notify_pattern`; eval `prompt`/`spawn-config` wake-gated like `validate`. Builds on **2.12.0** (wake handshake, arm-failure pause, `continuation_ready`).
+
+**2.12.0:** wake handshake emits machine-readable `GOAL_WAKE_REQUIRED`; create/resume pauses (exit 1) if arm fails; `continuation_ready` in status/doctor; doctor respects `CURSOR_GOAL_WAKE=0`; uninstall aborts when hook cleanup fails. Builds on **2.10.0** (wake→wake coalesce, classic Windows absolute Python bake, Unix chmod harden).
 
 ## Multi-model (maker ≠ checker)
 

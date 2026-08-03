@@ -13,9 +13,9 @@ Resolve the runner **before** lifecycle commands (classic install or Teams marke
 
 **Resolution order:**
 
-1. Classic: `~/.cursor/skills/goal/scripts/run_goal.py` (Windows: `$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py`).
-2. Marketplace: `"$CURSOR_PLUGIN_ROOT/skills/goal/scripts/run_goal.py"` when `CURSOR_PLUGIN_ROOT` is set.
-3. Optional: `manage harness-cmd` once and reuse its printed `Wake loop` / invocation lines.
+1. **Preferred:** `manage harness-cmd` once (via any known `run_goal.py` path below) and reuse its printed invocation / Wake loop lines for the rest of the session.
+2. Classic: `~/.cursor/skills/goal/scripts/run_goal.py` (Windows: `$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py`).
+3. Marketplace: `"$CURSOR_PLUGIN_ROOT/skills/goal/scripts/run_goal.py"` when `CURSOR_PLUGIN_ROOT` is set.
 4. Last resort (editable install only): `python -c "from cursor_goal.paths import run_goal_script; print(run_goal_script())"` — editable `pip install -e` does **not** register the skill/hooks.
 
 **Unix / macOS / WSL (classic):**
@@ -30,10 +30,17 @@ python3 -u ~/.cursor/skills/goal/scripts/run_goal.py <command> ...
 py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" <command> ...
 ```
 
-**Marketplace (when `CURSOR_PLUGIN_ROOT` is set):**
+**Marketplace — Unix / macOS / WSL** (when `CURSOR_PLUGIN_ROOT` is set):
 
 ```bash
 python3 -u "$CURSOR_PLUGIN_ROOT/skills/goal/scripts/run_goal.py" <command> ...
+```
+
+**Marketplace — Windows PowerShell** (when `$env:CURSOR_PLUGIN_ROOT` is set):
+
+```powershell
+# Prefer absolute interpreter: $env:CURSOR_GOAL_PYTHON or py -3
+py -3 -u "$env:CURSOR_PLUGIN_ROOT\skills\goal\scripts\run_goal.py" <command> ...
 ```
 
 | Command | Purpose |
@@ -72,6 +79,12 @@ $PARSE = py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" par
 {"subcommand":null,"action":"create","condition":"all tests pass","test_cmd":"npm test","budget":20}
 ```
 
+Create may also include optional fields extracted from flags (omit when unset):
+
+```json
+{"subcommand":null,"action":"create","condition":"compound check","test_cmd":"npm test && npm run lint","budget":20,"allow_shell":true,"wake_budget":50,"workdir":"/tmp/proj","force":true}
+```
+
 or a subcommand:
 
 ```json
@@ -81,7 +94,14 @@ or a subcommand:
 Then:
 
 - If `action` is `status|pause|resume|clear` → `manage <action>`
-- If `action` is `create` → `manage create "<condition>" [--test "<cmd>"] [--budget N] [--workdir <path>] [--allow-shell]`
+- If `action` is `create` → `manage create "<condition>"` plus flags from parse JSON:
+  - `test_cmd` → `--test "<cmd>"`
+  - `budget` → `--budget N`
+  - `allow_shell: true` → `--allow-shell`; `allow_shell: false` → `--deny-shell`
+  - `wake_budget` → `--wake-budget N`
+  - `workdir` → `--workdir <path>`
+  - `force: true` → `--force` (replace existing goal)
+  - If parse lacks `allow_shell` but the raw user text contains `--allow-shell` / `--deny-shell`, forward those flags from the raw input before create.
 
 After **every** `create` or `resume`, complete the **Wake handshake** below **before** other work. **Do not skip.** If create/resume exits non-zero (wake arm failed → goal paused), fix the error and `manage resume` — do not work as if pursuing. If `wake status` shows `continuation_ready=false` while pursuing, refuse further goal work until the loop is alive. Then start working toward the condition.
 
@@ -186,18 +206,18 @@ When you see a `[GOAL]` prefix, resume working toward the condition immediately.
 `manage create` / `resume` arms wake state and prints one machine-readable line agents must consume:
 
 ```text
-GOAL_WAKE_REQUIRED {"command":"<shell command>","pattern":"^AGENT_GOAL_WAKE","interval_s":15}
+GOAL_WAKE_REQUIRED {"command":"<shell command>","pattern":"^AGENT_GOAL_WAKE","notify_pattern":"^AGENT_GOAL_WAKE","interval_s":15}
 ```
 
 If arm fails, create/resume **exits 1**, leaves the goal **`paused`**, and does not print `GOAL_WAKE_REQUIRED`.
 
 ### Wake handshake (mandatory after every create/resume)
 
-Do **not** skip. Until `continuation_ready=true` (implies `pid_alive=true`), refuse other goal work (`eval validate` will refuse unless `CURSOR_GOAL_ALLOW_DEAD_WAKE=1` or wake is disabled).
+Do **not** skip. Until `continuation_ready=true` (implies `pid_alive=true`), refuse other goal work (`eval validate` / `eval prompt` / `eval spawn-config` will refuse unless `CURSOR_GOAL_ALLOW_DEAD_WAKE=1` or wake is disabled).
 
-1. **Parse** the `GOAL_WAKE_REQUIRED` line from create/resume stdout (JSON after the prefix). If missing and wake is enabled, run `wake status` and use its `command` + `notify_pattern` fields (or `manage harness-cmd` → Wake loop line). Prefer the event `command` over hardcoded paths.
-2. **Background Shell tool call** — immediately start that `command` with `notify_on_output` matching the event `pattern` (always `^AGENT_GOAL_WAKE` unless the event says otherwise). This must be a real Shell tool invocation; the harness cannot attach Cursor notifications for you.
-3. **Verify:** `wake status` → `continuation_ready=true` (also `armed=true`, `pid_alive=true`). If `heartbeat_stale` is true, restart the loop.
+1. **Parse** the `GOAL_WAKE_REQUIRED` line from create/resume stdout (JSON after the prefix). If missing and wake is enabled, run `wake status` and use its `command` + `notify_pattern` / `pattern` fields (or `manage harness-cmd` → Wake loop line). Prefer the event `command` over hardcoded paths. `pattern` and `notify_pattern` are aliases (same value).
+2. **Background Shell tool call** — immediately start that `command` with `notify_on_output` matching the event `pattern` or `notify_pattern` (always `^AGENT_GOAL_WAKE` unless the event says otherwise). This must be a real Shell tool invocation; the harness cannot attach Cursor notifications for you.
+3. **Verify:** `wake status` → `continuation_ready=true` (also `armed=true`, `pid_alive=true`). If `heartbeat_stale` is true, restart the loop. `manage status` exits **non-zero** while pursuing with `continuation_ready=false` (ACTION REQUIRED).
 4. **On wake:** when Shell notifies on `AGENT_GOAL_WAKE`, read the sentinel JSON `prompt`, run `manage status`, continue if still `pursuing`.
 5. `manage done` / `pause` / `clear` disarms. Disable with `CURSOR_GOAL_WAKE=0` (doctor skips wake liveness when disabled).
 
@@ -218,11 +238,13 @@ Default turn budget is 20 (max 500). Customize with `--budget N` or natural lang
 | Wake armed but no continuation | Loop not started / notify not attached | Start `command` from `GOAL_WAKE_REQUIRED` with `notify_on_output` |
 | Create/resume exit 1, status paused | Wake arm failed | Fix data-dir/ACL, then `manage resume` |
 | Double continuation soon after manual `wake tick` | Wake→wake coalesce on `tick` only | Expected; loop cadence is unchanged |
-| `manage status` ACTION REQUIRED / doctor FAIL wake | `continuation_ready=false` while pursuing | Blocking: start wake loop, confirm `continuation_ready=true` |
+| `manage status` ACTION REQUIRED / exit 1 / doctor FAIL wake | `continuation_ready=false` while pursuing | Blocking: start wake loop, confirm `continuation_ready=true` |
+| Create refused (shell metacharacters) | `shell_ok=false` + shell-mode `--test` | Pass `--allow-shell` or use an argv-safe `--test` |
 | Doctor FAIL classic + marketplace | Stacked install paths | Uninstall classic hooks **or** disable marketplace plugin |
 | Marketplace hooks fail on Windows | Missing absolute `CURSOR_GOAL_PYTHON` | Set absolute env (required for doctor OK) or prefer `install-goal.ps1` |
 | Validation refused (shell) | `--deny-shell` or `CURSOR_GOAL_DENY_SHELL` | Use argv-safe `--test` or allow shell |
 | Doctor FAIL insecure data dir | World-writable `CURSOR_GOAL_DATA` | `chmod 700` / private path |
+| Doctor / harness-cmd FAIL missing run_goal.py | Skill/plugin tree not installed | Run installer or set `CURSOR_GOAL_HOME` / `CURSOR_PLUGIN_ROOT` |
 
 Prefer argv-safe `--test` commands. New goals default to deny-shell (`shell_ok=false`); use `--allow-shell` only when needed. Shell mode is reported in `manage status` / `doctor`. Use `--deny-shell` or `CURSOR_GOAL_DENY_SHELL=1` to force argv-only.
 
