@@ -215,6 +215,15 @@ def _unix_pid_looks_owned(pid: int) -> bool:
     return _cmdline_looks_owned(getattr(completed, "stdout", None) or "")
 
 
+def _pid_looks_owned(pid: int) -> bool:
+    """Best-effort: confirm *pid* still looks like a cursor-goal wake process."""
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        return _windows_pid_looks_owned(pid)
+    return _unix_pid_looks_owned(pid)  # pragma: no cover — Unix CI
+
+
 def _kill_pid(pid: int, *, token: str | None = None) -> None:
     """Signal a wake loop process. Verify ownership before kill (PID reuse)."""
     if pid <= 0:

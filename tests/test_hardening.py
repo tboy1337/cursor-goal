@@ -180,6 +180,38 @@ def test_eval_validate_refuses_insecure(
     assert "writable" in err
 
 
+def test_eval_signal_refuses_insecure(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import evaluate as evaluate_mod
+
+    run_cli("manage", "create", "g")
+    monkeypatch.setattr(
+        evaluate_mod,
+        "refuse_if_data_dir_insecure",
+        lambda: "[goal] Error: data directory is group/world-writable (/tmp)",
+    )
+    code, _out, err = run_cli("eval", "signal", "--force")
+    assert code == 1
+    assert "writable" in err
+
+
+def test_eval_parse_result_refuses_insecure(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import evaluate as evaluate_mod
+
+    run_cli("manage", "create", "g")
+    monkeypatch.setattr(
+        evaluate_mod,
+        "refuse_if_data_dir_insecure",
+        lambda: "[goal] Error: data directory is group/world-writable (/tmp)",
+    )
+    code, _out, err = run_cli("eval", "parse-result", "YES: ok")
+    assert code == 1
+    assert "writable" in err
+
+
 def test_eval_validate_timeout(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1237,7 +1269,7 @@ def test_windows_reparse_helper_edge_cases(
         def is_symlink(self) -> bool:
             return False
 
-    assert path_trust_mod._windows_path_is_reparse_point(BoomSymlink()) is False  # type: ignore[arg-type]
+    assert path_trust_mod._windows_path_is_reparse_point(BoomSymlink()) is True  # type: ignore[arg-type]
 
     monkeypatch.setattr(path_trust_mod.ctypes, "windll", None, raising=False)
 
@@ -1260,7 +1292,7 @@ def test_windows_reparse_helper_edge_cases(
         c_uint32 = type("c_uint32", (), {})
 
     monkeypatch.setattr(path_trust_mod, "ctypes", FakeCtypes2())
-    assert path_trust_mod._windows_path_is_reparse_point(NoSymlink()) is False  # type: ignore[arg-type]
+    assert path_trust_mod._windows_path_is_reparse_point(NoSymlink()) is True  # type: ignore[arg-type]
 
     class InvalidAttrs:
         def GetFileAttributesW(self, _path: str) -> int:

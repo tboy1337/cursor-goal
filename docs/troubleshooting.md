@@ -38,7 +38,11 @@ Doctor **hard-fails** when a goal is `pursuing`, wake is enabled, and the loop i
 
 ## Classic + marketplace hooks stacked
 
-Doctor **FAIL**s when both classic `~/.cursor/hooks.json` stop entries and Teams marketplace plugin hooks look configured. Pick **one** install path: uninstall classic hooks (`uninstall-goal.*` without necessarily purging data) **or** disable the marketplace plugin — do not run both.
+Doctor **FAIL**s when both classic `~/.cursor/hooks.json` stop entries and Teams marketplace plugin hooks look configured. Marketplace detection walks `~/.cursor/plugins/cache/**` and `~/.cursor/plugins/local/**` (bounded) for `hooks/hooks.json` goal stop markers, plus `CURSOR_PLUGIN_ROOT`. Pick **one** install path: uninstall classic hooks (`uninstall-goal.*` without necessarily purging data) **or** disable the marketplace plugin — do not run both.
+
+## Classic install VERSION drift
+
+Doctor **FAIL**s when `~/.cursor/skills/goal/VERSION` (or the resolved skill root `VERSION`) is missing on a classic install path or does not match the running package version. Re-run `install-goal.sh` / `install-goal.ps1` (or sync/re-enable the marketplace plugin) so the installed skill tree matches the package.
 
 ## `manage doctor` FAIL: insecure data directory
 
@@ -61,7 +65,7 @@ $env:CURSOR_GOAL_PYTHON = 'C:\Path\To\python.exe'
 [Environment]::SetEnvironmentVariable('CURSOR_GOAL_PYTHON', 'C:\Path\To\python.exe', 'User')
 ```
 
-Relative or bare `python` values are rejected. Doctor **FAIL**s on Windows when marketplace hooks are detected and `CURSOR_GOAL_PYTHON` is unset or non-absolute — PATH-only resolution is fragile and not treated as success for marketplace installs.
+Relative or bare `python` values are rejected. Values with cmd metacharacters (`" & | ^ < >`) are also rejected. Doctor **FAIL**s on Windows when marketplace hooks are detected and `CURSOR_GOAL_PYTHON` is unset or non-absolute — PATH-only resolution is fragile and not treated as success for marketplace installs. Marketplace/template `.cmd` launchers execute the quote-stripped `%CGP%` value (same as classic bake), not the raw env var.
 
 ## Wrong installer / WSL mix-up
 

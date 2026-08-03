@@ -163,6 +163,14 @@ def emit_empty() -> int:
 
 def _try_acquire_singleflight() -> IO[bytes] | None:
     """Non-blocking exclusive lock so dual marketplace hooks emit once."""
+    insecure = refuse_if_data_dir_insecure()
+    if insecure is not None:
+        logger.warning("Stop singleflight refused: %s", insecure)
+        return None
+    acl_fail = refuse_if_acl_harden_failed()
+    if acl_fail is not None:
+        logger.warning("Stop singleflight refused: %s", acl_fail)
+        return None
     path = data_dir() / STOP_SINGLEFLIGHT_NAME
     path.parent.mkdir(parents=True, exist_ok=True)
     # Lock must stay open until emit finishes (dual marketplace singleflight).

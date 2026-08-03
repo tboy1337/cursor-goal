@@ -211,6 +211,15 @@ def cmd_signal(argv: list[str]) -> int:
 
     Prefer parse-result auto-signal; use --force for recovery.
     """
+    insecure = refuse_if_data_dir_insecure()
+    if insecure is not None:
+        print(insecure.replace("[goal]", "[goal-eval]"), file=sys.stderr)
+        return 1
+    acl_fail = refuse_if_acl_harden_failed()
+    if acl_fail is not None:
+        print(acl_fail.replace("[goal]", "[goal-eval]"), file=sys.stderr)
+        return 1
+
     state = snapshot_goal()
     if state is None:
         print(
@@ -373,6 +382,15 @@ def _read_parse_result_text(argv: list[str]) -> str | None:
 
 
 def cmd_parse_result(argv: list[str]) -> int:
+    insecure = refuse_if_data_dir_insecure()
+    if insecure is not None:
+        print(insecure.replace("[goal]", "[goal-eval]"), file=sys.stderr)
+        return 1
+    acl_fail = refuse_if_acl_harden_failed()
+    if acl_fail is not None:
+        print(acl_fail.replace("[goal]", "[goal-eval]"), file=sys.stderr)
+        return 1
+
     result = _read_parse_result_text(argv)
     if result is None:
         return 1

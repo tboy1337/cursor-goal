@@ -213,11 +213,12 @@ def test_kill_pid_skips_self(wake_on: Path) -> None:
 
 
 def test_wake_tick_without_arm_when_pursuing(wake_on: Path) -> None:
+    """Unarmed pursuing goals must not emit (budget / fail-closed)."""
     assert run_cli("manage", "create", "no arm file")[0] == 0
     wake_mod.disarm(kill_loop=False)
     code, out, _err = run_cli("wake", "tick")
-    assert code == 0
-    assert out.startswith("AGENT_GOAL_WAKE ")
+    assert code == 1
+    assert "AGENT_GOAL_WAKE" not in out
 
 
 def test_pid_helpers(wake_on: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -775,9 +776,10 @@ def test_windows_pid_owned_none_subprocess(
 def test_record_wake_tick_inactive(wake_on: Path) -> None:
     assert run_cli("manage", "create", "inactive tick")[0] == 0
     assert run_cli("manage", "done", "--force")[0] == 0
-    state = wake_mod._record_wake_tick()
-    assert state is not None
-    assert state.active is False or state.status != "pursuing"
+    result = wake_mod._record_wake_tick()
+    assert result.status == "inactive"
+    assert result.state is not None
+    assert result.state.active is False or result.state.status != "pursuing"
 
 
 def test_kill_existing_loop(wake_on: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -805,13 +807,97 @@ def test_record_wake_tick_errors(
 
     monkeypatch.setattr(wake_mod, "mutate_goal", boom)
     monkeypatch.setattr(wake_mod, "snapshot_goal", lambda: None)
-    assert wake_mod._record_wake_tick() is None
+    result = wake_mod._record_wake_tick()
+    assert result.status == "inactive"
+    assert result.state is None
 
     def boom_os(_m: object) -> None:
         raise OSError("disk")
 
     monkeypatch.setattr(wake_mod, "mutate_goal", boom_os)
-    assert wake_mod._record_wake_tick() is None
+    result = wake_mod._record_wake_tick()
+    assert result.status == "persist_failed"
+    assert result.state is None
+
+
+def test_wake_tick_persist_failure_refuses_emit(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert run_cli("manage", "create", "persist fail tick")[0] == 0
+    wake_mod.arm(interval=5)
+    monkeypatch.setattr(
+        wake_mod,
+        "_record_wake_tick",
+        lambda: wake_mod.WakeTickResult(status="persist_failed"),
+    )
+    out = io.StringIO()
+    with redirect_stdout(out):
+        assert wake_mod.tick() == 1
+    assert "AGENT_GOAL_WAKE" not in out.getvalue()
+
+
+def test_wake_tick_unarmed_pursuing_refuses_emit(wake_on: Path) -> None:
+    assert run_cli("manage", "create", "unarmed tick")[0] == 0
+    wake_mod.disarm(kill_loop=True)
+    out = io.StringIO()
+    with redirect_stdout(out):
+        assert wake_mod.tick() == 1
+    assert "AGENT_GOAL_WAKE" not in out.getvalue()
+
+
+def test_continuation_readiness_pid_unverified(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert run_cli("manage", "create", "unowned pid")[0] == 0
+    wake_mod.arm(interval=5)
+    wake_mod._write_pid_record(999777, "tok")
+    monkeypatch.setattr(wake_mod, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(wake_mod, "_pid_looks_owned", lambda _pid: False)
+    ready = wake_mod.continuation_readiness(goal_pursuing=True)
+    assert ready["continuation_ready"] is False
+    assert ready["reason"] == "pid_unverified"
+
+
+def test_run_loop_persist_failed_exits(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert run_cli("manage", "create", "loop persist fail")[0] == 0
+    monkeypatch.setattr(wake_mod.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(
+        wake_mod,
+        "_record_wake_tick",
+        lambda: wake_mod.WakeTickResult(status="persist_failed"),
+    )
+    out = io.StringIO()
+    with redirect_stdout(out):
+        assert wake_mod.run_loop(interval=5) == 1
+    assert "AGENT_GOAL_WAKE" not in out.getvalue()
+
+
+def test_run_loop_inactive_after_tick(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert run_cli("manage", "create", "loop inactive")[0] == 0
+    monkeypatch.setattr(wake_mod.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(
+        wake_mod,
+        "_record_wake_tick",
+        lambda: wake_mod.WakeTickResult(status="inactive"),
+    )
+    assert wake_mod.run_loop(interval=5) == 0
+
+
+def test_tick_inactive_status_disarms(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert run_cli("manage", "create", "tick inactive")[0] == 0
+    wake_mod.arm(interval=5)
+    monkeypatch.setattr(
+        wake_mod,
+        "_record_wake_tick",
+        lambda: wake_mod.WakeTickResult(status="inactive"),
+    )
+    assert wake_mod.tick() == 0
 
 
 def test_interruptible_sleep_token_mismatch(

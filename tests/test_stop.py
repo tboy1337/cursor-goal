@@ -361,6 +361,28 @@ def test_stop_singleflight_second_is_silent(
         stop_mod._release_singleflight(held)
 
 
+def test_stop_singleflight_refuses_insecure(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        stop_mod,
+        "refuse_if_data_dir_insecure",
+        lambda: "[goal] Error: insecure",
+    )
+    assert stop_mod._try_acquire_singleflight() is None
+
+
+def test_stop_singleflight_refuses_acl(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        stop_mod,
+        "refuse_if_acl_harden_failed",
+        lambda: "[goal] Error: ACL harden failed",
+    )
+    assert stop_mod._try_acquire_singleflight() is None
+
+
 def test_cmd_stop_emit_oserror_fail_open(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

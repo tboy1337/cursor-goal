@@ -796,15 +796,11 @@ def create_goal_atomic(
     """Create (or overwrite) a goal and clear eval signal under one lock.
 
     Returns ``(state, status)`` where status is ``ok`` or ``exists``.
+    Any existing ``goal.json`` blocks create unless *force* is True.
     """
     with goal_lock():
         existing = load_goal()
-        if (
-            existing is not None
-            and existing.active
-            and existing.status == "pursuing"
-            and not force
-        ):
+        if existing is not None and not force:
             return existing, "exists"
         _clear_eval_signal_unlocked()
         _save_goal_unlocked(state)

@@ -59,18 +59,21 @@ def _windows_path_is_reparse_point(path: Path) -> bool:
             return True
     except OSError as exc:
         logger.debug("Could not check symlink for %s: %s", path, exc)
+        return True
     try:
         # FILE_ATTRIBUTE_REPARSE_POINT via Win32 (junctions may not be is_symlink).
         kernel32 = getattr(ctypes, "windll", None)
         if kernel32 is None:
+            # Host has no Win32 APIs (e.g. posix test with os.name mocked).
             return False
         get_attrs = kernel32.kernel32.GetFileAttributesW
         get_attrs.restype = ctypes.c_uint32
         attrs = int(get_attrs(str(path)))
     except (AttributeError, OSError, ValueError, TypeError) as exc:
         logger.debug("GetFileAttributesW failed for %s: %s", path, exc)
-        return False
+        return True
     if attrs == _INVALID_FILE_ATTRIBUTES:
+        # Path does not exist — not a reparse point.
         return False
     return bool(attrs & _FILE_ATTRIBUTE_REPARSE_POINT)
 
@@ -82,12 +85,13 @@ def path_has_symlink_or_reparse(  # pylint: disable=too-many-nested-blocks
 
     Checks the unresolved path chain so ``Path.resolve()`` cannot bypass the
     trust boundary by following a leaf symlink/junction to a normal directory.
+    Probe ``OSError`` fails closed (treat as insecure).
     """
     try:
         current = _absolute_without_resolve(path)
     except OSError as exc:
         logger.debug("Could not absolutize path %s: %s", path, exc)
-        current = path
+        return True
     chain: list[Path] = []
     cursor = current
     while True:
@@ -105,6 +109,7 @@ def path_has_symlink_or_reparse(  # pylint: disable=too-many-nested-blocks
                 return True
         except OSError as exc:  # pragma: no cover — rare FS races
             logger.debug("Link check failed for %s: %s", candidate, exc)
+            return True
     return False
 
 

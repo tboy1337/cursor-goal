@@ -21,6 +21,7 @@ import os
 import secrets
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,7 @@ from cursor_goal.wake_process import (  # noqa: F401 — re-exports for tests/ca
     _cmdline_looks_owned,
     _kill_pid,
     _pid_alive,
+    _pid_looks_owned,
     _read_pid,
     _read_pid_record,
     _unix_pid_looks_owned,
@@ -199,8 +201,20 @@ def _budget_exhausted(state: GoalState) -> bool:
     )
 
 
-def _record_wake_tick() -> GoalState | None:
-    """Increment wake_ticks; mark budget-limited when exhausted. Returns state."""
+@dataclass(frozen=True)
+class WakeTickResult:
+    """Outcome of charging one wake tick against the goal budget."""
+
+    status: str  # ok | inactive | persist_failed | budget_limited
+    state: GoalState | None = None
+
+
+def _record_wake_tick() -> WakeTickResult:
+    """Increment wake_ticks; mark budget-limited when exhausted.
+
+    Persist failures return ``persist_failed`` so callers fail closed and do
+    not emit a wake sentinel without charging the budget.
+    """
 
     def mutator(state: GoalState) -> None:
         if not state.active or state.status != "pursuing":
@@ -214,12 +228,17 @@ def _record_wake_tick() -> GoalState | None:
             )
 
     try:
-        return mutate_goal(mutator)
+        updated = mutate_goal(mutator)
     except ValueError:
-        return snapshot_goal()
+        return WakeTickResult(status="inactive", state=snapshot_goal())
     except OSError as exc:
         logger.error("Failed to persist wake_ticks: %s", exc)
-        return snapshot_goal()
+        return WakeTickResult(status="persist_failed", state=None)
+    if updated is None:
+        return WakeTickResult(status="inactive", state=None)
+    if updated.status == "budget-limited":
+        return WakeTickResult(status="budget_limited", state=updated)
+    return WakeTickResult(status="ok", state=updated)
 
 
 def allow_dead_wake() -> bool:
@@ -392,7 +411,7 @@ def disarm(*, kill_loop: bool = True) -> bool:
     return existed
 
 
-def tick() -> int:
+def tick() -> int:  # pylint: disable=too-many-return-statements
     """Emit a wake sentinel if pursuing; auto-disarm when inactive. Exit 0."""
     if not wake_enabled():
         return 0
@@ -408,8 +427,9 @@ def tick() -> int:
     if config is None:
         if not _goal_is_pursuing():
             return 0
-        emit_wake_line()
-        return 0
+        # Fail closed: never emit without an armed config + charged tick.
+        logger.warning("Wake tick: goal pursuing but wake not armed; refusing emit")
+        return 1
 
     if not _goal_is_pursuing():
         logger.info("Wake tick: goal not pursuing; disarming")
@@ -423,8 +443,17 @@ def tick() -> int:
         )
         return 0
 
-    state = _record_wake_tick()
-    if state is not None and state.status == "budget-limited":
+    result = _record_wake_tick()
+    if result.status == "persist_failed":
+        logger.error("Wake tick: failed to persist wake_ticks; refusing emit")
+        return 1
+    if result.status == "inactive":
+        logger.info("Wake tick: goal not pursuing after tick attempt; disarming")
+        disarm(kill_loop=False)
+        return 0
+    if result.status == "budget_limited":
+        state = result.state
+        assert state is not None
         safe_condition = redact_secrets(state.condition, max_chars=None)
         emit_wake_line(
             f"[GOAL BUDGET] Wake tick limit ({state.wake_budget}) reached. "
@@ -480,7 +509,7 @@ def _heartbeat_stale(
     return age > float(HEARTBEAT_STALE_MULTIPLIER * interval)
 
 
-def continuation_readiness(  # pylint: disable=too-many-return-statements
+def continuation_readiness(  # pylint: disable=too-many-return-statements,too-many-branches
     *,
     enabled: bool | None = None,
     armed: bool | None = None,
@@ -519,10 +548,15 @@ def continuation_readiness(  # pylint: disable=too-many-return-statements
         }
     config = _read_wake_config() if armed is None else None
     is_armed = (config is not None) if armed is None else armed
+    ownership_checked = False
+    is_owned = True
     if pid_alive is None:
         record = _read_pid_record()
         pid = int(record["pid"]) if record is not None else None
         is_alive = _pid_alive(pid) if pid is not None else False
+        if is_alive and pid is not None:
+            ownership_checked = True
+            is_owned = _pid_looks_owned(pid)
     else:
         is_alive = pid_alive
     emit_at = last_emit_at
@@ -545,6 +579,15 @@ def continuation_readiness(  # pylint: disable=too-many-return-statements
         return {
             "continuation_ready": False,
             "reason": "pid_dead",
+            "heartbeat_stale": False,
+            "command": command,
+            "pattern": pattern,
+            "notify_pattern": pattern,
+        }
+    if ownership_checked and not is_owned:
+        return {
+            "continuation_ready": False,
+            "reason": "pid_unverified",
             "heartbeat_stale": False,
             "command": command,
             "pattern": pattern,
@@ -594,13 +637,14 @@ def status_report() -> dict[str, Any]:
     if state is not None:
         wake_remaining = max(0, int(state.wake_budget) - int(state.wake_ticks))
     pid_alive = _pid_alive(pid) if pid is not None else False
+    pid_owned = _pid_looks_owned(pid) if pid_alive and pid is not None else False
     pursuing = _goal_is_pursuing()
     interval_s = (config or {}).get("interval_s")
     last_emit_at = (config or {}).get("last_emit_at")
+    # Let continuation_readiness re-read PID so ownership is enforced.
     readiness = continuation_readiness(
         enabled=wake_enabled(),
         armed=config is not None,
-        pid_alive=pid_alive,
         goal_pursuing=pursuing,
         last_emit_at=last_emit_at,
         interval_s=interval_s,
@@ -618,6 +662,7 @@ def status_report() -> dict[str, Any]:
         "token": (token[:8] + "…") if token else None,
         "token_prefix": token[:8] if token else None,
         "pid_alive": pid_alive,
+        "pid_owned": pid_owned,
         "goal_pursuing": pursuing,
         "interval_s": interval_s,
         "last_emit_at": last_emit_at,
@@ -640,6 +685,7 @@ def status_info() -> dict[str, Any]:
     return {
         "armed": bool(report.get("armed")),
         "pid_alive": bool(report.get("pid_alive")),
+        "pid_owned": bool(report.get("pid_owned")),
         "interval_s": report.get("interval_s"),
         "token_prefix": report.get("token_prefix"),
         "last_emit_at": report.get("last_emit_at"),
@@ -669,7 +715,7 @@ def _interruptible_sleep(seconds: float, token: str) -> bool:
     return True
 
 
-def run_loop(*, interval: int | None = None) -> int:
+def run_loop(*, interval: int | None = None) -> int:  # pylint: disable=too-many-branches
     """Block: emit immediately, then sleep/tick until disarmed or not pursuing."""
     if not wake_enabled():
         print("[goal] Wake disabled (CURSOR_GOAL_WAKE=0).", file=sys.stderr)
@@ -718,8 +764,23 @@ def run_loop(*, interval: int | None = None) -> int:
                 disarm(kill_loop=False)
                 break
 
-            state = _record_wake_tick()
-            if state is not None and state.status == "budget-limited":
+            result = _record_wake_tick()
+            if result.status == "persist_failed":
+                logger.error(
+                    "Wake loop: failed to persist wake_ticks; exiting without emit"
+                )
+                print(
+                    "[goal] Wake loop: failed to persist wake_ticks; exiting.",
+                    file=sys.stderr,
+                )
+                return 1
+            if result.status == "inactive":
+                logger.info("Wake loop: goal not pursuing after tick; exiting")
+                disarm(kill_loop=False)
+                break
+            if result.status == "budget_limited":
+                state = result.state
+                assert state is not None
                 emit_wake_line(
                     f"[GOAL BUDGET] Wake tick limit ({state.wake_budget}) reached. "
                     f"Wrap up current work and summarize progress toward: "

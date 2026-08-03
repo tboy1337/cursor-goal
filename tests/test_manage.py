@@ -1112,7 +1112,7 @@ def test_doctor_missing_workdir_warning(
 def test_harness_cmd_prints_env(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    home = tmp_path / "skill"
+    home = tmp_path / "harness-skill"
     home.mkdir()
     (home / "scripts").mkdir()
     (home / "scripts" / "run_goal.py").write_text("#", encoding="utf-8")
@@ -1325,3 +1325,125 @@ def test_doctor_missing_run_goal_hard_fail(
     assert "exists=False" in out or "exists=false" in out.lower()
     combined = out + err
     assert "run_goal.py missing" in combined or "FAIL" in combined
+
+
+def test_manage_create_refuses_paused_overwrite(goal_home: Path) -> None:
+    assert run_cli("manage", "create", "first")[0] == 0
+    assert run_cli("manage", "pause")[0] == 0
+    code, _out, err = run_cli("manage", "create", "second")
+    assert code == 1
+    assert "already exists" in err
+    assert "paused" in err.lower() or load_goal_json(goal_home)["condition"] == "first"
+    assert load_goal_json(goal_home)["condition"] == "first"
+
+
+def test_marketplace_hooks_deep_cache_scan(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from cursor_goal import doctor as doctor_mod
+
+    del goal_home
+    home = tmp_path / "home"
+    nested = (
+        home
+        / ".cursor"
+        / "plugins"
+        / "cache"
+        / "cursor-public"
+        / "cursor-goal"
+        / "abc123"
+    )
+    hooks_dir = nested / "hooks"
+    hooks_dir.mkdir(parents=True)
+    (hooks_dir / "hooks.json").write_text(
+        '{"hooks":{"stop":[{"command":"stop_hook.py"}]}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(doctor_mod, "_user_home", lambda: home)
+    monkeypatch.delenv("CURSOR_PLUGIN_ROOT", raising=False)
+    assert doctor_mod._marketplace_hooks_configured() is True
+
+
+def test_cursor_goal_python_unsafe_chars() -> None:
+    from cursor_goal import doctor as doctor_mod
+
+    assert doctor_mod._cursor_goal_python_is_unsafe(r'C:\py" & calc.exe') is True
+    assert doctor_mod._cursor_goal_python_is_unsafe(r"C:\Python\python.exe") is False
+
+
+def test_install_version_mismatch(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from cursor_goal import doctor as doctor_mod
+
+    del goal_home
+    skill = tmp_path / "stale-skill"
+    scripts = skill / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "run_goal.py").write_text("# stub\n", encoding="utf-8")
+    (skill / "VERSION").write_text("0.0.1\n", encoding="utf-8")
+    monkeypatch.setattr(doctor_mod, "skill_root", lambda: skill)
+    fails = doctor_mod._install_version_failures()
+    assert fails
+    assert "0.0.1" in fails[0]
+
+
+def test_manage_create_surfaces_corrupt(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+    from cursor_goal.state import CorruptGoalError
+
+    monkeypatch.setattr(
+        manage_mod,
+        "snapshot_goal",
+        lambda **_k: (_ for _ in ()).throw(CorruptGoalError("bad goal")),
+    )
+    code, _out, err = run_cli("manage", "create", "after corrupt")
+    assert code == 1
+    assert "bad goal" in err or "quarantined" in err.lower() or "Error" in err
+
+
+def test_pause_after_arm_failure_retries(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+    from cursor_goal.state import GoalLockTimeoutError, GoalState
+
+    calls = {"n": 0}
+
+    def boom_then_ok(mutator: object) -> GoalState:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise GoalLockTimeoutError("locked")
+        state = GoalState(
+            condition="c",
+            created_at="t",
+            status="paused",
+            active=False,
+            last_reason="wake arm failed: x",
+        )
+        mutator(state)  # type: ignore[operator]
+        return state
+
+    monkeypatch.setattr(manage_mod, "mutate_goal", boom_then_ok)
+    monkeypatch.setattr(manage_mod.time, "sleep", lambda _s: None)
+    code = manage_mod._pause_after_arm_failure("disk full")
+    assert code == 1
+    assert calls["n"] == 3
+
+
+def test_pause_after_arm_failure_exhausted(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+    from cursor_goal.state import GoalLockTimeoutError
+
+    monkeypatch.setattr(
+        manage_mod,
+        "mutate_goal",
+        lambda _m: (_ for _ in ()).throw(GoalLockTimeoutError("locked")),
+    )
+    monkeypatch.setattr(manage_mod.time, "sleep", lambda _s: None)
+    code = manage_mod._pause_after_arm_failure("arm boom")
+    assert code == 1

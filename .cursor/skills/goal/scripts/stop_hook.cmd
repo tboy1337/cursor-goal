@@ -15,12 +15,17 @@ if not defined CGP_ABS (
   echo [cursor-goal] CURSOR_GOAL_PYTHON must be an absolute path >&2
   exit /b 1
 )
-"%CURSOR_GOAL_PYTHON%" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)" >nul 2>&1
+echo %CGP%| findstr /R "[&|<>^]" >nul 2>&1
+if not errorlevel 1 (
+  echo [cursor-goal] CURSOR_GOAL_PYTHON contains unsafe cmd metacharacters >&2
+  exit /b 1
+)
+"%CGP%" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)" >nul 2>&1
 if errorlevel 1 (
   echo [cursor-goal] CURSOR_GOAL_PYTHON is not Python 3.12+ >&2
   exit /b 1
 )
-"%CURSOR_GOAL_PYTHON%" -u "%STOP_PY%"
+"%CGP%" -u "%STOP_PY%"
 exit /b %ERRORLEVEL%
 
 :use_path

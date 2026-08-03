@@ -134,28 +134,21 @@ def test_path_has_symlink_posix_and_oserror(
     monkeypatch.setattr(
         type(normal), "is_symlink", lambda self: (_ for _ in ()).throw(OSError("x"))
     )
-    assert state_mod.path_has_symlink_or_reparse(normal) is False
+    assert state_mod.path_has_symlink_or_reparse(normal) is True
 
 
 def test_absolute_without_resolve_oserror(monkeypatch: pytest.MonkeyPatch) -> None:
     from pathlib import Path as P
 
+    from cursor_goal import path_trust as path_trust_mod
     from cursor_goal import state as state_mod
 
-    class BadPath(P):
-        def expanduser(self) -> BadPath:  # type: ignore[override]
-            raise OSError("expand failed")
-
-    monkeypatch.setattr(
-        state_mod, "_absolute_without_resolve", state_mod._absolute_without_resolve
-    )
-
-    # Call path_has through a path that fails absolutize
     def boom(path: P) -> P:
         raise OSError("nope")
 
+    monkeypatch.setattr(path_trust_mod, "_absolute_without_resolve", boom)
     monkeypatch.setattr(state_mod, "_absolute_without_resolve", boom)
-    assert state_mod.path_has_symlink_or_reparse(P(".")) in (True, False)
+    assert state_mod.path_has_symlink_or_reparse(P(".")) is True
 
 
 def test_paths_posix_invocation_branches(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -166,6 +166,10 @@ def test_scrubbed_validation_env_drops_secrets() -> None:
         "PYTHONPATH": "/evil/inject",
         "PYTHONHOME": "/evil/home",
         "VIRTUAL_ENV": "/home/tboy1337/.venv",
+        "NODE_PATH": "/evil/node",
+        "NPM_CONFIG_USERCONFIG": "/evil/npmrc",
+        "MAVEN_OPTS": "-javaagent:/evil.jar",
+        "SBT_OPTS": "-Dbad=1",
     }
     scrubbed = scrubbed_validation_env(source)
     assert scrubbed["PATH"] == "/usr/bin"
@@ -176,6 +180,10 @@ def test_scrubbed_validation_env_drops_secrets() -> None:
     assert "CURSOR_GOAL_LOG_SECRETS" not in scrubbed
     assert "PYTHONPATH" not in scrubbed
     assert "PYTHONHOME" not in scrubbed
+    assert "NODE_PATH" not in scrubbed
+    assert "NPM_CONFIG_USERCONFIG" not in scrubbed
+    assert "MAVEN_OPTS" not in scrubbed
+    assert "SBT_OPTS" not in scrubbed
 
 
 def test_scrubbed_validation_env_keeps_appdata_and_toolchain() -> None:

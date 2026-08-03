@@ -9,6 +9,7 @@ sites (including tests) keep working unchanged.
 from __future__ import annotations
 
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,9 +17,11 @@ from typing import Any
 
 from cursor_goal.doctor import _baked_python_from_cmd  # noqa: F401 — re-export
 from cursor_goal.doctor import _classic_hooks_configured  # noqa: F401
+from cursor_goal.doctor import _cursor_goal_python_is_unsafe  # noqa: F401
 from cursor_goal.doctor import _hooks_look_configured  # noqa: F401
 from cursor_goal.doctor import _hooks_stacking_failure  # noqa: F401
 from cursor_goal.doctor import _hooks_stacking_warning  # noqa: F401
+from cursor_goal.doctor import _install_version_failures  # noqa: F401
 from cursor_goal.doctor import _is_absolute_interpreter_path  # noqa: F401
 from cursor_goal.doctor import _marketplace_hooks_configured  # noqa: F401
 from cursor_goal.doctor import _stale_baked_python_failures  # noqa: F401
@@ -236,8 +239,11 @@ def cmd_create(argv: list[str]) -> int:  # pylint: disable=too-many-branches
         except OSError as exc:
             logger.debug("Could not capture create cwd as workdir: %s", exc)
             workdir = ""
+    # When wake is enabled, create paused then arm then flip to pursuing so a
+    # crash/lock failure cannot leave an unprotected pursuing goal.
+    wake_on = wake_enabled()
     state = GoalState(
-        active=True,
+        active=not wake_on,
         condition=args.condition,
         validation_command=args.test_cmd,
         created_at=now_iso(),
@@ -247,8 +253,8 @@ def cmd_create(argv: list[str]) -> int:  # pylint: disable=too-many-branches
         wake_budget=wake_budget,
         shell_ok=args.shell_ok,
         workdir=workdir,
-        status="pursuing",
-        last_reason="",
+        status="pursuing" if not wake_on else "paused",
+        last_reason="" if not wake_on else "awaiting wake arm",
         last_validation_output="",
         last_validation_exit_code=None,
         last_eval_verdict="",
@@ -259,17 +265,29 @@ def cmd_create(argv: list[str]) -> int:  # pylint: disable=too-many-branches
         except OSError as exc:
             logger.warning("Could not disarm prior wake before force create: %s", exc)
     try:
+        # Surface quarantine before overwrite/create.
+        try:
+            snapshot_goal(raise_corrupt=True)
+        except CorruptGoalError as exc:
+            print(f"[goal] Error: {exc}", file=sys.stderr)
+            print(
+                "[goal] Fix or remove the quarantined goal.json, then retry "
+                "(use --force only after clearing corrupt state).",
+                file=sys.stderr,
+            )
+            return 1
         created, status = create_goal_atomic(state, force=args.force)
     except GoalLockTimeoutError as exc:
         print(f"[goal] Error: {exc}", file=sys.stderr)
         return 1
     if status == "exists" and created is not None:
         print(
-            "[goal] Error: an active pursuing goal already exists. "
-            "Use --force to overwrite, or clear/pause first.",
+            "[goal] Error: a goal already exists. "
+            "Use --force to overwrite, or clear first.",
             file=sys.stderr,
         )
         print(f"[goal] Existing condition: {created.condition}", file=sys.stderr)
+        print(f"[goal] Existing status: {created.status}", file=sys.stderr)
         return 1
 
     logger.info(
@@ -301,9 +319,30 @@ def cmd_create(argv: list[str]) -> int:  # pylint: disable=too-many-branches
     print(f"  Wake budget: {wake_budget} ticks")
     print(f"  Shell ok: {str(args.shell_ok).lower()}")
     print("  Status: pursuing")
-    arm_result = _maybe_arm_wake()
-    if arm_result.status == "failed":
-        return _pause_after_arm_failure(arm_result.detail)
+
+    if wake_on:
+        arm_result = _maybe_arm_wake()
+        if arm_result.status == "failed":
+            return _pause_after_arm_failure(arm_result.detail)
+        # Flip paused → pursuing only after arm (or wake disabled mid-flight).
+        if arm_result.status in {"ok", "disabled"}:
+
+            def activate(goal: GoalState) -> None:
+                goal.status = "pursuing"
+                goal.active = True
+                if goal.last_reason == "awaiting wake arm":
+                    goal.last_reason = ""
+
+            try:
+                mutate_goal(activate)
+            except GoalLockTimeoutError as exc:
+                print(
+                    f"[goal] Error: wake armed but could not activate goal: {exc}",
+                    file=sys.stderr,
+                )
+                return _pause_after_arm_failure(f"activate after arm failed: {exc}")
+    else:
+        _maybe_arm_wake()
     return 0
 
 
@@ -399,6 +438,12 @@ def cmd_pause(_argv: list[str]) -> int:
         print(insecure, file=sys.stderr)
         return 1
 
+    try:
+        snapshot_goal(raise_corrupt=True)
+    except CorruptGoalError as exc:
+        print(f"[goal] Error: {exc}", file=sys.stderr)
+        return 1
+
     def mutator(state: GoalState) -> None:
         if state.status != "pursuing":
             raise ValueError(f"Cannot pause: goal is '{state.status}', not 'pursuing'.")
@@ -430,6 +475,23 @@ def cmd_resume(_argv: list[str]) -> int:
         print(insecure, file=sys.stderr)
         return 1
 
+    try:
+        current = snapshot_goal(raise_corrupt=True)
+    except CorruptGoalError as exc:
+        print(f"[goal] Error: {exc}", file=sys.stderr)
+        return 1
+    if current is None:
+        print("[goal] No goal to resume.")
+        return 1
+    if current.status != "paused":
+        print(f"[goal] Cannot resume: goal is '{current.status}', not 'paused'.")
+        return 1
+
+    # Arm while still paused, then flip to pursuing — avoids unprotected pursue.
+    arm_result = _maybe_arm_wake()
+    if arm_result.status == "failed":
+        return _pause_after_arm_failure(arm_result.detail)
+
     def mutator(state: GoalState) -> None:
         if state.status != "paused":
             raise ValueError(f"Cannot resume: goal is '{state.status}', not 'paused'.")
@@ -448,9 +510,6 @@ def cmd_resume(_argv: list[str]) -> int:
         print("[goal] No goal to resume.")
         return 1
     print(f"[goal] Goal resumed. Continuing toward: {result.condition}")
-    arm_result = _maybe_arm_wake()
-    if arm_result.status == "failed":
-        return _pause_after_arm_failure(arm_result.detail)
     return 0
 
 
@@ -531,11 +590,24 @@ def _pause_after_arm_failure(detail: str) -> int:
         state.active = False
         state.last_reason = reason
 
-    try:
-        mutate_goal(mutator)
-    except GoalLockTimeoutError as exc:
+    last_exc: Exception | None = None
+    for attempt in range(8):
+        try:
+            mutate_goal(mutator)
+            last_exc = None
+            break
+        except GoalLockTimeoutError as exc:
+            last_exc = exc
+            time.sleep(0.05 * float(attempt + 1))
+    if last_exc is not None:
         print(
-            f"[goal] Error: wake arm failed and pause also failed: {exc}",
+            f"[goal] Error: wake arm failed and pause also failed after retries: "
+            f"{last_exc}",
+            file=sys.stderr,
+        )
+        print(
+            "[goal] CRITICAL: goal may still be pursuing without wake. "
+            "Retry `manage pause` or `manage clear` immediately.",
             file=sys.stderr,
         )
         return 1

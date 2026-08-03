@@ -134,15 +134,14 @@ _ENV_ALLOWLIST_EXACT = frozenset(
         "GOROOT",
         "JAVA_HOME",
         "JDK_HOME",
-        "NODE_PATH",
-        "NPM_CONFIG_USERCONFIG",
+        # Intentionally omit NODE_PATH / NPM_CONFIG_USERCONFIG / MAVEN_OPTS /
+        # SBT_OPTS — ambient module/config/JVM-agent hijack risk (same class
+        # as PYTHONPATH).
         "NPM_CONFIG_CACHE",
         "npm_config_cache",
         "BUN_INSTALL",
         "PNPM_HOME",
         "GRADLE_USER_HOME",
-        "MAVEN_OPTS",
-        "SBT_OPTS",
         "ANDROID_HOME",
         "ANDROID_SDK_ROOT",
         "DOTNET_ROOT",
@@ -163,7 +162,8 @@ def scrubbed_validation_env(
 
     Keeps PATH/home/locale/shell basics, ``VIRTUAL_ENV``, and ``CURSOR_GOAL_*``
     (except log-secret toggles). Drops ambient API tokens, ``PYTHONPATH``,
-    ``PYTHONHOME``, and unrelated secrets from the parent.
+    ``PYTHONHOME``, ``NODE_PATH``, ``NPM_CONFIG_USERCONFIG``, ``MAVEN_OPTS``,
+    ``SBT_OPTS``, and unrelated secrets from the parent.
     """
     env_in = os.environ if source is None else source
     out: dict[str, str] = {}

@@ -2,7 +2,7 @@
 
 Checklist for cutting a tagged GitHub Release (`vX.Y.Z`).
 
-Current package version is **2.13.0**. The public GitHub tag for this release is **`v2.13.0`**. After tagging, README/install pins work with `git clone --branch v2.13.0`.
+Current package version is **2.14.0**. The public GitHub tag for this release is **`v2.14.0`**. After tagging, README/install pins work with `git clone --branch v2.14.0`.
 
 ## Manual Cursor IDE smoke (before tagging)
 

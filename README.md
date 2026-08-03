@@ -30,7 +30,7 @@ Three supported paths:
 | Path | Who | How |
 |------|-----|-----|
 | **Clone + installer** | Individuals | Clone `main` (or a GitHub Release source archive) → `install-goal.sh` / `install-goal.ps1` |
-| **Tagged release** | Individuals | `git clone --branch v2.13.0 …` then installer (see [docs/install.md](docs/install.md)). |
+| **Tagged release** | Individuals | `git clone --branch v2.14.0 …` then installer (see [docs/install.md](docs/install.md)). |
 | **Teams marketplace** | Teams/Enterprise | Import this repo in Cursor Dashboard → Plugins (see `.cursor-plugin/marketplace.json`) |
 
 **Agent install (explicit steps):**
@@ -129,7 +129,9 @@ Flags / natural language:
 /goal fix bugs, verified by pytest, stop after 15 turns
 ```
 
-**2.13.0:** Production hardening — host-native path helpers (safe under `os.name` mocks on Python 3.13+), doctor catches data-dir `ValueError`, wake ownership probes tolerate null subprocess mocks, macOS install-smoke uses a non-symlink HOME base, CI/release run `wake-smoke.py`, module splits (`path_trust` / `doctor` / `wake_process`), clearer first-run wake handshake docs. Builds on **2.12.0** (parse flag extraction, shell-metachar refuse, `GOAL_WAKE_REQUIRED` patterns, wake-gated eval).
+**2.14.0:** Reliability/security hardening — wake tick fail-closed on persist failure, transactional create/resume arm, doctor marketplace deep scan + VERSION sync, wake ownership in continuation_ready, create requires `--force` for any existing goal, marketplace `.cmd` uses `%CGP%`, eval/stop refuse insecure dirs, probe OSError fail-closed, scrub drops `NODE_PATH`/`MAVEN_OPTS`-class vars. Builds on **2.14.0**.
+
+**2.14.0:** Production hardening — host-native path helpers (safe under `os.name` mocks on Python 3.13+), doctor catches data-dir `ValueError`, wake ownership probes tolerate null subprocess mocks, macOS install-smoke uses a non-symlink HOME base, CI/release run `wake-smoke.py`, module splits (`path_trust` / `doctor` / `wake_process`), clearer first-run wake handshake docs. Builds on **2.14.0** (parse flag extraction, shell-metachar refuse, `GOAL_WAKE_REQUIRED` patterns, wake-gated eval).
 
 ## Multi-model (maker ≠ checker)
 

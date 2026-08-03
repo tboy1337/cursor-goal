@@ -538,6 +538,18 @@ def test_create_goal_atomic_exists(goal_home: Path) -> None:
     assert existing.condition == "a"
 
 
+def test_create_goal_atomic_exists_paused(goal_home: Path) -> None:
+    from cursor_goal.state import create_goal_atomic
+
+    first = GoalState(condition="a", created_at="t", status="paused", active=False)
+    assert create_goal_atomic(first)[1] == "ok"
+    second = GoalState(condition="b", created_at="t2", status="pursuing", active=True)
+    existing, status = create_goal_atomic(second)
+    assert status == "exists"
+    assert existing is not None
+    assert existing.condition == "a"
+
+
 def test_clamp_turn_budget_bounds() -> None:
     from cursor_goal.state import clamp_turn_budget
 

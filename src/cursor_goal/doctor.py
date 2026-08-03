@@ -12,6 +12,7 @@ import shutil
 import sys
 from pathlib import Path
 
+from cursor_goal import __version__
 from cursor_goal.logging_config import get_logger
 from cursor_goal.native_path import native_path, path_str_is_absolute
 from cursor_goal.paths import harness_cmd_report, skill_root, wake_loop_invocation
@@ -31,6 +32,11 @@ from cursor_goal.wake import status_info as wake_status_info
 from cursor_goal.wake import wake_enabled
 
 logger = get_logger("cursor_goal.doctor")
+
+# Characters that break out of quoted ``"%CGP%"`` usage in .cmd launchers.
+_UNSAFE_CGP_CHARS = frozenset('"&|^<>')
+_MARKETPLACE_WALK_MAX_DEPTH = 6
+_MARKETPLACE_WALK_MAX_HOOKS = 40
 
 
 def _user_home() -> Path:
@@ -80,26 +86,65 @@ def _classic_hooks_configured() -> bool | None:
     return None
 
 
+def _hooks_json_looks_like_goal(text: str) -> bool:
+    return "stop" in text and (
+        "stop_hook" in text or "cursor_goal" in text or "CURSOR_PLUGIN_ROOT" in text
+    )
+
+
+def _collect_marketplace_hook_files(base: Path) -> list[Path]:
+    """Bounded walk for ``hooks/hooks.json`` under Cursor plugin cache/local trees."""
+    found: list[Path] = []
+
+    def walk(current: Path, depth: int) -> None:
+        if (
+            depth > _MARKETPLACE_WALK_MAX_DEPTH
+            or len(found) >= _MARKETPLACE_WALK_MAX_HOOKS
+        ):
+            return
+        hooks = current / "hooks" / "hooks.json"
+        if hooks.is_file():
+            found.append(hooks)
+            return
+        try:
+            children = list(current.iterdir())
+        except OSError:
+            return
+        for child in children:
+            if not child.is_dir():
+                continue
+            name = child.name
+            if name.startswith("."):
+                continue
+            walk(child, depth + 1)
+
+    if base.is_dir():
+        walk(base, 0)
+    return found
+
+
 def _marketplace_hooks_configured() -> bool | None:
     """Detect Teams marketplace plugin stop hooks when possible."""
     roots: list[Path] = []
+    hook_files: list[Path] = []
     env_root = (os.environ.get("CURSOR_PLUGIN_ROOT") or "").strip()
     if env_root:
         roots.append(native_path(env_root))
-    # Common Cursor user plugin layouts (best-effort).
     cursor_home = _user_home() / ".cursor"
+    plugins = cursor_home / "plugins"
     for candidate in (
-        cursor_home / "plugins" / "cursor-goal",
-        cursor_home / "plugins" / "cache" / "cursor-goal",
+        plugins / "cursor-goal",
+        plugins / "cache" / "cursor-goal",
     ):
         if candidate.is_dir():  # pragma: no branch — layout optional
             roots.append(candidate)
+    for base_name in ("cache", "local"):
+        hook_files.extend(_collect_marketplace_hook_files(plugins / base_name))
 
     seen_file = False
     for root in roots:
         hooks = root / "hooks" / "hooks.json"
         if not hooks.is_file():
-            # Plugin tree may nest under skills only.
             alt = root / "skills" / "goal" / "scripts" / "stop_hook.py"
             if alt.is_file():
                 seen_file = True
@@ -109,15 +154,61 @@ def _marketplace_hooks_configured() -> bool | None:
             text = hooks.read_text(encoding="utf-8")
         except OSError:  # pragma: no cover — rare IO race
             continue
-        if "stop" in text and (
-            "stop_hook" in text or "cursor_goal" in text or "CURSOR_PLUGIN_ROOT" in text
-        ):
+        if _hooks_json_looks_like_goal(text):
             return True
+
+    for hooks in hook_files:
+        seen_file = True
+        try:
+            text = hooks.read_text(encoding="utf-8")
+        except OSError:  # pragma: no cover — rare IO race
+            continue
+        if _hooks_json_looks_like_goal(text):
+            return True
+
     if seen_file:
         return False
     if env_root:
         return False
     return None
+
+
+def _cursor_goal_python_is_unsafe(value: str) -> bool:
+    """Return True when *value* contains cmd metacharacters unsafe in .cmd quotes."""
+    return any(ch in _UNSAFE_CGP_CHARS for ch in value)
+
+
+def _install_version_failures() -> list[str]:
+    """Hard-fail when classic/plugin skill VERSION drifts from package version."""
+    try:
+        root = skill_root()
+    except ValueError:
+        return []
+    run_goal = root / "scripts" / "run_goal.py"
+    if not run_goal.is_file():
+        return []
+    version_path = root / "VERSION"
+    normalized = root.as_posix().replace("\\", "/")
+    is_classic_user = "/.cursor/skills/goal" in normalized or normalized.endswith(
+        ".cursor/skills/goal"
+    )
+    if not version_path.is_file():
+        if is_classic_user:
+            return [
+                f"Installed skill VERSION missing at {version_path} "
+                f"(package {__version__}). Re-run install-goal.sh / install-goal.ps1."
+            ]
+        return []
+    try:
+        stamped = version_path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        return [f"Could not read installed skill VERSION: {exc}"]
+    if stamped != __version__:
+        return [
+            f"Installed skill VERSION={stamped!r} != package {__version__}. "
+            "Re-run the classic installer or sync the marketplace plugin."
+        ]
+    return []
 
 
 def _hooks_look_configured() -> bool | None:
@@ -295,7 +386,12 @@ def cmd_doctor(_argv: list[str]) -> int:
     if os.name == "nt":
         env_py = (os.environ.get("CURSOR_GOAL_PYTHON") or "").strip()
         if env_py:
-            if not _is_absolute_interpreter_path(env_py):
+            if _cursor_goal_python_is_unsafe(env_py):
+                hard_fails.append(
+                    "CURSOR_GOAL_PYTHON contains unsafe cmd metacharacters "
+                    f'(one of " & | ^ < >): {env_py!r}'
+                )
+            elif not _is_absolute_interpreter_path(env_py):
                 hard_fails.append(
                     "CURSOR_GOAL_PYTHON must be an absolute path to Python 3.12+ "
                     f"(got {env_py!r})"
@@ -332,6 +428,7 @@ def cmd_doctor(_argv: list[str]) -> int:
             )
 
     hard_fails.extend(_stale_baked_python_failures())
+    hard_fails.extend(_install_version_failures())
 
     try:
         state = snapshot_goal(raise_corrupt=True)
@@ -375,11 +472,16 @@ def cmd_doctor(_argv: list[str]) -> int:
                     f"`{hint}` with notify_on_output matching {pattern}, then confirm "
                     "wake status continuation_ready=true before other work"
                 )
-            elif not wake_info.get("pid_alive") or reason == "pid_dead":
+            elif (
+                not wake_info.get("pid_alive")
+                or reason == "pid_dead"
+                or reason == "pid_unverified"
+            ):
                 hard_fails.append(
-                    "Wake armed but loop not alive — BLOCKING: start: "
+                    "Wake armed but loop not alive/verified — BLOCKING: start: "
                     f"`{hint}` with notify_on_output matching {pattern}, then confirm "
-                    "continuation_ready=true / pid_alive=true"
+                    "continuation_ready=true / pid_alive=true "
+                    f"(reason={reason or 'pid_dead'})"
                 )
             if wake_info.get("heartbeat_stale"):
                 warnings.append(
