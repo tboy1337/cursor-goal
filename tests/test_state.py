@@ -605,9 +605,10 @@ def test_real_symlink_data_dir_is_insecure(
     assert state_mod.path_has_symlink_or_reparse(link) is True
     monkeypatch.setenv("CURSOR_GOAL_DATA", str(link))
     assert state_mod.data_dir_is_insecure() is True
-    assert state_mod.path_has_symlink_or_reparse(
-        state_mod.configured_data_dir_path()
-    ) is True
+    assert (
+        state_mod.path_has_symlink_or_reparse(state_mod.configured_data_dir_path())
+        is True
+    )
 
 
 def test_path_has_symlink_or_reparse_mocked(
@@ -729,9 +730,7 @@ def test_refuse_if_data_dir_insecure_posix_message(
 
     monkeypatch.setattr(state_mod, "data_dir_is_insecure", lambda: True)
     monkeypatch.setattr(state_mod.os, "name", "posix")
-    monkeypatch.setattr(
-        state_mod, "configured_data_dir_path", lambda: tmp_path / "d"
-    )
+    monkeypatch.setattr(state_mod, "configured_data_dir_path", lambda: tmp_path / "d")
     monkeypatch.setattr(
         state_mod, "_absolute_without_resolve", lambda p: tmp_path / "d"
     )
@@ -949,3 +948,61 @@ def test_stop_redact_without_condition_marker() -> None:
     from cursor_goal.stop import _redact_followup_for_disk
 
     assert _redact_followup_for_disk("[GOAL] keep me") == "[GOAL] keep me"
+
+
+def test_absolute_without_resolve_relative(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from cursor_goal import state as state_mod
+
+    monkeypatch.chdir(tmp_path)
+    out = state_mod._absolute_without_resolve(Path("rel-data"))
+    assert out.is_absolute()
+    assert out.name == "rel-data"
+
+
+def test_chmod_dir_private_oserror(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from cursor_goal import state as state_mod
+
+    monkeypatch.setattr(state_mod.os, "name", "posix")
+
+    def boom(_p: object, _m: int) -> None:
+        raise OSError("denied")
+
+    monkeypatch.setattr(state_mod.os, "chmod", boom)
+    state_mod._chmod_dir_private(tmp_path)
+
+
+def test_get_logger_existing_stream_and_child_handlers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import logging
+
+    from cursor_goal import logging_config as log_mod
+
+    log_mod._reset_for_tests()
+    root = logging.getLogger("cursor_goal")
+    existing = logging.StreamHandler()
+    root.addHandler(existing)
+    monkeypatch.delenv("CURSOR_GOAL_LOG_FILE", raising=False)
+    # Reconfigure with StreamHandler already present (skip add branch).
+    log_mod._CONFIGURED = False
+    log_mod.get_logger("cursor_goal")
+    child_name = f"cursor_goal.child_{os.getpid()}"
+    child = logging.getLogger(child_name)
+    child.addHandler(logging.StreamHandler())
+    assert child.handlers
+    log_mod.get_logger(child_name)
+    assert child.handlers == []
+    log_mod._reset_for_tests()
+
+
+def test_windows_username_rejects_unsafe(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cursor_goal import win_acl
+
+    monkeypatch.setenv("USERNAME", "bad;user")
+    monkeypatch.delenv("USER", raising=False)
+    monkeypatch.setattr(win_acl.os, "getlogin", lambda: "")
+    assert win_acl.windows_username() is None

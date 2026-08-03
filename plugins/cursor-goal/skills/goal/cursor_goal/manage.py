@@ -22,6 +22,7 @@ from cursor_goal.state import (
     GoalLockTimeoutError,
     GoalState,
     acl_harden_failure_message,
+    assert_workdir_usable,
     clamp_turn_budget,
     clamp_wake_budget,
     clear_goal_files,
@@ -31,6 +32,7 @@ from cursor_goal.state import (
     default_wake_budget,
     mark_goal_achieved,
     mutate_goal,
+    normalize_workdir,
     now_iso,
     refuse_if_acl_harden_failed,
     refuse_if_data_dir_insecure,
@@ -75,17 +77,7 @@ def _parse_budget(raw: str, *, label: str = "Budget") -> int:
 
 def _normalize_workdir(raw: str) -> str:
     """Expand and validate workdir; return absolute path string or raise ValueError."""
-    text = raw.strip()
-    if not text:
-        return ""
-    path = Path(text).expanduser()
-    if not path.is_absolute():
-        path = (Path.cwd() / path).resolve()
-    else:
-        path = path.resolve()
-    if not path.is_dir():
-        raise ValueError(f"workdir is not a directory: {path}")
-    return str(path)
+    return normalize_workdir(raw)
 
 
 # pylint: disable-next=too-many-branches
@@ -666,18 +658,33 @@ def cmd_doctor(_argv: list[str]) -> int:
             else:
                 print(f"  CURSOR_GOAL_PYTHON: {env_py}")
         else:
-            warnings.append(
+            msg = (
                 "CURSOR_GOAL_PYTHON unset — marketplace stop_hook.cmd / wake_loop.cmd "
                 "resolve Python via PATH (prefer classic install-goal.ps1 bake, or set "
                 "CURSOR_GOAL_PYTHON to an absolute 3.12+ interpreter)"
             )
+            if market_hooks is True:
+                hard_fails.append(msg)
+            else:
+                warnings.append(msg)
         py = shutil.which("py") or shutil.which("python") or shutil.which("python3")
         if not py:
-            warnings.append(
-                "No py/python/python3 on PATH — marketplace stop_hook.cmd may fail"
+            no_py = (
+                "No py/python/python3 on PATH — marketplace stop_hook.cmd / "
+                "wake_loop.cmd cannot resolve Python; set CURSOR_GOAL_PYTHON to an "
+                "absolute 3.12+ interpreter or use classic install-goal.ps1"
             )
+            if market_hooks is True:
+                hard_fails.append(no_py)
+            else:
+                warnings.append(no_py)
         else:
             print(f"  PATH Python: {py}")
+        if market_hooks is True:
+            print(
+                "  Tip: Teams marketplace registers dual stop hooks (one per OS); "
+                "Hooks UI may show a failure on the non-native entry by design."
+            )
 
     hard_fails.extend(_stale_baked_python_failures())
 
@@ -707,9 +714,10 @@ def cmd_doctor(_argv: list[str]) -> int:
             )
         if state.workdir:
             print(f"  Workdir: {state.workdir}")
-            workdir_path = Path(state.workdir)
-            if not workdir_path.is_dir():
-                warnings.append(f"Configured workdir is missing: {state.workdir}")
+            try:
+                assert_workdir_usable(state.workdir)
+            except ValueError as exc:
+                warnings.append(str(exc))
         if not wake_info.get("armed"):
             hard_fails.append(
                 "Wake not armed while pursuing — BLOCKING: start background Shell: "
@@ -806,20 +814,16 @@ def _maybe_arm_wake() -> None:
         f"notify_on_output matching {config['notify_pattern']}:"
     )
     print(f"  {hint}")
-    print(
-        "[goal] BLOCKING CHECKLIST — do not start other goal work until all pass:"
-    )
+    print("[goal] BLOCKING CHECKLIST — do not start other goal work until all pass:")
     print(f"  1) Background Shell: {hint}")
-    print(
-        f"     with notify_on_output matching {config['notify_pattern']}"
-    )
-    print(
-        "  2) Run `wake status` and confirm pid_alive=true (and armed=true)"
-    )
+    print(f"     with notify_on_output matching {config['notify_pattern']}")
+    print("  2) Run `wake status` and confirm pid_alive=true (and armed=true)")
     print("  3) Only then continue working toward the condition")
 
 
-def _baked_python_from_cmd(path: Path) -> str | None:  # pylint: disable=too-many-nested-blocks
+def _baked_python_from_cmd(
+    path: Path,
+) -> str | None:  # pylint: disable=too-many-nested-blocks
     """Extract the absolute Python path baked into a classic .cmd launcher."""
     try:
         text = path.read_text(encoding="utf-8", errors="replace")

@@ -12,7 +12,9 @@ Cursor can drop stop-hook stdout (`followup_message`) on Windows and Linux (upst
 2. Wake watchdog armed with Shell `notify_on_output` matching `^AGENT_GOAL_WAKE` (tertiary, race-immune)
 3. Stop `followup_message` (secondary, best-effort)
 
-If wake is not started while a goal is `pursuing`, goals can stall when Hooks show `{}`.
+If wake is not started while a goal is `pursuing`, goals can stall when Hooks show `{}`. `eval validate` refuses while pursuing without a live wake loop unless `CURSOR_GOAL_ALLOW_DEAD_WAKE=1` (or wake is disabled via `CURSOR_GOAL_WAKE=0`).
+
+When stop emits a followup and wake ticks soon after, wake **coalesces** (skips emit and `wake_ticks++`) for one wake interval to avoid double-nudging.
 
 ## Shell validation defaults to denied
 
@@ -38,7 +40,7 @@ No multi-tenant / shared-host isolation. Anyone who can write `~/.cursor-goal/da
 
 Marketplace `stop_hook.cmd` / `wake_loop.cmd` resolve Python via `CURSOR_GOAL_PYTHON` (must be absolute when set) or PATH. Classic `install-goal.ps1` bakes an absolute interpreter — preferred for individuals on Windows.
 
-Teams marketplace installs are **standalone**: resolve the harness with `manage harness-cmd` or `$CURSOR_PLUGIN_ROOT/skills/goal/scripts/run_goal.py`. Do not stack classic `~/.cursor/hooks.json` entries with marketplace plugin hooks.
+Teams marketplace installs are **standalone**: resolve the harness with `manage harness-cmd` or `$CURSOR_PLUGIN_ROOT/skills/goal/scripts/run_goal.py`. Do not stack classic `~/.cursor/hooks.json` entries with marketplace plugin hooks. See [teams-agpl.md](teams-agpl.md).
 
 ## Name collision
 
@@ -46,4 +48,4 @@ An unrelated npm package is also named `cursor-goal`. This project is the Python
 
 ## License (Teams / redistribution)
 
-cursor-goal is **AGPL-3.0-only**. Teams marketplace import and any network-facing modification/redistribution must comply with AGPL (including source offer obligations). Review [COPYING](../COPYING) before enterprise redistribution.
+cursor-goal is **AGPL-3.0-only**. Teams marketplace import and any network-facing modification/redistribution must comply with AGPL (including source offer obligations). Review [teams-agpl.md](teams-agpl.md) and [COPYING](../COPYING) before enterprise redistribution.

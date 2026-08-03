@@ -24,6 +24,8 @@ def goal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("CURSOR_GOAL_WAKE", "0")
     # Avoid icacls on ephemeral pytest dirs (can race / lock out writers).
     monkeypatch.setenv("CURSOR_GOAL_SKIP_ACL", "1")
+    # Allow tmp workdirs outside process cwd in unit tests.
+    monkeypatch.setenv("CURSOR_GOAL_ALLOW_ANY_WORKDIR", "1")
     (tmp_path / "home").mkdir()
     return data
 

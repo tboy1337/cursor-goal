@@ -23,8 +23,9 @@ from cursor_goal.state import (
     refuse_if_data_dir_insecure,
     snapshot_goal,
 )
-from cursor_goal.validation import redact_command
+from cursor_goal.validation import redact_command, redact_secrets
 from cursor_goal.wake import disarm as wake_disarm
+from cursor_goal.wake import record_agent_nudge
 
 logger = get_logger("cursor_goal.stop")
 
@@ -144,6 +145,12 @@ def emit(payload: dict[str, Any]) -> None:
     sys.stdout.flush()
     _fsync_stdout()
     _write_last_stop_response(payload)
+    followup = payload.get("followup_message")
+    if isinstance(followup, str) and followup.strip():
+        try:
+            record_agent_nudge()
+        except OSError as exc:
+            logger.debug("Could not record stop nudge stamp: %s", exc)
     drain = _drain_ms()
     if drain > 0:
         time.sleep(drain / 1000.0)
@@ -203,33 +210,39 @@ def _release_singleflight(handle: IO[bytes] | None) -> None:
 
 
 def _budget_limited_response(state: GoalState) -> dict[str, Any]:
+    safe_condition = redact_secrets(state.condition, max_chars=None)
     return {
-        "followup_message": _redact_followup_for_disk(
+        "followup_message": (
             f"[GOAL BUDGET] Turn limit ({state.turn_budget}) reached. "
-            f"Wrap up current work and summarize progress toward: {state.condition}"
+            f"Wrap up current work and summarize progress toward: {safe_condition}"
         )
     }
 
 
 def _continue_followup(state: GoalState, remaining: int) -> dict[str, Any]:
-    """Build a followup that does not run validation (avoids hook timeouts)."""
+    """Build a followup that does not run validation (avoids hook timeouts).
+
+    Live Cursor followup keeps a usable (secret-scrubbed) condition. Disk /
+    ``last-stop-response.json`` still strips condition text via
+    ``_redact_payload_for_disk`` inside ``emit``.
+    """
     remaining = max(0, remaining)
+    safe_condition = redact_secrets(state.condition, max_chars=None)
     if state.validation_command:
         safe_cmd = redact_command(state.validation_command)
         raw = (
             f"[GOAL] Turn {state.turns_used}/{state.turn_budget} "
             f"({remaining} remaining). Run validation in-turn if needed "
             f"({safe_cmd}), then evaluate completion via "
-            f"subagent. Goal: {state.condition}"
+            f"subagent. Goal: {safe_condition}"
         )
     else:
         raw = (
             f"[GOAL] Turn {state.turns_used}/{state.turn_budget} "
-            f"({remaining} remaining). Continue working toward: {state.condition}. "
+            f"({remaining} remaining). Continue working toward: {safe_condition}. "
             "Evaluate completion via subagent when ready."
         )
-    # Redact condition text before Cursor Hooks UI / transcripts see it.
-    return {"followup_message": _redact_followup_for_disk(raw)}
+    return {"followup_message": raw}
 
 
 def _fail_open_continue_count_path() -> Path:

@@ -93,10 +93,12 @@ def restore_windows_acl_inheritance(icacls: str, path: Path) -> None:
 def harden_windows_acl(path: Path) -> None:
     """Best-effort private ACL via icacls (no hard deps).
 
-    Tries ``/inheritance:r`` then grants the current user full control. If the
-    grant fails after inheritance was stripped, restores inheritance
-    (``/inheritance:e``), records a doctor hard-fail, and logs loudly. Skip
-    with ``CURSOR_GOAL_SKIP_ACL=1``.
+    Tries ``/inheritance:r`` then grants the current user full control. If
+    inheritance strip fails, records a doctor hard-fail and returns without
+    marking the path hardened. If the grant fails after inheritance was
+    stripped, restores inheritance (``/inheritance:e``), records a doctor
+    hard-fail, and logs loudly. ``CURSOR_GOAL_SKIP_ACL=1`` is
+    test/emergency-only.
     """
     if os.name != "nt" or acl_harden_disabled():
         return
@@ -121,16 +123,15 @@ def harden_windows_acl(path: Path) -> None:
             timeout=15,
             check=False,
         )
-        if strip.returncode == 0:
-            inheritance_stripped = True
-        else:
+        if strip.returncode != 0:
             err = (strip.stderr or strip.stdout or "").strip()
-            logger.warning(
-                "Windows ACL inheritance strip failed for %s "
-                "(continuing with grant): %s",
+            detail = err[:200] or f"exit={strip.returncode}"
+            record_acl_failure(
                 path,
-                err[:200] or f"exit={strip.returncode}",
+                f"inheritance strip failed ({detail})",
             )
+            return
+        inheritance_stripped = True
         completed = subprocess.run(  # nosec B603
             [icacls, str(path), "/grant:r", grant],
             capture_output=True,
@@ -151,14 +152,11 @@ def harden_windows_acl(path: Path) -> None:
     if completed.returncode != 0:
         err = (completed.stderr or completed.stdout or "").strip()
         detail = err[:200] or f"exit={completed.returncode}"
-        if inheritance_stripped:
-            restore_windows_acl_inheritance(icacls, path)
-            record_acl_failure(
-                path,
-                f"inheritance stripped but grant failed ({detail})",
-            )
-        else:
-            record_acl_failure(path, f"grant failed ({detail})")
+        restore_windows_acl_inheritance(icacls, path)
+        record_acl_failure(
+            path,
+            f"inheritance stripped but grant failed ({detail})",
+        )
         return
     ACL_HARDEN_FAILURES.pop(key, None)
     HARDENED_PATHS.add(key)

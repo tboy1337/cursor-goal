@@ -114,6 +114,7 @@ install_skill_files() {
   fi
 
   mkdir -p "$INSTALL_DIR/scripts" "$AGENTS_DIR" "$DATA_DIR"
+  chmod 700 "$DATA_DIR" 2>/dev/null || true
 
   if [ -d "$INSTALL_DIR" ] && [ -f "${INSTALL_DIR}/SKILL.md" ]; then
     SKILL_BACKUP="${INSTALL_DIR}.bak.$(date -u +%Y%m%dT%H%M%SZ)"
