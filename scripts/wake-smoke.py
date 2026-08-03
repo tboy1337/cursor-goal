@@ -16,6 +16,21 @@ import time
 from pathlib import Path
 
 
+def _smoke_temp_base() -> str | None:
+    """Prefer a non-symlink temp root (macOS /var/folders → /private/...)."""
+    override = (os.environ.get("CURSOR_GOAL_SMOKE_BASE") or "").strip()
+    if override:
+        return override
+    for candidate in ("/private/tmp", "/tmp"):
+        path = Path(candidate)
+        try:
+            if path.is_dir() and not path.is_symlink():
+                return str(path)
+        except OSError:
+            continue
+    return None
+
+
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
     src = root / "src"
@@ -30,12 +45,22 @@ def main() -> int:
     os.environ["CURSOR_GOAL_SKIP_ACL"] = "1"
     os.environ["CURSOR_GOAL_ALLOW_ANY_WORKDIR"] = "1"
 
-    with tempfile.TemporaryDirectory(
-        prefix="cursor-goal-wake-smoke-",
-        ignore_cleanup_errors=True,
-    ) as tmp:
+    tmp_kwargs: dict[str, object] = {
+        "prefix": "cursor-goal-wake-smoke-",
+        "ignore_cleanup_errors": True,
+    }
+    base = _smoke_temp_base()
+    if base:
+        tmp_kwargs["dir"] = base
+
+    with tempfile.TemporaryDirectory(**tmp_kwargs) as tmp:
         data = Path(tmp) / "data"
         data.mkdir()
+        # Prefer realpath so macOS /var → /private/var ancestors are resolved.
+        try:
+            data = data.resolve()
+        except OSError:
+            pass
         os.environ["CURSOR_GOAL_DATA"] = str(data)
 
         from cursor_goal.cli import main as cli_main

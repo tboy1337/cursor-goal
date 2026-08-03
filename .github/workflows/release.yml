@@ -62,6 +62,7 @@ jobs:
         run: python scripts/check_coverage_metrics.py --threshold 95
 
       - name: Wake smoke
+        shell: bash
         run: python scripts/wake-smoke.py
 
       - name: Mypy
