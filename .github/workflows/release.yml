@@ -61,6 +61,9 @@ jobs:
       - name: Coverage metrics (>=95% statement/branch/function/combined)
         run: python scripts/check_coverage_metrics.py --threshold 95
 
+      - name: Wake smoke
+        run: python scripts/wake-smoke.py
+
       - name: Mypy
         run: mypy src/cursor_goal
 

@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from cursor_goal.logging_config import get_logger
+from cursor_goal.native_path import native_path, path_str_is_absolute
 
 logger = get_logger("cursor_goal.paths")
 
@@ -17,7 +18,7 @@ _ENV_PLUGIN_ROOT = "CURSOR_PLUGIN_ROOT"
 
 def _package_dir() -> Path:
     """Directory containing this package (…/cursor_goal)."""
-    return Path(__file__).resolve().parent
+    return native_path(__file__).resolve().parent
 
 
 def skill_root() -> Path:
@@ -31,9 +32,9 @@ def skill_root() -> Path:
     """
     override = (os.environ.get(_ENV_HOME) or "").strip()
     if override:
-        path = Path(override).expanduser()
-        if not path.is_absolute():
+        if not path_str_is_absolute(override):
             raise ValueError(f"{_ENV_HOME} must be an absolute path (got {override!r})")
+        path = native_path(override)
         logger.debug("skill_root from %s=%s", _ENV_HOME, path)
         return path
 
@@ -45,12 +46,14 @@ def skill_root() -> Path:
 
     plugin_root = (os.environ.get(_ENV_PLUGIN_ROOT) or "").strip()
     if plugin_root:
-        candidate = Path(plugin_root).expanduser() / "skills" / "goal"
+        candidate = native_path(plugin_root) / "skills" / "goal"
         if (candidate / "scripts" / "run_goal.py").is_file():
             logger.debug("skill_root from plugin=%s", candidate)
             return candidate
 
-    classic = Path.home() / ".cursor" / "skills" / "goal"
+    classic = native_path(
+        os.path.join(os.path.expanduser("~"), ".cursor", "skills", "goal")
+    )
     logger.debug("skill_root classic fallback=%s", classic)
     return classic
 

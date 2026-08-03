@@ -30,7 +30,7 @@ Three supported paths:
 | Path | Who | How |
 |------|-----|-----|
 | **Clone + installer** | Individuals | Clone `main` (or a GitHub Release source archive) → `install-goal.sh` / `install-goal.ps1` |
-| **Tagged release** | Individuals | When tag `v2.12.0` exists on GitHub: `git clone --branch v2.12.0 …` then installer (see [docs/install.md](docs/install.md)). If that tag is not published yet, use **Clone + installer** from `main`. |
+| **Tagged release** | Individuals | `git clone --branch v2.13.0 …` then installer (see [docs/install.md](docs/install.md)). |
 | **Teams marketplace** | Teams/Enterprise | Import this repo in Cursor Dashboard → Plugins (see `.cursor-plugin/marketplace.json`) |
 
 **Agent install (explicit steps):**
@@ -71,13 +71,21 @@ Uninstall: `./scripts/uninstall-goal.sh` or `.\scripts\uninstall-goal.ps1` (add 
 
 `pip install -e ".[dev]"` installs the `cursor-goal` CLI for **development only** — it does **not** register the Cursor skill, agents, or stop hook. Always run the installer (or Teams marketplace import) for Cursor integration.
 
-## First 5 minutes
+## First run (wake handshake)
 
 1. Install for your OS (classic installer above, or Teams marketplace import).
 2. Run `manage doctor` — fix any FAIL lines before starting a goal.
-3. In Cursor: `/goal "demo done" --test "py -3 -c \"raise SystemExit(0)\""` (Unix: `python3 -c 'raise SystemExit(0)'`).
-4. Parse `GOAL_WAKE_REQUIRED` from create output; start that `command` in a background Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE`; confirm `wake status` shows `continuation_ready=true`.
-5. On evaluator YES, `manage done`. If Hooks UI shows `{}`, rely on wake — see [known limitations](docs/known-limitations.md).
+3. In Cursor create a demo goal (argv-safe `--test`, no shell metacharacters):
+
+   - Windows: `/goal "demo done" --test "py -3 -c \"raise SystemExit(0)\""`
+   - Unix: `/goal "demo done" --test "python3 -c 'raise SystemExit(0)'"`
+
+4. **Start the wake loop before doing other work** (required for continuation when Cursor drops stop-hook stdout):
+   - Find the create output line starting with `GOAL_WAKE_REQUIRED `.
+   - Parse the JSON after that prefix; copy the `command` field.
+   - Start that command in a **background** Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE` (same as the JSON `pattern` / `notify_pattern`).
+   - Confirm: `wake status` shows `continuation_ready=true` (and usually `pid_alive=true`).
+5. Work toward the condition; on evaluator YES run `manage done`. If Hooks UI shows `{}`, rely on wake — see [known limitations](docs/known-limitations.md).
 
 Security: see [SECURITY.md](SECURITY.md). Platform notes: [docs/platform-compatibility.md](docs/platform-compatibility.md). Known limits: [docs/known-limitations.md](docs/known-limitations.md). Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md). Teams/AGPL: [docs/teams-agpl.md](docs/teams-agpl.md).
 
@@ -121,9 +129,7 @@ Flags / natural language:
 /goal fix bugs, verified by pytest, stop after 15 turns
 ```
 
-**2.12.0:** `parse` extracts `--allow-shell` / `--deny-shell` / `--workdir` / `--wake-budget` / `--force` (no flag leakage into condition); create refuses shell-metachar `--test` without `--allow-shell`; `manage status` exits 1 on ACTION REQUIRED; doctor/harness-cmd hard-fail when `run_goal.py` is missing; `GOAL_WAKE_REQUIRED` emits both `pattern` and `notify_pattern`; eval `prompt`/`spawn-config` wake-gated like `validate`. Builds on **2.12.0** (wake handshake, arm-failure pause, `continuation_ready`).
-
-**2.12.0:** wake handshake emits machine-readable `GOAL_WAKE_REQUIRED`; create/resume pauses (exit 1) if arm fails; `continuation_ready` in status/doctor; doctor respects `CURSOR_GOAL_WAKE=0`; uninstall aborts when hook cleanup fails. Builds on **2.10.0** (wake→wake coalesce, classic Windows absolute Python bake, Unix chmod harden).
+**2.13.0:** Production hardening — host-native path helpers (safe under `os.name` mocks on Python 3.13+), doctor catches data-dir `ValueError`, wake ownership probes tolerate null subprocess mocks, macOS install-smoke uses a non-symlink HOME base, CI/release run `wake-smoke.py`, module splits (`path_trust` / `doctor` / `wake_process`), clearer first-run wake handshake docs. Builds on **2.12.0** (parse flag extraction, shell-metachar refuse, `GOAL_WAKE_REQUIRED` patterns, wake-gated eval).
 
 ## Multi-model (maker ≠ checker)
 

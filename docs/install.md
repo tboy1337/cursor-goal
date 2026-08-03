@@ -56,10 +56,10 @@ On upgrade, a previous skill tree is copied to `~/.cursor/skills/goal.bak.<UTC>`
 
 ### Install from a tagged release
 
-Package version **2.12.0** pins the clone branch below. Use it **only when tag `v2.12.0` exists** on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If the tag is not published yet (or `git clone --branch` fails), clone `main` with the Quick install steps above — the tree on `main` is the same package version until maintainers cut the tag ([release.md](release.md)).
+Package version **2.13.0** pins the clone branch below. Use it when tag `v2.13.0` exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If `git clone --branch` fails, clone `main` with the Quick install steps above ([release.md](release.md)).
 
 ```bash
-git clone --branch v2.12.0 https://github.com/tboy1337/cursor-goal.git
+git clone --branch v2.13.0 https://github.com/tboy1337/cursor-goal.git
 cd cursor-goal
 ./scripts/install-goal.sh   # or install-goal.ps1 on Windows
 ```

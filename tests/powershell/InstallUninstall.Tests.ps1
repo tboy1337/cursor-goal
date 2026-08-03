@@ -566,6 +566,6 @@ Describe 'Invoke-GoalInstall default repo root' {
         # reaches the package via ..\.. when MyInvocation/PSCommandPath points at the test file.
         $code = Invoke-GoalInstall -HomeDir $TempHome -Python (Find-GoalPython)
         # Accept either success (repo found) or package-missing (path resolved elsewhere).
-        $code | Should -BeIn @(0, 1)
+        $code | Should -Be 0
     }
 }

@@ -119,7 +119,7 @@ def test_manage_doctor_ok(goal_home: Path) -> None:
 def test_manage_doctor_with_pursuing_shell_goal(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from cursor_goal import manage as manage_mod
+    from cursor_goal import doctor as doctor_mod
 
     assert (
         run_cli(
@@ -134,9 +134,9 @@ def test_manage_doctor_with_pursuing_shell_goal(
         )[0]
         == 0
     )
-    monkeypatch.setattr(manage_mod, "_hooks_look_configured", lambda: True)
+    monkeypatch.setattr(doctor_mod, "_hooks_look_configured", lambda: True)
     monkeypatch.setattr(
-        manage_mod,
+        doctor_mod,
         "wake_status_info",
         lambda: {
             "armed": True,
@@ -155,10 +155,10 @@ def test_manage_doctor_with_pursuing_shell_goal(
 def test_manage_doctor_hooks_false(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from cursor_goal import manage as manage_mod
+    from cursor_goal import doctor as doctor_mod
 
     del goal_home
-    monkeypatch.setattr(manage_mod, "_hooks_look_configured", lambda: False)
+    monkeypatch.setattr(doctor_mod, "_hooks_look_configured", lambda: False)
     code, _out, err = run_cli("manage", "doctor")
     assert code == 1
     assert "FAIL" in err or "no stop hook" in err
@@ -271,9 +271,9 @@ def test_marketplace_hooks_under_cursor_plugins(
 def test_doctor_fail_open_counter_warning(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from cursor_goal import manage as manage_mod
+    from cursor_goal import doctor as doctor_mod
 
-    monkeypatch.setattr(manage_mod, "_hooks_look_configured", lambda: True)
+    monkeypatch.setattr(doctor_mod, "_hooks_look_configured", lambda: True)
     (goal_home / "stop-failopen-continues").write_text("2", encoding="utf-8")
     code, out, _err = run_cli("manage", "doctor")
     assert code == 0
@@ -334,16 +334,16 @@ def test_marketplace_hooks_and_stacking(
 def test_doctor_marketplace_python_unset_hard_fail(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from cursor_goal import manage as manage_mod
+    from cursor_goal import doctor as doctor_mod
 
     assert run_cli("manage", "create", "mkt py")[0] == 0
-    monkeypatch.setattr(manage_mod, "_classic_hooks_configured", lambda: False)
-    monkeypatch.setattr(manage_mod, "_marketplace_hooks_configured", lambda: True)
-    monkeypatch.setattr(manage_mod, "_hooks_look_configured", lambda: True)
-    monkeypatch.setattr(manage_mod.os, "name", "nt")
+    monkeypatch.setattr(doctor_mod, "_classic_hooks_configured", lambda: False)
+    monkeypatch.setattr(doctor_mod, "_marketplace_hooks_configured", lambda: True)
+    monkeypatch.setattr(doctor_mod, "_hooks_look_configured", lambda: True)
+    monkeypatch.setattr(doctor_mod.os, "name", "nt")
     monkeypatch.delenv("CURSOR_GOAL_PYTHON", raising=False)
     monkeypatch.setattr(
-        manage_mod,
+        doctor_mod,
         "wake_status_info",
         lambda: {
             "armed": True,
@@ -353,7 +353,7 @@ def test_doctor_marketplace_python_unset_hard_fail(
             "last_emit_at": "t",
         },
     )
-    monkeypatch.setattr(manage_mod, "_stale_baked_python_failures", list)
+    monkeypatch.setattr(doctor_mod, "_stale_baked_python_failures", list)
     code, _out, err = run_cli("manage", "doctor")
     assert code == 1
     assert "CURSOR_GOAL_PYTHON unset" in err
@@ -362,14 +362,14 @@ def test_doctor_marketplace_python_unset_hard_fail(
 def test_doctor_marketplace_and_stacking_messages(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from cursor_goal import manage as manage_mod
+    from cursor_goal import doctor as doctor_mod
 
     assert run_cli("manage", "create", "doc market")[0] == 0
-    monkeypatch.setattr(manage_mod, "_classic_hooks_configured", lambda: True)
-    monkeypatch.setattr(manage_mod, "_marketplace_hooks_configured", lambda: True)
-    monkeypatch.setattr(manage_mod, "_hooks_look_configured", lambda: True)
+    monkeypatch.setattr(doctor_mod, "_classic_hooks_configured", lambda: True)
+    monkeypatch.setattr(doctor_mod, "_marketplace_hooks_configured", lambda: True)
+    monkeypatch.setattr(doctor_mod, "_hooks_look_configured", lambda: True)
     monkeypatch.setattr(
-        manage_mod,
+        doctor_mod,
         "wake_status_info",
         lambda: {
             "armed": True,
@@ -453,13 +453,13 @@ def test_status_action_required_when_wake_armed_dead(
 def test_doctor_wake_not_armed_hard_fail(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from cursor_goal import manage as manage_mod
+    from cursor_goal import doctor as doctor_mod
 
     monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
     assert run_cli("manage", "create", "no wake")[0] == 0
-    monkeypatch.setattr(manage_mod, "_hooks_look_configured", lambda: True)
+    monkeypatch.setattr(doctor_mod, "_hooks_look_configured", lambda: True)
     monkeypatch.setattr(
-        manage_mod,
+        doctor_mod,
         "wake_status_info",
         lambda: {
             "armed": False,
@@ -483,15 +483,15 @@ def test_doctor_wake_not_armed_hard_fail(
 def test_manage_doctor_wake_armed_dead(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from cursor_goal import manage as manage_mod
+    from cursor_goal import doctor as doctor_mod
     from cursor_goal import wake as wake_mod
 
     monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
     assert run_cli("manage", "create", "armed")[0] == 0
     wake_mod.arm(interval=5)
-    monkeypatch.setattr(manage_mod, "_hooks_look_configured", lambda: True)
+    monkeypatch.setattr(doctor_mod, "_hooks_look_configured", lambda: True)
     monkeypatch.setattr(
-        manage_mod,
+        doctor_mod,
         "wake_status_info",
         lambda: {
             "armed": True,
@@ -515,11 +515,11 @@ def test_manage_doctor_wake_armed_dead(
 def test_doctor_wake_disabled_ok_while_pursuing(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from cursor_goal import manage as manage_mod
+    from cursor_goal import doctor as doctor_mod
 
     monkeypatch.setenv("CURSOR_GOAL_WAKE", "0")
     assert run_cli("manage", "create", "no wake needed")[0] == 0
-    monkeypatch.setattr(manage_mod, "_hooks_look_configured", lambda: True)
+    monkeypatch.setattr(doctor_mod, "_hooks_look_configured", lambda: True)
     code, out, err = run_cli("manage", "doctor")
     combined = f"{out}\n{err}"
     assert code == 0
@@ -538,10 +538,10 @@ def test_manage_harness_cmd(goal_home: Path) -> None:
 def test_manage_doctor_log_secrets_warning(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from cursor_goal import manage as manage_mod
+    from cursor_goal import doctor as doctor_mod
 
     monkeypatch.setenv("CURSOR_GOAL_LOG_SECRETS", "1")
-    monkeypatch.setattr(manage_mod, "_hooks_look_configured", lambda: None)
+    monkeypatch.setattr(doctor_mod, "_hooks_look_configured", lambda: None)
     code, out, _err = run_cli("manage", "doctor")
     assert code == 0
     assert "CURSOR_GOAL_LOG_SECRETS" in out
@@ -550,10 +550,10 @@ def test_manage_doctor_log_secrets_warning(
 def test_manage_doctor_insecure_dir(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from cursor_goal import manage as manage_mod
+    from cursor_goal import doctor as doctor_mod
 
-    monkeypatch.setattr(manage_mod, "data_dir_is_insecure", lambda _p=None: True)
-    monkeypatch.setattr(manage_mod, "_hooks_look_configured", lambda: True)
+    monkeypatch.setattr(doctor_mod, "data_dir_is_insecure", lambda _p=None: True)
+    monkeypatch.setattr(doctor_mod, "_hooks_look_configured", lambda: True)
     code, _out, err = run_cli("manage", "doctor")
     assert code == 1
     assert "insecure" in err or "FAIL" in err
@@ -584,12 +584,12 @@ def test_manage_mutators_refuse_insecure(
 def test_manage_doctor_fail_open_and_acl(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from cursor_goal import manage as manage_mod
+    from cursor_goal import doctor as doctor_mod
 
     (goal_home / "stop-failopen-continues").write_text("2\n", encoding="utf-8")
-    monkeypatch.setattr(manage_mod, "_hooks_look_configured", lambda: True)
+    monkeypatch.setattr(doctor_mod, "_hooks_look_configured", lambda: True)
     monkeypatch.setattr(
-        manage_mod,
+        doctor_mod,
         "acl_harden_failure_message",
         lambda _p=None: "Windows ACL harden failed for /x: grant failed",
     )
@@ -652,11 +652,11 @@ def test_manage_status_corrupt(goal_home: Path) -> None:
 def test_manage_doctor_paused_goal(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from cursor_goal import manage as manage_mod
+    from cursor_goal import doctor as doctor_mod
 
     assert run_cli("manage", "create", "p")[0] == 0
     assert run_cli("manage", "pause")[0] == 0
-    monkeypatch.setattr(manage_mod, "_hooks_look_configured", lambda: True)
+    monkeypatch.setattr(doctor_mod, "_hooks_look_configured", lambda: True)
     (goal_home / "last-stop-response.json").write_text("{}", encoding="utf-8")
     code, out, _err = run_cli("manage", "doctor")
     assert code == 0
@@ -915,7 +915,7 @@ def test_baked_python_from_cmd(tmp_path: Path) -> None:
 def test_stale_baked_python_failures(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from cursor_goal import manage as manage_mod
+    from cursor_goal import doctor as doctor_mod
 
     skill = tmp_path / "goal"
     scripts = skill / "scripts"
@@ -929,23 +929,23 @@ def test_stale_baked_python_failures(
         f'@echo off\n"{missing_py}" -u "run.py" wake loop\n',
         encoding="utf-8",
     )
-    monkeypatch.setattr(manage_mod, "skill_root", lambda: skill)
-    monkeypatch.setattr(manage_mod.os, "name", "nt")
+    monkeypatch.setattr(doctor_mod, "skill_root", lambda: skill)
+    monkeypatch.setattr(doctor_mod.os, "name", "nt")
     monkeypatch.delenv("CURSOR_GOAL_PYTHON", raising=False)
-    fails = manage_mod._stale_baked_python_failures()
+    fails = doctor_mod._stale_baked_python_failures()
     assert len(fails) >= 1
     assert "missing" in fails[0].lower() or "Re-run" in fails[0]
 
     monkeypatch.setenv("CURSOR_GOAL_PYTHON", str(tmp_path / "also-gone.exe"))
-    fails2 = manage_mod._stale_baked_python_failures()
+    fails2 = doctor_mod._stale_baked_python_failures()
     assert any("CURSOR_GOAL_PYTHON" in f for f in fails2)
 
 
 def test_stale_baked_python_skipped_on_posix(monkeypatch: pytest.MonkeyPatch) -> None:
-    from cursor_goal import manage as manage_mod
+    from cursor_goal import doctor as doctor_mod
 
-    monkeypatch.setattr(manage_mod.os, "name", "posix")
-    assert manage_mod._stale_baked_python_failures() == []
+    monkeypatch.setattr(doctor_mod.os, "name", "posix")
+    assert doctor_mod._stale_baked_python_failures() == []
 
 
 def test_blocking_checklist_on_create(
@@ -1002,21 +1002,21 @@ def test_baked_python_skips_rem_and_cgp_lines(tmp_path: Path) -> None:
 def test_stale_baked_python_skill_root_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from cursor_goal import manage as manage_mod
+    from cursor_goal import doctor as doctor_mod
 
-    monkeypatch.setattr(manage_mod.os, "name", "nt")
+    monkeypatch.setattr(doctor_mod.os, "name", "nt")
 
     def boom() -> Path:
         raise ValueError("bad")
 
-    monkeypatch.setattr(manage_mod, "skill_root", boom)
-    assert manage_mod._stale_baked_python_failures() == []
+    monkeypatch.setattr(doctor_mod, "skill_root", boom)
+    assert doctor_mod._stale_baked_python_failures() == []
 
 
 def test_stale_baked_python_env_exists(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from cursor_goal import manage as manage_mod
+    from cursor_goal import doctor as doctor_mod
 
     skill = tmp_path / "goal"
     scripts = skill / "scripts"
@@ -1028,10 +1028,10 @@ def test_stale_baked_python_env_exists(
         f'@echo off\n"{missing_py}" -u "stop.py"\n',
         encoding="utf-8",
     )
-    monkeypatch.setattr(manage_mod, "skill_root", lambda: skill)
-    monkeypatch.setattr(manage_mod.os, "name", "nt")
+    monkeypatch.setattr(doctor_mod, "skill_root", lambda: skill)
+    monkeypatch.setattr(doctor_mod.os, "name", "nt")
     monkeypatch.setenv("CURSOR_GOAL_PYTHON", str(real_py))
-    assert manage_mod._stale_baked_python_failures() == []
+    assert doctor_mod._stale_baked_python_failures() == []
 
 
 def test_create_cwd_oserror(goal_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1065,7 +1065,7 @@ def test_doctor_harness_value_error(
 def test_doctor_relative_cursor_goal_python(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("cursor_goal.manage.os.name", "nt")
+    monkeypatch.setattr("cursor_goal.doctor.os.name", "nt")
     monkeypatch.setenv("CURSOR_GOAL_PYTHON", "python.exe")
     code, _out, err = run_cli("manage", "doctor")
     assert code == 1
@@ -1123,12 +1123,12 @@ def test_create_workdir_flag_requires_value(goal_home: Path) -> None:
 def test_doctor_no_python_on_path(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from cursor_goal import manage as manage_mod
+    from cursor_goal import doctor as doctor_mod
 
-    monkeypatch.setattr(manage_mod.os, "name", "nt")
+    monkeypatch.setattr(doctor_mod.os, "name", "nt")
     monkeypatch.delenv("CURSOR_GOAL_PYTHON", raising=False)
-    monkeypatch.setattr(manage_mod.shutil, "which", lambda _name: None)
-    monkeypatch.setattr(manage_mod, "_stale_baked_python_failures", lambda: [])
+    monkeypatch.setattr(doctor_mod.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(doctor_mod, "_stale_baked_python_failures", lambda: [])
     code, out, _err = run_cli("manage", "doctor")
     assert "No py/python/python3 on PATH" in out or code in (0, 1)
 
@@ -1235,16 +1235,16 @@ def test_baked_python_edge_lines(tmp_path: Path) -> None:
 def test_stale_skips_when_baked_unparseable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from cursor_goal import manage as manage_mod
+    from cursor_goal import doctor as doctor_mod
 
     skill = tmp_path / "goal"
     scripts = skill / "scripts"
     scripts.mkdir(parents=True)
     (scripts / "stop_hook.cmd").write_text("REM nothing\n", encoding="utf-8")
-    monkeypatch.setattr(manage_mod, "skill_root", lambda: skill)
-    monkeypatch.setattr(manage_mod.os, "name", "nt")
+    monkeypatch.setattr(doctor_mod, "skill_root", lambda: skill)
+    monkeypatch.setattr(doctor_mod.os, "name", "nt")
     monkeypatch.delenv("CURSOR_GOAL_PYTHON", raising=False)
-    assert manage_mod._stale_baked_python_failures() == []
+    assert doctor_mod._stale_baked_python_failures() == []
 
 
 def test_data_dir_symlink_leaf_posix(
@@ -1286,11 +1286,11 @@ def test_harness_cmd_missing_run_goal(
 def test_doctor_missing_run_goal_hard_fail(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from cursor_goal import manage as manage_mod
+    from cursor_goal import doctor as doctor_mod
 
-    monkeypatch.setattr(manage_mod, "_hooks_look_configured", lambda: True)
+    monkeypatch.setattr(doctor_mod, "_hooks_look_configured", lambda: True)
     monkeypatch.setattr(
-        manage_mod,
+        doctor_mod,
         "harness_cmd_report",
         lambda: {
             "skill_root": "/missing/skill",

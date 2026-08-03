@@ -167,6 +167,11 @@ def write_plugin(root: Path) -> Path:
         newline="\n",
     )
 
+    # Ship AGPL license text with the marketplace plugin subtree.
+    copying_src = root / "COPYING"
+    if copying_src.is_file():
+        shutil.copy2(copying_src, plugin_root / "COPYING")
+
     readme = plugin_root / "README.md"
     readme.write_text(
         "# cursor-goal (Cursor plugin)\n\n"
@@ -174,18 +179,17 @@ def write_plugin(root: Path) -> Path:
         "(see repo `.cursor-plugin/marketplace.json`).\n\n"
         "Individuals: prefer `scripts/install-goal.sh` / `install-goal.ps1` "
         "from a full clone or GitHub Release.\n\n"
-        f"Version: **{version}** (AGPL-3.0-only). See `docs/teams-agpl.md` "
-        "for AGPL / Teams notes.\n\n"
+        f"Version: **{version}** (AGPL-3.0-only). License text ships as "
+        "`COPYING` in this plugin tree. Teams/AGPL notes:\n"
+        "[docs/teams-agpl.md](https://github.com/tboy1337/cursor-goal/blob/main/docs/teams-agpl.md).\n\n"
+        "## Windows marketplace expectations\n\n"
         "Marketplace stop hooks register both `stop_hook.cmd` (Windows) and "
         '`python3 -u "…/stop_hook.py"` (Unix). On each OS one entry typically '
         "fails (cmd missing on Unix / python3 often missing on Windows) — "
         "**expected Hooks UI noise**, not necessarily a broken install. A "
         "singleflight lock ensures only one hook mutates turn state and writes "
         "stdout; the loser exits silently (no `{}`, no "
-        "`last-stop-response.json` overwrite). Also ships a wake watchdog "
-        "(`wake loop` / `AGENT_GOAL_WAKE`) for continuation when Cursor drops "
-        "stop-hook stdout. In-turn evaluation remains primary; the stop hook "
-        "is a safety net.\n\n"
+        "`last-stop-response.json` overwrite).\n\n"
         "Set `CURSOR_GOAL_PYTHON` to an **absolute** Python 3.12+ path on "
         "Windows Teams installs — `manage doctor` **FAIL**s when marketplace "
         "hooks are detected without it (PATH fallback is fragile and not "
@@ -193,6 +197,9 @@ def write_plugin(root: Path) -> Path:
         "`install-goal.ps1` (absolute interpreter bake). Resolve the "
         "harness with `manage harness-cmd` — skill/agent commands work from "
         "`${CURSOR_PLUGIN_ROOT}/skills/goal` without a classic install.\n\n"
+        "Also ships a wake watchdog (`wake loop` / `AGENT_GOAL_WAKE`) for "
+        "continuation when Cursor drops stop-hook stdout. In-turn evaluation "
+        "remains primary; the stop hook is a safety net.\n\n"
         "Do **not** stack classic `install-goal.*` hooks with marketplace "
         "hooks; `manage doctor` **FAIL**s when both look configured — pick "
         "one path.\n",
@@ -218,6 +225,7 @@ def _files_to_compare(plugin_root: Path) -> list[Path]:
         "hooks/hooks.json",
         ".cursor-plugin/plugin.json",
         "README.md",
+        "COPYING",
     ):
         paths.append(plugin_root / pattern)
     return paths
@@ -283,6 +291,9 @@ def check_plugin(root: Path) -> int:
         (fake / "src").mkdir()
         shutil.copytree(root / "src" / "cursor_goal", fake / "src" / "cursor_goal")
         shutil.copytree(root / ".cursor", fake / ".cursor")
+        copying = root / "COPYING"
+        if copying.is_file():
+            shutil.copy2(copying, fake / "COPYING")
         write_plugin(fake)
         expected = fake / "plugins" / PLUGIN_NAME
         mismatches: list[str] = []

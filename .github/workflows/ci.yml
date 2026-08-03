@@ -42,6 +42,8 @@ jobs:
         run: pytest tests -q --tb=short
       - name: Coverage metrics (>=95% statement/branch/function/combined)
         run: python scripts/check_coverage_metrics.py --threshold 95
+      - name: Wake smoke
+        run: python scripts/wake-smoke.py
       - name: Mypy
         run: mypy src/cursor_goal
       - name: Pylint
@@ -87,6 +89,8 @@ jobs:
         run: pytest tests -q --tb=short
       - name: Coverage metrics (>=95% statement/branch/function/combined)
         run: python scripts/check_coverage_metrics.py --threshold 95
+      - name: Wake smoke
+        run: python scripts/wake-smoke.py
       - name: Mypy
         run: mypy src/cursor_goal
       - name: Plugin tree sync
@@ -108,6 +112,10 @@ jobs:
         run: python scripts/sync-plugin-tree.py --check
       - name: Pytest
         run: pytest tests -q --tb=short
+      - name: Coverage metrics (>=95% statement/branch/function/combined)
+        run: python scripts/check_coverage_metrics.py --threshold 95
+      - name: Wake smoke
+        run: python scripts/wake-smoke.py
 
   powershell:
     name: PowerShell scripts

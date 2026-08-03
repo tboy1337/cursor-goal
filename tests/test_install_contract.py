@@ -273,6 +273,9 @@ def test_sync_plugin_tree_check_detects_vendored_drift(tmp_path: Path) -> None:
     fake = tmp_path / "repo"
     shutil.copytree(root / "src" / "cursor_goal", fake / "src" / "cursor_goal")
     shutil.copytree(root / ".cursor", fake / ".cursor")
+    copying = root / "COPYING"
+    if copying.is_file():
+        shutil.copy2(copying, fake / "COPYING")
     mod.write_plugin(fake)
     assert mod.check_plugin(fake) == 0
 

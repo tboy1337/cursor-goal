@@ -174,13 +174,13 @@ def test_paths_posix_invocation_branches(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_wake_hint_value_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    from cursor_goal import manage as manage_mod
+    from cursor_goal import doctor as doctor_mod
 
     def boom() -> str:
         raise ValueError("bad home")
 
-    monkeypatch.setattr(manage_mod, "wake_loop_invocation", boom)
-    hint = manage_mod._wake_loop_shell_hint()
+    monkeypatch.setattr(doctor_mod, "wake_loop_invocation", boom)
+    hint = doctor_mod._wake_loop_shell_hint()
     assert "unresolved" in hint
 
 
@@ -195,3 +195,26 @@ def test_harness_cmd_error(monkeypatch: pytest.MonkeyPatch) -> None:
     code, _out, err = run_cli("manage", "harness-cmd")
     assert code == 1
     assert "bad home" in err
+
+
+def test_path_str_is_absolute_fallbacks(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cursor_goal.native_path import native_path, path_str_is_absolute
+
+    assert path_str_is_absolute("") is False
+    assert path_str_is_absolute("relative") is False
+    # Force fallbacks that os.path.isabs already covers on the host.
+    monkeypatch.setattr(
+        "cursor_goal.native_path.os.path.isabs", lambda _p: False, raising=False
+    )
+    monkeypatch.setattr(
+        "cursor_goal.native_path.os.path.expanduser", lambda p: p, raising=False
+    )
+    assert path_str_is_absolute("/usr/bin/python") is True
+    assert path_str_is_absolute(r"C:\Python\python.exe") is True
+    assert path_str_is_absolute(r"\\server\share\python.exe") is True
+    assert path_str_is_absolute("//server/share/python.exe") is True
+    assert path_str_is_absolute("python") is False
+
+    p = native_path(__file__)
+    assert native_path(p) is p
+    assert native_path(str(p)) == p

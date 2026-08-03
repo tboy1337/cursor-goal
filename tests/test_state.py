@@ -550,15 +550,20 @@ def test_clamp_turn_budget_bounds() -> None:
 def test_refuse_if_data_dir_insecure_message(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from cursor_goal import path_trust as path_trust_mod
     from cursor_goal import state as state_mod
 
-    monkeypatch.setattr(state_mod, "data_dir_is_insecure", lambda path=None: True)
-    monkeypatch.setattr(state_mod, "data_dir", lambda check_writable=False: goal_home)
+    monkeypatch.setattr(path_trust_mod, "data_dir_is_insecure", lambda path=None: True)
+    monkeypatch.setattr(
+        path_trust_mod, "data_dir", lambda check_writable=False: goal_home
+    )
     msg = state_mod.refuse_if_data_dir_insecure()
     assert msg is not None
     assert "insecure" in msg
 
-    monkeypatch.setattr(state_mod, "data_dir_is_insecure", lambda path=None: False)
+    monkeypatch.setattr(
+        path_trust_mod, "data_dir_is_insecure", lambda path=None: False
+    )
     assert state_mod.refuse_if_data_dir_insecure() is None
 
 
@@ -614,25 +619,31 @@ def test_real_symlink_data_dir_is_insecure(
 def test_path_has_symlink_or_reparse_mocked(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    from cursor_goal import path_trust as path_trust_mod
     from cursor_goal import state as state_mod
 
     normal = tmp_path / "normal-data"
     normal.mkdir()
     assert state_mod.path_has_symlink_or_reparse(normal) is False
 
-    monkeypatch.setattr(state_mod, "_windows_path_is_reparse_point", lambda _p: True)
-    monkeypatch.setattr(state_mod.os, "name", "nt")
+    monkeypatch.setattr(
+        path_trust_mod, "_windows_path_is_reparse_point", lambda _p: True
+    )
+    monkeypatch.setattr(path_trust_mod.os, "name", "nt")
     assert state_mod.path_has_symlink_or_reparse(normal) is True
 
 
 def test_data_dir_refuses_mkdir_through_link(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from cursor_goal import path_trust as path_trust_mod
     from cursor_goal import state as state_mod
 
     linkish = tmp_path / "linkish"
     monkeypatch.setenv("CURSOR_GOAL_DATA", str(linkish))
-    monkeypatch.setattr(state_mod, "path_has_symlink_or_reparse", lambda _p: True)
+    monkeypatch.setattr(
+        path_trust_mod, "path_has_symlink_or_reparse", lambda _p: True
+    )
     result = state_mod.data_dir(check_writable=False)
     assert not linkish.exists()
     assert "linkish" in str(result)
@@ -671,10 +682,13 @@ def test_workdir_field_setter() -> None:
 def test_data_dir_is_insecure_none_with_link(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from cursor_goal import path_trust as path_trust_mod
     from cursor_goal import state as state_mod
 
     monkeypatch.setenv("CURSOR_GOAL_DATA", str(tmp_path / "cfg"))
-    monkeypatch.setattr(state_mod, "path_has_symlink_or_reparse", lambda _p: True)
+    monkeypatch.setattr(
+        path_trust_mod, "path_has_symlink_or_reparse", lambda _p: True
+    )
     assert state_mod.data_dir_is_insecure() is True
     msg = state_mod.refuse_if_data_dir_insecure()
     assert msg is not None
@@ -684,6 +698,7 @@ def test_data_dir_is_insecure_none_with_link(
 def test_data_dir_is_insecure_race_recheck(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from cursor_goal import path_trust as path_trust_mod
     from cursor_goal import state as state_mod
 
     data = tmp_path / "data"
@@ -695,28 +710,34 @@ def test_data_dir_is_insecure_race_recheck(
         calls["n"] += 1
         return calls["n"] >= 2
 
-    monkeypatch.setattr(state_mod, "path_has_symlink_or_reparse", flaky)
+    monkeypatch.setattr(path_trust_mod, "path_has_symlink_or_reparse", flaky)
     assert state_mod.data_dir_is_insecure() is True
 
 
 def test_data_dir_is_insecure_windows_reparse_target(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from cursor_goal import path_trust as path_trust_mod
     from cursor_goal import state as state_mod
 
-    monkeypatch.setattr(state_mod.os, "name", "nt")
-    monkeypatch.setattr(state_mod, "path_has_symlink_or_reparse", lambda _p: False)
-    monkeypatch.setattr(state_mod, "_windows_path_is_reparse_point", lambda _p: True)
+    monkeypatch.setattr(path_trust_mod.os, "name", "nt")
+    monkeypatch.setattr(
+        path_trust_mod, "path_has_symlink_or_reparse", lambda _p: False
+    )
+    monkeypatch.setattr(
+        path_trust_mod, "_windows_path_is_reparse_point", lambda _p: True
+    )
     assert state_mod.data_dir_is_insecure(goal_home) is True
 
 
 def test_refuse_if_data_dir_insecure_nt_message(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from cursor_goal import path_trust as path_trust_mod
     from cursor_goal import state as state_mod
 
-    monkeypatch.setattr(state_mod, "data_dir_is_insecure", lambda: True)
-    monkeypatch.setattr(state_mod.os, "name", "nt")
+    monkeypatch.setattr(path_trust_mod, "data_dir_is_insecure", lambda: True)
+    monkeypatch.setattr(path_trust_mod.os, "name", "nt")
     monkeypatch.setenv("CURSOR_GOAL_DATA", str(tmp_path / "d"))
     msg = state_mod.refuse_if_data_dir_insecure()
     assert msg is not None
@@ -726,13 +747,16 @@ def test_refuse_if_data_dir_insecure_nt_message(
 def test_refuse_if_data_dir_insecure_posix_message(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from cursor_goal import path_trust as path_trust_mod
     from cursor_goal import state as state_mod
 
-    monkeypatch.setattr(state_mod, "data_dir_is_insecure", lambda: True)
-    monkeypatch.setattr(state_mod.os, "name", "posix")
-    monkeypatch.setattr(state_mod, "configured_data_dir_path", lambda: tmp_path / "d")
+    monkeypatch.setattr(path_trust_mod, "data_dir_is_insecure", lambda: True)
+    monkeypatch.setattr(path_trust_mod.os, "name", "posix")
     monkeypatch.setattr(
-        state_mod, "_absolute_without_resolve", lambda p: tmp_path / "d"
+        path_trust_mod, "configured_data_dir_path", lambda: tmp_path / "d"
+    )
+    monkeypatch.setattr(
+        path_trust_mod, "_absolute_without_resolve", lambda p: tmp_path / "d"
     )
     msg = state_mod.refuse_if_data_dir_insecure()
     assert msg is not None
@@ -742,14 +766,15 @@ def test_refuse_if_data_dir_insecure_posix_message(
 def test_data_dir_is_insecure_mode_bits(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from cursor_goal import path_trust as path_trust_mod
     from cursor_goal import state as state_mod
 
     class FakeStat:
         st_mode = 0o777
         st_uid = 0
 
-    monkeypatch.setattr(state_mod.os, "name", "posix")
-    monkeypatch.setattr(state_mod.os, "getuid", lambda: 1, raising=False)
+    monkeypatch.setattr(path_trust_mod.os, "name", "posix")
+    monkeypatch.setattr(path_trust_mod.os, "getuid", lambda: 1, raising=False)
     monkeypatch.setattr(type(goal_home), "is_symlink", lambda self: False)
     monkeypatch.setattr(type(goal_home), "lstat", lambda self: FakeStat())
     # Not owned by uid 1 → insecure
@@ -765,8 +790,10 @@ def test_data_dir_is_insecure_mode_bits(
     assert state_mod.data_dir_is_insecure(goal_home) is True
 
     monkeypatch.setattr(type(goal_home), "is_symlink", lambda self: False)
-    monkeypatch.setattr(state_mod, "_windows_path_is_reparse_point", lambda _p: False)
-    monkeypatch.setattr(state_mod.os, "name", "nt")
+    monkeypatch.setattr(
+        path_trust_mod, "_windows_path_is_reparse_point", lambda _p: False
+    )
+    monkeypatch.setattr(path_trust_mod.os, "name", "nt")
     assert state_mod.data_dir_is_insecure(goal_home) is False
 
 

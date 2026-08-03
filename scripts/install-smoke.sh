@@ -7,7 +7,27 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-TMP_HOME="$(mktemp -d "${TMPDIR:-/tmp}/cursor-goal-smoke.XXXXXX")"
+# Prefer a real (non-symlink) base for HOME so doctor symlink/reparse gates pass.
+# macOS CI uses /var/folders → /private/var/folders; mktemp under TMPDIR follows that.
+_SMOKE_BASE="${CURSOR_GOAL_SMOKE_BASE:-}"
+if [ -z "${_SMOKE_BASE}" ]; then
+  if [ -d /private/tmp ] && [ ! -L /private/tmp ]; then
+    _SMOKE_BASE="/private/tmp"
+  elif [ -d /tmp ] && [ ! -L /tmp ]; then
+    _SMOKE_BASE="/tmp"
+  else
+    _SMOKE_BASE="${TMPDIR:-/tmp}"
+    # Resolve one level of symlink ancestors when possible.
+    if command -v realpath >/dev/null 2>&1; then
+      _SMOKE_BASE="$(realpath "${_SMOKE_BASE}" 2>/dev/null || echo "${_SMOKE_BASE}")"
+    fi
+  fi
+fi
+TMP_HOME="$(mktemp -d "${_SMOKE_BASE}/cursor-goal-smoke.XXXXXX")"
+# Canonicalize HOME so data-dir paths do not retain symlink prefixes.
+if command -v realpath >/dev/null 2>&1; then
+  TMP_HOME="$(realpath "${TMP_HOME}")"
+fi
 cleanup() { rm -rf "$TMP_HOME"; }
 trap cleanup EXIT
 
@@ -71,6 +91,9 @@ echo "[install-smoke] VERSION=$VERSION"
 RUN_GOAL="$HOME/.cursor/skills/goal/scripts/run_goal.py"
 echo "[install-smoke] Running manage status..."
 "$SMOKE_PY" -u "$RUN_GOAL" manage status | grep -q "No active goal"
+
+echo "[install-smoke] Running manage doctor..."
+"$SMOKE_PY" -u "$RUN_GOAL" manage doctor
 
 echo "[install-smoke] Running eval spawn-config..."
 SPAWN="$("$SMOKE_PY" -u "$RUN_GOAL" eval spawn-config)"

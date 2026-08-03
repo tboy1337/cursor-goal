@@ -1066,14 +1066,19 @@ def test_eval_validate_refuses_acl_harden_failure(
 def test_windows_reparse_point_is_insecure(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    import cursor_goal.path_trust as path_trust_mod
     import cursor_goal.state as state_mod
 
-    monkeypatch.setattr(state_mod.os, "name", "nt")
+    monkeypatch.setattr(path_trust_mod.os, "name", "nt")
     monkeypatch.setattr(win_acl.os, "name", "nt")
-    monkeypatch.setattr(state_mod, "_windows_path_is_reparse_point", lambda _p: True)
+    monkeypatch.setattr(
+        path_trust_mod, "_windows_path_is_reparse_point", lambda _p: True
+    )
     assert state_mod.data_dir_is_insecure(goal_home) is True
-    monkeypatch.setattr(state_mod, "data_dir_is_insecure", lambda path=None: True)
-    monkeypatch.setattr(state_mod, "data_dir", lambda *, check_writable=True: goal_home)
+    monkeypatch.setattr(path_trust_mod, "data_dir_is_insecure", lambda path=None: True)
+    monkeypatch.setattr(
+        path_trust_mod, "data_dir", lambda *, check_writable=True: goal_home
+    )
     msg = state_mod.refuse_if_data_dir_insecure()
     assert msg is not None
     assert "reparse" in msg.lower() or "junction" in msg.lower()
@@ -1185,7 +1190,7 @@ def test_is_absolute_interpreter_path() -> None:
 def test_doctor_cursor_goal_python_absolute(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("cursor_goal.manage.os.name", "nt")
+    monkeypatch.setattr("cursor_goal.doctor.os.name", "nt")
     # Must be an existing absolute interpreter (doctor verifies the file exists).
     monkeypatch.setenv("CURSOR_GOAL_PYTHON", sys.executable)
     code, out, _err = run_cli("manage", "doctor")
@@ -1197,7 +1202,7 @@ def test_doctor_cursor_goal_python_absolute(
 def test_doctor_cursor_goal_python_relative_fails(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("cursor_goal.manage.os.name", "nt")
+    monkeypatch.setattr("cursor_goal.doctor.os.name", "nt")
     monkeypatch.setenv("CURSOR_GOAL_PYTHON", "python")
     code, _out, err = run_cli("manage", "doctor")
     assert code == 1
@@ -1207,10 +1212,10 @@ def test_doctor_cursor_goal_python_relative_fails(
 def test_doctor_insecure_windows_message(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import cursor_goal.manage as manage_mod
+    import cursor_goal.doctor as doctor_mod
 
-    monkeypatch.setattr(manage_mod.os, "name", "nt")
-    monkeypatch.setattr(manage_mod, "data_dir_is_insecure", lambda _p=None: True)
+    monkeypatch.setattr(doctor_mod.os, "name", "nt")
+    monkeypatch.setattr(doctor_mod, "data_dir_is_insecure", lambda _p=None: True)
     code, out, err = run_cli("manage", "doctor")
     assert code == 1
     blob = out + err
@@ -1220,7 +1225,7 @@ def test_doctor_insecure_windows_message(
 def test_windows_reparse_helper_edge_cases(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import cursor_goal.state as state_mod
+    import cursor_goal.path_trust as path_trust_mod
 
     del goal_home
 
@@ -1232,16 +1237,16 @@ def test_windows_reparse_helper_edge_cases(
         def is_symlink(self) -> bool:
             return False
 
-    assert state_mod._windows_path_is_reparse_point(BoomSymlink()) is False  # type: ignore[arg-type]
+    assert path_trust_mod._windows_path_is_reparse_point(BoomSymlink()) is False  # type: ignore[arg-type]
 
-    monkeypatch.setattr(state_mod.ctypes, "windll", None, raising=False)
+    monkeypatch.setattr(path_trust_mod.ctypes, "windll", None, raising=False)
 
     # When windll missing, getattr returns None → False
     class FakeCtypes:
         windll = None
 
-    monkeypatch.setattr(state_mod, "ctypes", FakeCtypes())
-    assert state_mod._windows_path_is_reparse_point(NoSymlink()) is False  # type: ignore[arg-type]
+    monkeypatch.setattr(path_trust_mod, "ctypes", FakeCtypes())
+    assert path_trust_mod._windows_path_is_reparse_point(NoSymlink()) is False  # type: ignore[arg-type]
 
     class BoomAttrs:
         def GetFileAttributesW(self, _path: str) -> int:
@@ -1254,12 +1259,12 @@ def test_windows_reparse_helper_edge_cases(
         windll = FakeWindll()
         c_uint32 = type("c_uint32", (), {})
 
-    monkeypatch.setattr(state_mod, "ctypes", FakeCtypes2())
-    assert state_mod._windows_path_is_reparse_point(NoSymlink()) is False  # type: ignore[arg-type]
+    monkeypatch.setattr(path_trust_mod, "ctypes", FakeCtypes2())
+    assert path_trust_mod._windows_path_is_reparse_point(NoSymlink()) is False  # type: ignore[arg-type]
 
     class InvalidAttrs:
         def GetFileAttributesW(self, _path: str) -> int:
-            return state_mod._INVALID_FILE_ATTRIBUTES
+            return path_trust_mod._INVALID_FILE_ATTRIBUTES
 
         restype = None
 
@@ -1269,7 +1274,7 @@ def test_windows_reparse_helper_edge_cases(
             (),
             {
                 "GetFileAttributesW": staticmethod(
-                    lambda _p: state_mod._INVALID_FILE_ATTRIBUTES
+                    lambda _p: path_trust_mod._INVALID_FILE_ATTRIBUTES
                 )
             },
         )()
@@ -1285,7 +1290,7 @@ def test_windows_reparse_helper_edge_cases(
         restype = None
 
         def __call__(self, _path: str) -> int:
-            return state_mod._INVALID_FILE_ATTRIBUTES
+            return path_trust_mod._INVALID_FILE_ATTRIBUTES
 
     class K32:
         GetFileAttributesW = AttrFn()
@@ -1297,14 +1302,14 @@ def test_windows_reparse_helper_edge_cases(
         windll = WDLL()
         c_uint32 = int
 
-    monkeypatch.setattr(state_mod, "ctypes", CT())
-    assert state_mod._windows_path_is_reparse_point(NoSymlink()) is False  # type: ignore[arg-type]
+    monkeypatch.setattr(path_trust_mod, "ctypes", CT())
+    assert path_trust_mod._windows_path_is_reparse_point(NoSymlink()) is False  # type: ignore[arg-type]
 
     class ReparseFn:
         restype = None
 
         def __call__(self, _path: str) -> int:
-            return state_mod._FILE_ATTRIBUTE_REPARSE_POINT
+            return path_trust_mod._FILE_ATTRIBUTE_REPARSE_POINT
 
     class K32b:
         GetFileAttributesW = ReparseFn()
@@ -1316,8 +1321,8 @@ def test_windows_reparse_helper_edge_cases(
         windll = WDLLb()
         c_uint32 = int
 
-    monkeypatch.setattr(state_mod, "ctypes", CTb())
-    assert state_mod._windows_path_is_reparse_point(NoSymlink()) is True  # type: ignore[arg-type]
+    monkeypatch.setattr(path_trust_mod, "ctypes", CTb())
+    assert path_trust_mod._windows_path_is_reparse_point(NoSymlink()) is True  # type: ignore[arg-type]
 
 
 def test_stop_skips_last_response_on_acl(
