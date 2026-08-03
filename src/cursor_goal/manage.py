@@ -512,13 +512,13 @@ def cmd_resume(_argv: list[str]) -> int:
         result = mutate_goal(mutator)
     except ValueError as exc:
         print(f"[goal] {exc}")
-        return 1
+        return _pause_after_arm_failure(f"resume mutate failed: {exc}")
     except GoalLockTimeoutError as exc:
         print(f"[goal] Error: {exc}", file=sys.stderr)
-        return 1
+        return _pause_after_arm_failure(f"resume mutate lock timeout: {exc}")
     if result is None:
         print("[goal] No goal to resume.")
-        return 1
+        return _pause_after_arm_failure("resume mutate found no goal")
     print(
         "[goal] Goal resumed. Continuing toward: "
         f"{redact_secrets(result.condition, max_chars=None)}"
@@ -553,6 +553,14 @@ def cmd_done(argv: list[str]) -> int:
         return 1
     if status == "missing":
         print("[goal] No active goal to mark done.")
+        return 1
+    if status == "not_pursuing":
+        print(
+            "[goal] REJECTED: Goal is not pursuing "
+            f"(status={state.status if state else '?'}). "
+            "Resume or create a goal before manage done.",
+            file=sys.stderr,
+        )
         return 1
     if status == "rejected":
         print(
@@ -620,6 +628,11 @@ def _pause_after_arm_failure(detail: str) -> int:
         except GoalLockTimeoutError as exc:
             last_exc = exc
             time.sleep(0.05 * float(attempt + 1))
+    # Always disarm — even when pause mutate fails — so wake is not left armed.
+    try:
+        wake_disarm(kill_loop=True)
+    except OSError as exc:
+        logger.debug("Disarm after arm failure: %s", exc)
     if last_exc is not None:
         print(
             f"[goal] Error: wake arm failed and pause also failed after retries: "
@@ -632,10 +645,6 @@ def _pause_after_arm_failure(detail: str) -> int:
             file=sys.stderr,
         )
         return 1
-    try:
-        wake_disarm(kill_loop=True)
-    except OSError as exc:
-        logger.debug("Disarm after arm failure: %s", exc)
     print(
         f"[goal] Error: wake arm failed — goal paused (not pursuing). {detail}",
         file=sys.stderr,

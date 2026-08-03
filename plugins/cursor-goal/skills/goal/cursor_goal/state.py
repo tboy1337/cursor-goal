@@ -681,12 +681,20 @@ def mark_goal_achieved(*, require_signal: bool = True) -> tuple[GoalState | None
     """Mark goal achieved under lock.
 
     Returns ``(state, status)`` where status is ``ok``, ``missing``,
-    ``rejected``, or ``forced``.
+    ``rejected``, ``not_pursuing``, or ``forced``.
     """
     with goal_lock():
         state = load_goal()
         if state is None:
             return None, "missing"
+        if state.status != "pursuing":
+            if require_signal:
+                return state, "not_pursuing"
+            # --force recovery may complete a non-pursuing goal.
+            logger.warning(
+                "mark_goal_achieved --force while status=%s (not pursuing)",
+                state.status,
+            )
         signaled = _has_eval_signal_unlocked(state)
         if not signaled:
             if require_signal:
@@ -811,11 +819,17 @@ def record_parse_result(verdict: str, reason: str) -> GoalState | None:
     """Persist eval verdict/reason and YES signal under one lock.
 
     Returns the updated goal, or None if no goal was present.
+    Raises ``ValueError`` when a YES verdict is recorded for a non-pursuing goal.
     """
     with goal_lock():
         state = load_goal()
         if state is None:
             return None
+        if verdict == "YES" and state.status != "pursuing":
+            raise ValueError(
+                f"Cannot record YES while goal status is '{state.status}' "
+                "(must be pursuing)"
+            )
         state.last_reason = _clamp_field_chars("last_reason", str(reason or ""))
         state.last_eval_verdict = _clamp_field_chars(
             "last_eval_verdict", str(verdict or "")

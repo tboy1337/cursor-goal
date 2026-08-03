@@ -18,7 +18,7 @@ Manual `wake tick` **coalesces** (skips emit) when a recent *wake*-sourced nudge
 
 If wake arm fails during create/resume, the harness leaves the goal **`paused`** (exit 1) rather than pursuing without an armed wake.
 
-Legacy tokenless `wake.pid` files (pre-token format): the harness kills the PID only when an ownership probe confirms a wake/goal process; otherwise it clears the pid file, writes `wake.orphan`, and `manage doctor` hard-fails until you confirm no leftover loop and re-arm.
+Tokenless / plain-int `wake.pid` files (pre-3.0): cleared without kill. If the PID is still alive the harness writes `wake.orphan` and `manage doctor` hard-fails until you confirm no leftover loop and re-arm.
 
 ## Shell validation defaults to denied
 

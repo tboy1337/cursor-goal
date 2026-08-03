@@ -162,15 +162,12 @@ def emit_empty() -> int:
 
 
 def _try_acquire_singleflight() -> IO[bytes] | None:
-    """Non-blocking exclusive lock so dual marketplace hooks emit once."""
-    insecure = refuse_if_data_dir_insecure()
-    if insecure is not None:
-        logger.warning("Stop singleflight refused: %s", insecure)
-        return None
-    acl_fail = refuse_if_acl_harden_failed()
-    if acl_fail is not None:
-        logger.warning("Stop singleflight refused: %s", acl_fail)
-        return None
+    """Non-blocking exclusive lock so dual marketplace hooks emit once.
+
+    Caller must already refuse insecure/ACL paths (those emit ``{}``). A
+    lock miss returns None for silent exit so a dual-hook loser cannot
+    overwrite a real followup with empty JSON.
+    """
     path = data_dir() / STOP_SINGLEFLIGHT_NAME
     path.parent.mkdir(parents=True, exist_ok=True)
     # Lock must stay open until emit finishes (dual marketplace singleflight).
@@ -403,7 +400,19 @@ def cmd_stop(_argv: list[str] | None = None) -> int:
     Dual marketplace hooks use singleflight: the lock holder emits JSON; the
     loser exits silently (no stdout, no last-stop-response write) so Cursor
     cannot overwrite a real followup with ``{}``.
+
+    Insecure/ACL refuse paths emit ``{}`` (fail-open), distinct from a
+    singleflight lock miss.
     """
+    insecure = refuse_if_data_dir_insecure()
+    if insecure is not None:
+        logger.warning("Stop refused (fail-open {}): %s", insecure)
+        return emit_empty()
+    acl_fail = refuse_if_acl_harden_failed()
+    if acl_fail is not None:
+        logger.warning("Stop refused (fail-open {}): %s", acl_fail)
+        return emit_empty()
+
     lock = _try_acquire_singleflight()
     if lock is None:
         logger.info("Stop singleflight miss: silent exit (no stdout)")

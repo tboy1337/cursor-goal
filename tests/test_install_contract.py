@@ -34,7 +34,9 @@ def test_build_stop_entry_has_unbuffered_marker_fields() -> None:
     assert entry["_cursor_goal"] == HOOK_MARKER
 
 
-def test_merge_replaces_legacy_bash_hook(tmp_path: Path) -> None:
+def test_merge_keeps_unmarked_stop_hooks(tmp_path: Path) -> None:
+    """Unmarked hooks are left alone; only marked goal hooks are replaced."""
+    del tmp_path
     data = {
         "version": 1,
         "hooks": {
@@ -47,10 +49,11 @@ def test_merge_replaces_legacy_bash_hook(tmp_path: Path) -> None:
     entry = build_stop_entry("python3 -u /abs/stop_hook.py")
     merged = merge_stop_hook(data, entry)
     stop = merged["hooks"]["stop"]
-    assert len(stop) == 2
-    assert stop[0]["command"] == "./other.sh"
-    assert is_goal_stop_hook(stop[1])
-    assert "-u" in stop[1]["command"]
+    assert len(stop) == 3
+    assert stop[0]["command"] == "~/.cursor/skills/goal/goal-stop.sh"
+    assert stop[1]["command"] == "./other.sh"
+    assert is_goal_stop_hook(stop[2])
+    assert "-u" in stop[2]["command"]
 
 
 def test_remove_stop_hooks(tmp_path: Path) -> None:
@@ -82,18 +85,13 @@ def test_remove_stop_hooks_prefers_marker_over_legacy_substring() -> None:
 
 def test_is_goal_stop_hook_variants() -> None:
     assert is_goal_stop_hook("not-a-dict") is False
-    assert is_goal_stop_hook({"command": "cursor_goal stop"}) is True
-    assert is_goal_stop_hook({"command": "cursor-goal stop"}) is True
-    assert is_goal_stop_hook({"command": r"C:\x\stop_hook.cmd"}) is True
+    # Marker required — command substring alone is not enough (3.0 clean break).
+    assert is_goal_stop_hook({"command": "cursor_goal stop"}) is False
+    assert is_goal_stop_hook({"command": "cursor-goal stop"}) is False
+    assert is_goal_stop_hook({"command": r"C:\x\stop_hook.cmd"}) is False
     assert is_goal_stop_hook({"_cursor_goal": HOOK_MARKER, "command": "x"}) is True
     assert is_goal_stop_hook({"command": "./unrelated.sh"}) is False
-    assert is_goal_stop_hook({"command": "stop_hook.py"}, allow_legacy=False) is False
-    assert (
-        is_goal_stop_hook(
-            {"_cursor_goal": HOOK_MARKER, "command": "x"}, allow_legacy=False
-        )
-        is True
-    )
+    assert is_goal_stop_hook({"command": "stop_hook.py"}) is False
 
 
 def test_merge_when_hooks_not_dict() -> None:
@@ -246,6 +244,35 @@ def test_classic_install_ps1_cgp_metachar_parity() -> None:
     assert "ACL harden failed" in ps1
     assert "Restart Cursor" in ps1
     assert r"scripts\.tmp" in ps1
+    assert "PackageRoot" in ps1
+    assert "skill tree not modified" in ps1
+
+
+def test_marketplace_hooks_and_doctor_fixture(tmp_path: Path) -> None:
+    """Marketplace dual hooks fixture without a real Cursor install."""
+    root = Path(__file__).resolve().parents[1]
+    hooks_src = root / "plugins" / "cursor-goal" / "hooks" / "hooks.json"
+    assert hooks_src.is_file()
+    data = json.loads(hooks_src.read_text(encoding="utf-8"))
+    stop = data["hooks"]["stop"]
+    assert len(stop) >= 2
+    assert all(item.get("_cursor_goal") == HOOK_MARKER for item in stop)
+    dest = tmp_path / "hooks.json"
+    write_hooks_file(
+        dest,
+        {
+            "version": 1,
+            "hooks": {
+                "stop": [
+                    build_stop_entry("cmd /c stop_hook.cmd"),
+                    build_stop_entry('python3 -u "stop_hook.py"'),
+                ]
+            },
+        },
+    )
+    loaded = json.loads(dest.read_text(encoding="utf-8"))
+    assert len(loaded["hooks"]["stop"]) == 2
+    assert all(item.get("_cursor_goal") == HOOK_MARKER for item in loaded["hooks"]["stop"])
 
 
 def test_sync_plugin_tree_check() -> None:
@@ -273,8 +300,8 @@ def test_compare_file_ignores_crlf_vs_lf(tmp_path: Path) -> None:
     right = tmp_path / "right" / "VERSION"
     left.parent.mkdir()
     right.parent.mkdir()
-    left.write_bytes(b"2.16.0\n")
-    right.write_bytes(b"2.16.0\r\n")
+    left.write_bytes(b"3.0.0\n")
+    right.write_bytes(b"3.0.0\r\n")
     assert mod._compare_file(left, right, Path("VERSION")) is None
 
     right.write_bytes(b"9.9.9\r\n")

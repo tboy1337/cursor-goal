@@ -116,6 +116,27 @@ def _read_skill_version_file(root: Path) -> str | None:
     return version
 
 
+_RELEASE_PROSE = re.compile(
+    r"Current package version is \*\*(\d+\.\d+\.\d+)\*\*.*?"
+    r"public GitHub tag for this release is \*\*`v(\d+\.\d+\.\d+)`\*\*",
+    re.DOTALL,
+)
+
+
+def _read_release_md_versions(root: Path) -> tuple[str, str] | None:
+    """Return (package_prose, tag_prose) from docs/release.md when present."""
+    path = root / "docs" / "release.md"
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8")
+    match = _RELEASE_PROSE.search(text)
+    if match is None:
+        raise ValueError(
+            "docs/release.md missing 'Current package version' / public tag prose"
+        )
+    return match.group(1), match.group(2)
+
+
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
     errors: list[str] = []
@@ -177,6 +198,18 @@ def main() -> int:
     if skill_ver is not None and skill_ver != proj:
         errors.append(f"plugins/.../VERSION={skill_ver} != package {proj}")
 
+    try:
+        release_pair = _read_release_md_versions(root)
+    except ValueError as exc:
+        errors.append(str(exc))
+        release_pair = None
+    if release_pair is not None:
+        release_pkg, release_tag = release_pair
+        if release_pkg != proj:
+            errors.append(f"release.md package prose={release_pkg} != package {proj}")
+        if release_tag != proj:
+            errors.append(f"release.md tag prose=v{release_tag} != package {proj}")
+
     if errors:
         print("version mismatch:", file=sys.stderr)
         for item in errors:
@@ -196,6 +229,8 @@ def main() -> int:
         extras.append(f"metadata={market_meta}")
     if skill_ver is not None:
         extras.append(f"VERSION={skill_ver}")
+    if release_pair is not None:
+        extras.append(f"release.md=v{release_pair[1]}")
     suffix = f" ({', '.join(extras)})" if extras else ""
     print(f"version OK {proj}{suffix}")
     return 0

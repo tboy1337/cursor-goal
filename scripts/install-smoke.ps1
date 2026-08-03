@@ -81,6 +81,12 @@ try {
         throw "Unexpected manage status output: $statusOut"
     }
 
+    Write-Host "[install-smoke] Running manage doctor..."
+    & $py.Exe @($py.PrefixArgs) "-u" $runGoal "manage" "doctor" 2>&1 | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "manage doctor failed with exit $LASTEXITCODE"
+    }
+
     Write-Host "[install-smoke] Running eval spawn-config..."
     $spawnOut = & $py.Exe @($py.PrefixArgs) "-u" $runGoal "eval" "spawn-config" 2>&1 | Out-String
     $spawn = $spawnOut.Trim()

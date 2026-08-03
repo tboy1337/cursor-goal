@@ -1221,6 +1221,105 @@ def test_resume_arm_failure_pauses(
     assert data["status"] == "paused"
 
 
+def test_resume_mutate_failure_disarms_wake(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+    from cursor_goal.wake import wake_json_path
+
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "0")
+    assert run_cli("manage", "create", "resume-mutate")[0] == 0
+    assert run_cli("manage", "pause")[0] == 0
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+
+    def fake_arm() -> dict[str, object]:
+        path = wake_json_path()
+        path.write_text(
+            '{"armed": true, "interval_s": 15}\n',
+            encoding="utf-8",
+        )
+        return {
+            "armed": True,
+            "interval_s": 15,
+            "command": "wake loop",
+            "pattern": "^AGENT_GOAL_WAKE",
+            "notify_pattern": "^AGENT_GOAL_WAKE",
+        }
+
+    monkeypatch.setattr(manage_mod, "wake_arm", fake_arm)
+    disarmed: list[bool] = []
+
+    def track_disarm(*, kill_loop: bool = True) -> None:
+        del kill_loop
+        disarmed.append(True)
+        if wake_json_path().is_file():
+            wake_json_path().unlink()
+
+    monkeypatch.setattr(manage_mod, "wake_disarm", track_disarm)
+
+    def boom_mutate(_mutator: object) -> None:
+        from cursor_goal.state import GoalLockTimeoutError
+
+        raise GoalLockTimeoutError("lock busy")
+
+    monkeypatch.setattr(manage_mod, "mutate_goal", boom_mutate)
+    code, _out, err = run_cli("manage", "resume")
+    assert code == 1
+    assert disarmed
+    assert "lock" in err.lower() or "paused" in err.lower() or "arm" in err.lower()
+    data = load_goal_json(goal_home)
+    assert data["status"] == "paused"
+
+
+def test_resume_mutate_valueerror_disarms(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "0")
+    assert run_cli("manage", "create", "resume-ve")[0] == 0
+    assert run_cli("manage", "pause")[0] == 0
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+
+    def fake_arm() -> dict[str, object]:
+        return {
+            "armed": True,
+            "interval_s": 15,
+            "command": "wake loop",
+            "pattern": "^AGENT_GOAL_WAKE",
+            "notify_pattern": "^AGENT_GOAL_WAKE",
+        }
+
+    monkeypatch.setattr(manage_mod, "wake_arm", fake_arm)
+    disarmed: list[bool] = []
+    monkeypatch.setattr(
+        manage_mod, "wake_disarm", lambda *, kill_loop=True: disarmed.append(True)
+    )
+
+    real_mutate = manage_mod.mutate_goal
+    calls = {"n": 0}
+
+    def boom(mutator: object) -> object:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ValueError("Cannot resume: goal is 'achieved', not 'paused'.")
+        return real_mutate(mutator)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(manage_mod, "mutate_goal", boom)
+    code, out, err = run_cli("manage", "resume")
+    assert code == 1
+    assert disarmed
+    assert "Cannot resume" in out or "arm failed" in err.lower()
+
+
+def test_done_rejects_non_pursuing(goal_home: Path) -> None:
+    assert run_cli("manage", "create", "done-paused")[0] == 0
+    assert run_cli("manage", "pause")[0] == 0
+    code, _out, err = run_cli("manage", "done")
+    assert code == 1
+    assert "not pursuing" in err.lower() or "REJECTED" in err
+
+
 def test_status_continuation_ready_and_heartbeat_stale(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

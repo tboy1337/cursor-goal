@@ -857,6 +857,49 @@ def test_get_logger_rejects_relative_log_file(
     assert log_mod._LOG_FILE_HANDLE is None
 
 
+def test_get_logger_refuses_insecure_data_dir_log(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import logging
+
+    from cursor_goal import logging_config as log_mod
+    from cursor_goal import path_trust as path_trust_mod
+
+    monkeypatch.setenv("CURSOR_GOAL_LOG_FILE", "1")
+    monkeypatch.setenv("CURSOR_GOAL_DATA", str(goal_home))
+    monkeypatch.setattr(path_trust_mod, "data_dir_is_insecure", lambda: True)
+    log_mod._reset_for_tests()
+    name = f"cursor_goal.test_log_insec_{os.getpid()}"
+    logging.getLogger(name).handlers.clear()
+    log_mod.get_logger(name)
+    err = capsys.readouterr().err
+    assert "insecure" in err.lower()
+    assert not (goal_home / "cursor-goal.log").is_file()
+    log_mod._reset_for_tests()
+
+
+def test_get_logger_refuses_symlink_custom_log_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import logging
+
+    from cursor_goal import logging_config as log_mod
+    from cursor_goal import path_trust as path_trust_mod
+
+    target = tmp_path / "cg.log"
+    monkeypatch.setenv("CURSOR_GOAL_LOG_FILE", str(target))
+    monkeypatch.setattr(path_trust_mod, "path_has_symlink_or_reparse", lambda _p: True)
+    log_mod._reset_for_tests()
+    name = f"cursor_goal.test_log_sym_{os.getpid()}"
+    logging.getLogger(name).handlers.clear()
+    log_mod.get_logger(name)
+    err = capsys.readouterr().err
+    assert "symlink" in err.lower() or "reparse" in err.lower()
+    log_mod._reset_for_tests()
+
+
 def test_get_logger_log_file_oserror(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

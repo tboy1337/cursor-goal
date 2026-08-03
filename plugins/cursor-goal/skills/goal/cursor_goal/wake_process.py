@@ -101,7 +101,11 @@ def _pid_alive(pid: int) -> bool:
 def _read_pid_record() -> (  # pylint: disable=too-many-return-statements
     dict[str, Any] | None
 ):
-    """Return ``{pid, token, started_at}`` or None. Accepts legacy plain-int files."""
+    """Return ``{pid, token, started_at}`` or None.
+
+    Tokened JSON records only. Plain-int / tokenless files are cleared and
+    treated as absent (never used for kill).
+    """
     path = wake_pid_path()
     if not path.is_file():
         return None
@@ -114,30 +118,49 @@ def _read_pid_record() -> (  # pylint: disable=too-many-return-statements
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
+        logger.warning("Clearing unreadable wake.pid (expected tokened JSON)")
         try:
-            # Legacy plain-int pid files have no ownership token.
-            return {
-                "pid": int(raw),
-                "token": str(),
-                "started_at": str(),
-            }
-        except ValueError:
-            return None
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.debug("Could not remove bad wake.pid: %s", exc)
+        return None
     if isinstance(data, int):
-        return {
-            "pid": int(data),
-            "token": str(),
-            "started_at": str(),
-        }
+        logger.warning("Clearing tokenless plain-int wake.pid=%s", data)
+        if _pid_alive(int(data)):
+            mark_orphan_wake(
+                int(data),
+                "tokenless plain-int wake.pid; kill refused (token required)",
+            )
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.debug("Could not remove tokenless wake.pid: %s", exc)
+        return None
     if isinstance(data, dict) and "pid" in data:
         try:
-            return {
-                "pid": int(data["pid"]),
-                "token": str(data.get("token") or ""),
-                "started_at": str(data.get("started_at") or ""),
-            }
+            token = str(data.get("token") or "")
+            pid = int(data["pid"])
         except (TypeError, ValueError):
             return None
+        if not token:
+            logger.warning(
+                "Clearing wake.pid pid=%s with empty ownership token", pid
+            )
+            if _pid_alive(pid):
+                mark_orphan_wake(
+                    pid,
+                    "wake.pid missing ownership token; kill refused",
+                )
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.debug("Could not remove tokenless wake.pid: %s", exc)
+            return None
+        return {
+            "pid": pid,
+            "token": token,
+            "started_at": str(data.get("started_at") or ""),
+        }
     return None
 
 
@@ -149,6 +172,8 @@ def _read_pid() -> int | None:
 
 
 def _write_pid_record(pid: int, token: str) -> None:
+    if not token:
+        raise ValueError("wake.pid ownership token is required")
     payload = {
         "pid": pid,
         "token": token,
@@ -163,7 +188,7 @@ def _write_pid_record(pid: int, token: str) -> None:
 
 
 def _write_pid(pid: int, token: str | None = None) -> None:
-    """Write pid ownership record (tests may omit token)."""
+    """Write pid ownership record (token required; generated if omitted)."""
     _write_pid_record(pid, token if token else secrets.token_hex(8))
 
 
@@ -195,16 +220,27 @@ def _clear_pid(
 
 
 def _cmdline_looks_owned(cmdline: str) -> bool:
-    """Return True when *cmdline* looks like a cursor-goal / wake harness process."""
+    """Return True when *cmdline* looks like a cursor-goal wake-loop process.
+
+    Require wake-loop identity — never match bare ``cursor-goal`` /
+    ``run_goal.py`` substrings alone (pytest/IDE paths under a clone would
+    false-positive and risk killing the wrong PID on reuse).
+    """
     lowered = cmdline.strip().lower()
     if not lowered:
         return False
-    # Require cursor-goal identity — never match bare "wake" (false-positive kill).
-    if "cursor_goal" in lowered or "cursor-goal" in lowered:
+    # Classic / marketplace launcher scripts for the wake loop.
+    if "wake_loop.cmd" in lowered or "wake_loop.sh" in lowered:
         return True
-    if "run_goal.py" in lowered:
-        return True
-    return False
+    padded = f" {lowered} "
+    has_wake_token = " wake " in padded
+    if not has_wake_token:
+        return False
+    return (
+        "cursor_goal" in lowered
+        or "cursor-goal" in lowered
+        or "run_goal.py" in lowered
+    )
 
 
 def _windows_pid_looks_owned(pid: int) -> bool:
@@ -281,34 +317,25 @@ def _kill_pid(pid: int, *, token: str | None = None) -> None:
     if not _pid_alive(pid):
         return
 
-    # Legacy plain-int wake.pid has no ownership token — only kill when the
-    # cmdline ownership probe confirms this still looks like a wake loop.
     if not token:
-        if not _pid_looks_owned(pid):
+        logger.warning(
+            "Refusing to kill pid=%s: wake ownership token is required",
+            pid,
+        )
+        return
+
+    record = _read_pid_record()
+    if record is not None:
+        stored = str(record.get("token") or "")
+        if stored and stored != token:
+            logger.warning("Refusing to kill pid=%s: wake token mismatch", pid)
+            return
+        if int(record.get("pid", -1)) != pid:
             logger.warning(
-                "Refusing to kill pid=%s: missing wake ownership token and "
-                "ownership check failed (legacy wake.pid or unverified). "
-                "Clear wake.pid manually or re-arm wake after disarm.",
+                "Refusing to kill pid=%s: wake.pid points elsewhere",
                 pid,
             )
             return
-        logger.warning(
-            "Killing legacy tokenless wake pid=%s after ownership probe OK",
-            pid,
-        )
-    else:
-        record = _read_pid_record()
-        if record is not None:
-            stored = str(record.get("token") or "")
-            if stored and stored != token:
-                logger.warning("Refusing to kill pid=%s: wake token mismatch", pid)
-                return
-            if int(record.get("pid", -1)) != pid:
-                logger.warning(
-                    "Refusing to kill pid=%s: wake.pid points elsewhere",
-                    pid,
-                )
-                return
 
     if os.name == "nt":
         if not _windows_pid_looks_owned(pid):

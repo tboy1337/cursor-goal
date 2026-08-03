@@ -84,10 +84,6 @@ def redact_command(command: str) -> str:
     return redact_secrets(command, max_chars=200)
 
 
-# Back-compat alias for older call sites / tests.
-_redact_command = redact_command
-
-
 _ENV_ALLOWLIST_EXACT = frozenset(
     {
         "PATH",

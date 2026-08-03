@@ -16,6 +16,16 @@ Autonomous `/goal` loop for Cursor IDE: persist an objective, work across turns,
 /goal all tests in test/auth pass and the lint step is clean
 ```
 
+## Minimum happy path
+
+1. Clone and install (`install-goal.sh` / `install-goal.ps1`), then **restart Cursor**.
+2. `manage doctor` — fix any FAIL lines.
+3. Create a demo goal (argv-safe `--test`).
+4. Start the `GOAL_WAKE_REQUIRED` command in a background Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE`.
+5. Confirm `wake status` → `continuation_ready=true`, then work until evaluator YES → `manage done`.
+
+Wake is **required** while pursuing (not optional). Details: [First run](#first-run-wake-handshake).
+
 ## Requirements
 
 - **Python 3.12+** (`python3`, `python`, or Windows `py -3`)
@@ -30,7 +40,7 @@ Three supported paths:
 | Path | Who | How |
 |------|-----|-----|
 | **Clone + installer** | Individuals | Clone `main` (or a GitHub Release source archive) → `install-goal.sh` / `install-goal.ps1` |
-| **Tagged release** | Individuals | `git clone --branch v2.16.0 …` then installer (see [docs/install.md](docs/install.md)). |
+| **Tagged release** | Individuals | `git clone --branch v3.0.0 …` then installer (see [docs/install.md](docs/install.md)). |
 | **Teams marketplace** | Teams/Enterprise | Import this repo in Cursor Dashboard → Plugins (see `.cursor-plugin/marketplace.json`) |
 
 **Agent install (explicit steps):**
@@ -129,9 +139,9 @@ Flags / natural language:
 /goal fix bugs, verified by pytest, stop after 15 turns
 ```
 
-**2.16.0:** Production audit epic — install ACL soft-failure hard-fails, doctor/eval/wake budget redact conditions, absolute `CURSOR_GOAL_LOG_FILE` paths, legacy wake orphan kill-or-doctor-warn, doctor/wake ACL force re-harden, install restart UX + create `continuation_ready=false` BLOCKING line, trim unused pytest extras.
+**3.0.0:** Clean-break production release — tight wake ownership matching (no pytest/IDE false-positive kills), stop insecure/ACL emit `{}`, resume disarm on mutate failure, redacted `eval validate` stdout, YES/done gated on `pursuing`, tokened `wake.pid` only (marker-only hooks), fail-early Windows ACL before skill copy, install/CI/docs/onboarding hardening.
 
-**2.16.0:** Production hardening — `run_validation` defaults to `shell_ok=False`, scrubbed env pins Windows `COMSPEC` and drops privilege toggles, manage status/create redact secret-ish conditions, classic install `.cmd` CGP metachar parity + install-time data-dir ACL harden + private installer temps, create prints real paused→pursuing status with wake checklist and `CURSOR_GOAL_LOG_FILE` tip.
+**2.16.0:** Production hardening — install ACL soft-failure hard-fails, doctor/eval/wake budget redact conditions, absolute `CURSOR_GOAL_LOG_FILE` paths, doctor/wake ACL force re-harden, `run_validation` defaults to `shell_ok=False`, classic install `.cmd` CGP metachar parity + private installer temps.
 
 **2.14.0:** Reliability/security hardening — wake tick fail-closed on persist failure, transactional create/resume arm, doctor marketplace deep scan + VERSION sync, wake ownership in continuation_ready, create requires `--force` for any existing goal, marketplace `.cmd` uses `%CGP%`, eval/stop refuse insecure dirs, probe OSError fail-closed, scrub drops `NODE_PATH`/`MAVEN_OPTS`-class vars. Also: host-native path helpers, doctor data-dir `ValueError`, wake ownership null-subprocess tolerance, macOS install-smoke non-symlink HOME, `wake-smoke.py` in CI, module splits (`path_trust` / `doctor` / `wake_process`), clearer first-run wake handshake docs.
 

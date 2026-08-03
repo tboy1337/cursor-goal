@@ -159,31 +159,18 @@ def _kill_existing_loop() -> None:
     if pid == os.getpid():
         return
     if not token:
-        if _pid_alive(pid) and _pid_looks_owned(pid):
-            logger.warning(
-                "Killing legacy tokenless wake pid=%s after ownership probe OK",
-                pid,
-            )
-            _kill_pid(pid, token="")
-            _clear_pid()
-            clear_orphan_wake()
-            return
+        # Defense in depth: _read_pid_record clears tokenless files.
+        logger.warning(
+            "Unexpected tokenless wake.pid for pid=%s; clearing without kill",
+            pid,
+        )
         if _pid_alive(pid):
-            logger.warning(
-                "Leaving orphan wake pid=%s (no ownership token; ownership "
-                "unverified); clearing wake.pid without signaling. Re-arm "
-                "after confirming no leftover loop.",
-                pid,
-            )
             mark_orphan_wake(
                 pid,
-                "legacy tokenless wake.pid while pid still alive and "
-                "ownership unverified",
+                "tokenless wake.pid while pid still alive; kill refused "
+                "(token required)",
             )
-            _clear_pid()
-            return
         _clear_pid()
-        clear_orphan_wake()
         return
     _kill_pid(pid, token=token)
     _clear_pid()
@@ -464,7 +451,7 @@ def tick() -> int:  # pylint: disable=too-many-return-statements
 
     if _nudge_within_coalesce_window(config):
         logger.info(
-            "Wake tick coalesced (recent stop/wake nudge within interval_s=%s)",
+            "Wake tick coalesced (recent wake nudge within interval_s=%s)",
             config.get("interval_s"),
         )
         return 0

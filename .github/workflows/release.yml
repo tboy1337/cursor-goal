@@ -135,9 +135,32 @@ jobs:
         run: |
           powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-smoke.ps1
 
+  macos-gate:
+    name: macOS install smoke
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package
+        run: pip install -e ".[dev]"
+
+      - name: Version and plugin sync
+        run: |
+          python scripts/check_version_sync.py
+          python scripts/sync-plugin-tree.py --check
+
+      - name: macOS install smoke
+        run: bash scripts/install-smoke.sh
+
   publish:
     name: Create GitHub Release
-    needs: [unix-gate, windows-gate]
+    needs: [unix-gate, windows-gate, macos-gate]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

@@ -167,19 +167,18 @@ Describe 'Write-GoalWakeLoopCmd' {
 }
 
 Describe 'Protect-GoalDataDirAcl' {
-    It 'hardens an existing data dir via vendored package' {
+    It 'hardens an existing data dir via package root' {
         $dir = Join-Path ([IO.Path]::GetTempPath()) ("cg-acl-" + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
         try {
-            $installDir = Join-Path $dir 'skill'
+            $tmpDir = Join-Path $dir 'tmp'
             $dataDir = Join-Path $dir 'data'
-            New-Item -ItemType Directory -Force -Path (Join-Path $installDir 'scripts') | Out-Null
+            New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
             New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
-            Copy-Item -Recurse (Join-Path $RepoRoot 'src\cursor_goal') (Join-Path $installDir 'cursor_goal')
             $python = Find-GoalPython
-            $code = Protect-GoalDataDirAcl -Python $python -InstallDir $installDir -DataDir $dataDir
+            $code = Protect-GoalDataDirAcl -Python $python -PackageRoot (Join-Path $RepoRoot 'src') -TmpDir $tmpDir -DataDir $dataDir
             $code | Should -Be 0
-            Test-Path (Join-Path $installDir 'scripts\.tmp') | Should -BeTrue
+            Test-Path $tmpDir | Should -BeTrue
         }
         finally {
             Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
@@ -190,18 +189,12 @@ Describe 'Protect-GoalDataDirAcl' {
         $dir = Join-Path ([IO.Path]::GetTempPath()) ("cg-acl-fail-" + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
         try {
-            $installDir = Join-Path $dir 'skill'
+            $tmpDir = Join-Path $dir 'tmp'
             $dataDir = Join-Path $dir 'data'
-            New-Item -ItemType Directory -Force -Path (Join-Path $installDir 'scripts') | Out-Null
+            New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
             New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
-            # Minimal package so import may fail or we use a broken python wrapper.
-            $badPy = Join-Path $dir 'bad.py'
-            Set-Content -Path $badPy -Value 'raise SystemExit(9)' -Encoding utf8
-            $python = @{ Exe = (Find-GoalPython).Exe; PrefixArgs = @('-3', '-u', $badPy) }
-            # PrefixArgs run before the acl script args — force non-zero by using a
-            # python that immediately exits: replace Exe with cmd that fails.
             $python = @{ Exe = 'cmd.exe'; PrefixArgs = @('/c', 'exit', '7') }
-            $code = Protect-GoalDataDirAcl -Python $python -InstallDir $installDir -DataDir $dataDir
+            $code = Protect-GoalDataDirAcl -Python $python -PackageRoot (Join-Path $RepoRoot 'src') -TmpDir $tmpDir -DataDir $dataDir
             $code | Should -Be 1
         }
         finally {
@@ -213,14 +206,14 @@ Describe 'Protect-GoalDataDirAcl' {
         $dir = Join-Path ([IO.Path]::GetTempPath()) ("cg-acl-soft-" + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
         try {
-            $installDir = Join-Path $dir 'skill'
+            $pkgRoot = Join-Path $dir 'pkg'
+            $tmpDir = Join-Path $dir 'tmp'
             $dataDir = Join-Path $dir 'data'
-            New-Item -ItemType Directory -Force -Path (Join-Path $installDir 'scripts') | Out-Null
+            New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
             New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
-            $pkg = Join-Path $installDir 'cursor_goal'
+            $pkg = Join-Path $pkgRoot 'cursor_goal'
             New-Item -ItemType Directory -Force -Path $pkg | Out-Null
             Set-Content -Path (Join-Path $pkg '__init__.py') -Value '' -Encoding utf8
-            # Soft-fail shim: record failure and return False (no exception).
             @'
 def harden_windows_acl(path, *, force=False):
     return False
@@ -229,7 +222,7 @@ def failure_reason(path):
     return "simulated soft failure"
 '@ | Set-Content -Path (Join-Path $pkg 'win_acl.py') -Encoding utf8
             $python = Find-GoalPython
-            $code = Protect-GoalDataDirAcl -Python $python -InstallDir $installDir -DataDir $dataDir
+            $code = Protect-GoalDataDirAcl -Python $python -PackageRoot $pkgRoot -TmpDir $tmpDir -DataDir $dataDir
             $code | Should -Be 1
         }
         finally {
@@ -239,7 +232,7 @@ def failure_reason(path):
 }
 
 Describe 'Merge-GoalStopHook' {
-    It 'replaces legacy goal hooks and keeps unrelated entries' {
+    It 'replaces marked goal hooks and keeps unmarked entries' {
         $data = [pscustomobject]@{
             version = 1
             hooks   = [pscustomobject]@{
@@ -252,10 +245,11 @@ Describe 'Merge-GoalStopHook' {
         }
         $merged = Merge-GoalStopHook -Data $data -HookCommand 'py -3 -u stop.py' -Marker 'cursor_goal_stop_hook'
         $stop = @($merged.hooks.stop)
-        $stop.Count | Should -Be 2
-        $stop[0].command | Should -Be './other.sh'
-        $stop[1].command | Should -Be 'py -3 -u stop.py'
-        $stop[1]._cursor_goal | Should -Be 'cursor_goal_stop_hook'
+        $stop.Count | Should -Be 3
+        $stop[0].command | Should -Be '~/.cursor/skills/goal/goal-stop.sh'
+        $stop[1].command | Should -Be './other.sh'
+        $stop[2].command | Should -Be 'py -3 -u stop.py'
+        $stop[2]._cursor_goal | Should -Be 'cursor_goal_stop_hook'
     }
 
     It 'creates hooks.stop when missing' {
@@ -331,6 +325,13 @@ Describe 'Invoke-GoalInstall' {
         @($backups | Where-Object { $_.Name -like 'goalKeeper.md.bak.*' }).Count | Should -BeGreaterThan 0
         @($backups | Where-Object { $_.Name -like 'goal-evaluator.md.bak.*' }).Count | Should -BeGreaterThan 0
         (Get-Content -Raw (Join-Path $agentsDir 'goalKeeper.md')).Trim() | Should -Not -Be 'old-keeper'
+    }
+
+    It 'aborts before skill copy when ACL harden fails' {
+        Mock Protect-GoalDataDirAcl { return 1 }
+        $code = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $RepoRoot -Python (Find-GoalPython)
+        $code | Should -Be 1
+        Test-Path (Join-Path $TempHome '.cursor\skills\goal\SKILL.md') | Should -BeFalse
     }
 
     It 'backs up and merges an existing hooks.json' {
@@ -421,14 +422,12 @@ Describe 'Invoke-GoalInstall' {
 }
 
 Describe 'Select-GoalStopHooksRemaining' {
-    It 'prefers marker-only removal when a marked entry exists' {
+    It 'removes only marked entries' {
         $data = [pscustomobject]@{
             hooks = [pscustomobject]@{
                 stop = @(
                     [pscustomobject]@{ command = './keep.sh' },
                     [pscustomobject]@{ command = 'x'; _cursor_goal = 'cursor_goal_stop_hook' },
-                    # Substring match alone must not drop when marked entries exist
-                    # (avoids nuking unrelated hooks that happen to mention stop_hook).
                     [pscustomobject]@{ command = 'my-tool --path=/opt/stop_hook.py' }
                 )
             }
@@ -439,7 +438,7 @@ Describe 'Select-GoalStopHooksRemaining' {
         $cleaned.hooks.stop[1].command | Should -Be 'my-tool --path=/opt/stop_hook.py'
     }
 
-    It 'uses legacy substring match when no marked entries exist' {
+    It 'leaves unmarked stop_hook entries when no marker is present' {
         $data = [pscustomobject]@{
             hooks = [pscustomobject]@{
                 stop = @(
@@ -450,8 +449,7 @@ Describe 'Select-GoalStopHooksRemaining' {
             }
         }
         $cleaned = Select-GoalStopHooksRemaining -Data $data -Marker 'cursor_goal_stop_hook'
-        @($cleaned.hooks.stop).Count | Should -Be 1
-        $cleaned.hooks.stop[0].command | Should -Be './keep.sh'
+        @($cleaned.hooks.stop).Count | Should -Be 3
     }
 }
 
@@ -477,6 +475,21 @@ Describe 'Invoke-GoalUninstall' {
         Test-Path (Join-Path $TempHome '.cursor-goal') | Should -BeTrue
         $hooks = Get-Content -Raw (Join-Path $TempHome '.cursor\hooks.json') | ConvertFrom-Json
         @($hooks.hooks.stop).Count | Should -Be 0
+    }
+
+    It 'removes installer backup debris' {
+        $skillsParent = Join-Path $TempHome '.cursor\skills'
+        $bak = Join-Path $skillsParent 'goal.bak.20200101T000000Z'
+        New-Item -ItemType Directory -Force -Path $bak | Out-Null
+        Set-Content -Path (Join-Path $bak 'SKILL.md') -Value 'old' -Encoding utf8
+        $agentsDir = Join-Path $TempHome '.cursor\agents'
+        Set-Content -Path (Join-Path $agentsDir 'goalKeeper.md.bak.20200101T000000Z') -Value 'x' -Encoding utf8
+        Set-Content -Path (Join-Path $agentsDir 'goal-evaluator.md.bak.20200101T000000Z') -Value 'y' -Encoding utf8
+        $code = Invoke-GoalUninstall -HomeDir $TempHome
+        $code | Should -Be 0
+        Test-Path -LiteralPath $bak | Should -BeFalse
+        Test-Path -LiteralPath (Join-Path $agentsDir 'goalKeeper.md.bak.20200101T000000Z') | Should -BeFalse
+        Test-Path -LiteralPath (Join-Path $agentsDir 'goal-evaluator.md.bak.20200101T000000Z') | Should -BeFalse
     }
 
     It 'purges data when -PurgeData is set' {

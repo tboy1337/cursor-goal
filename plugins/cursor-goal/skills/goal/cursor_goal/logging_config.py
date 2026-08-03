@@ -44,12 +44,29 @@ def _maybe_chmod_log_file(path: Path) -> None:
 
 
 def _open_log_file() -> TextIO | None:
-    """Open optional durable log file under data dir or absolute path."""
+    """Open optional durable log file under data dir or absolute path.
+
+    Refuses symlink/reparse parents (same trust boundary as CURSOR_GOAL_DATA).
+    Uses a deferred import of path_trust to avoid an import cycle
+    (path_trust → logging_config).
+    """
     raw = os.environ.get("CURSOR_GOAL_LOG_FILE", "").strip()
     if not raw:
         return None
     try:
+        # Circular: path_trust imports get_logger from this module.
+        from cursor_goal.path_trust import (  # isort: skip  # pylint: disable=import-outside-toplevel
+            data_dir_is_insecure,
+            path_has_symlink_or_reparse,
+        )
+
         if raw.lower() in {".", "1", "true", "yes", "on"}:
+            if data_dir_is_insecure():
+                sys.stderr.write(
+                    "[cursor_goal] CURSOR_GOAL_LOG_FILE disabled: data "
+                    "directory is insecure (symlink/reparse/permissions)\n"
+                )
+                return None
             path = _default_log_path()
         else:
             expanded = Path(raw).expanduser()
@@ -58,6 +75,14 @@ def _open_log_file() -> TextIO | None:
                 sys.stderr.write(
                     "[cursor_goal] CURSOR_GOAL_LOG_FILE must be an absolute "
                     f"path (got {raw!r}); durable file logging disabled\n"
+                )
+                return None
+            if path_has_symlink_or_reparse(expanded) or path_has_symlink_or_reparse(
+                expanded.parent
+            ):
+                sys.stderr.write(
+                    "[cursor_goal] CURSOR_GOAL_LOG_FILE disabled: path or "
+                    "parent is a symlink/reparse point\n"
                 )
                 return None
             path = expanded
@@ -71,6 +96,11 @@ def _open_log_file() -> TextIO | None:
     except OSError as exc:
         sys.stderr.write(
             f"[cursor_goal] Could not open CURSOR_GOAL_LOG_FILE={raw!r}: {exc}\n"
+        )
+        return None
+    except ValueError as exc:
+        sys.stderr.write(
+            f"[cursor_goal] CURSOR_GOAL_LOG_FILE disabled: {exc}\n"
         )
         return None
 

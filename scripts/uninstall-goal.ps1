@@ -34,38 +34,15 @@ function Select-GoalStopHooksRemaining {
     $hasHooks = $null -ne ($Data.PSObject.Properties['hooks']) -and $null -ne $Data.hooks
     $hasStop = $hasHooks -and ($null -ne ($Data.hooks.PSObject.Properties['stop'])) -and $null -ne $Data.hooks.stop
     if ($hasStop) {
-        $hasMarked = $false
-        foreach ($item in @($Data.hooks.stop)) {
-            $itemMarker = $null
-            if ($null -ne ($item.PSObject.Properties['_cursor_goal'])) {
-                $itemMarker = $item._cursor_goal
-            }
-            if ($itemMarker -eq $Marker) {
-                $hasMarked = $true
-                break
-            }
-        }
         $filtered = @()
         foreach ($item in @($Data.hooks.stop)) {
-            $cmd = ""
-            if ($null -ne ($item.PSObject.Properties['command']) -and $null -ne $item.command) {
-                $cmd = [string]$item.command
-            }
-            $drop = $false
             $itemMarker = $null
             if ($null -ne ($item.PSObject.Properties['_cursor_goal'])) {
                 $itemMarker = $item._cursor_goal
             }
-            if ($itemMarker -eq $Marker) {
-                $drop = $true
+            if ($itemMarker -ne $Marker) {
+                $filtered += $item
             }
-            elseif (-not $hasMarked) {
-                # Legacy substring match only when no marked goal hooks exist.
-                if ($cmd -match "goal-stop\.sh|stop_hook\.py|stop_hook\.cmd|cursor_goal stop|cursor-goal stop") {
-                    $drop = $true
-                }
-            }
-            if (-not $drop) { $filtered += $item }
         }
         $Data.hooks.stop = $filtered
     }
@@ -144,28 +121,13 @@ data = json.loads(path.read_text(encoding="utf-8"))
 hooks = data.get("hooks") or {}
 stop = hooks.get("stop") or []
 
-def is_goal_hook(item, *, allow_legacy=True):
+def is_goal_hook(item):
     if not isinstance(item, dict):
         return False
-    if item.get("_cursor_goal") == "cursor_goal_stop_hook":
-        return True
-    if not allow_legacy:
-        return False
-    cmd = str(item.get("command", ""))
-    return (
-        "goal-stop.sh" in cmd
-        or "stop_hook.py" in cmd
-        or "stop_hook.cmd" in cmd
-        or "cursor_goal stop" in cmd
-        or "cursor-goal stop" in cmd
-    )
+    return item.get("_cursor_goal") == "cursor_goal_stop_hook"
 
-has_marked = any(
-    isinstance(item, dict) and item.get("_cursor_goal") == "cursor_goal_stop_hook"
-    for item in stop
-)
 hooks["stop"] = [
-    item for item in stop if not is_goal_hook(item, allow_legacy=not has_marked)
+    item for item in stop if not is_goal_hook(item)
 ]
 data["hooks"] = hooks
 tmp = path.with_name(f"{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
@@ -226,6 +188,22 @@ print("hooks cleaned")
 
     Write-Host "[uninstall-goal] Removing skill at $installDir"
     if (Test-Path $installDir) { Remove-Item -Recurse -Force $installDir }
+
+    # Clean installer backup debris next to the skill / agents trees.
+    $skillsParent = Join-Path $HomeDir ".cursor\skills"
+    if (Test-Path -LiteralPath $skillsParent) {
+        Get-ChildItem -LiteralPath $skillsParent -Directory -Filter "goal.bak.*" -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                Remove-Item -Recurse -Force -LiteralPath $_.FullName -ErrorAction SilentlyContinue
+                Write-Host ("[uninstall-goal] Removed backup {0}" -f $_.FullName)
+            }
+    }
+    if (Test-Path -LiteralPath $agentsDir) {
+        Get-ChildItem -LiteralPath $agentsDir -File -Filter "goalKeeper.md.bak.*" -ErrorAction SilentlyContinue |
+            ForEach-Object { Remove-Item -Force -LiteralPath $_.FullName -ErrorAction SilentlyContinue }
+        Get-ChildItem -LiteralPath $agentsDir -File -Filter "goal-evaluator.md.bak.*" -ErrorAction SilentlyContinue |
+            ForEach-Object { Remove-Item -Force -LiteralPath $_.FullName -ErrorAction SilentlyContinue }
+    }
 
     $agent = Join-Path $agentsDir "goalKeeper.md"
     if (Test-Path $agent) {

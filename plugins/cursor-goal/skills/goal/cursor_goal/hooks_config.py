@@ -13,35 +13,15 @@ HOOK_MARKER = "cursor_goal_stop_hook"
 
 logger = logging.getLogger("cursor_goal.hooks_config")
 
-_LEGACY_NEEDLES = (
-    "goal-stop.sh",
-    "stop_hook.py",
-    "stop_hook.cmd",
-    "cursor_goal stop",
-    "cursor-goal stop",
-)
 
+def is_goal_stop_hook(item: object) -> bool:
+    """Return True if *item* is a marked cursor-goal stop hook entry.
 
-def is_goal_stop_hook(item: object, *, allow_legacy: bool = True) -> bool:
-    """Return True if *item* is a cursor-goal stop hook entry.
-
-    Prefer the ``_cursor_goal`` marker. Substring matching is a legacy
-    uninstall/upgrade fallback and is logged when used.
+    Only the ``_cursor_goal`` marker is recognized (no command-substring match).
     """
     if not isinstance(item, dict):
         return False
-    if item.get("_cursor_goal") == HOOK_MARKER:
-        return True
-    if not allow_legacy:
-        return False
-    cmd = str(item.get("command", ""))
-    if any(needle in cmd for needle in _LEGACY_NEEDLES):
-        logger.info(
-            "Matched legacy goal stop hook by command substring: %r",
-            cmd[:120],
-        )
-        return True
-    return False
+    return item.get("_cursor_goal") == HOOK_MARKER
 
 
 def build_stop_entry(command: str, *, timeout: int = 30) -> dict[str, Any]:
@@ -100,17 +80,7 @@ def remove_stop_hooks(data: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(hooks, dict):
         return data
     stop = normalize_stop_hooks(hooks.get("stop"))
-    # Prefer marker-only removal when at least one marked entry exists so
-    # unrelated hooks whose command happens to contain stop_hook.* are kept.
-    has_marked = any(
-        isinstance(item, dict) and item.get("_cursor_goal") == HOOK_MARKER
-        for item in stop
-    )
-    hooks["stop"] = [
-        item
-        for item in stop
-        if not is_goal_stop_hook(item, allow_legacy=not has_marked)
-    ]
+    hooks["stop"] = [item for item in stop if not is_goal_stop_hook(item)]
     data["hooks"] = hooks
     return data
 

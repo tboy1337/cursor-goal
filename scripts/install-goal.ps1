@@ -1,4 +1,4 @@
-﻿# install-goal.ps1 ??? Install /goal Python harness for Cursor on Windows
+﻿# install-goal.ps1 - Install /goal Python harness for Cursor on Windows
 #
 # Usage (from a full clone or a GitHub source archive for a tagged release):
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-goal.ps1
@@ -230,14 +230,7 @@ function Merge-GoalStopHook {
 
     $filtered = @()
     foreach ($item in @($Data.hooks.stop)) {
-        $cmd = ""
-        if ($null -ne ($item.PSObject.Properties['command']) -and $null -ne $item.command) {
-            $cmd = [string]$item.command
-        }
         $keep = $true
-        if ($cmd -match "goal-stop\.sh|stop_hook\.py|stop_hook\.cmd|cursor_goal stop|cursor-goal stop") {
-            $keep = $false
-        }
         $itemMarker = $null
         if ($null -ne ($item.PSObject.Properties['_cursor_goal'])) {
             $itemMarker = $item._cursor_goal
@@ -290,17 +283,20 @@ function Protect-GoalDataDirAcl {
     <#
     .SYNOPSIS
     Harden ~/.cursor-goal/data ACL at install time (parity with Unix chmod 700).
+
+    Uses *PackageRoot* (repo src or installed skill) for imports and *TmpDir*
+    for the helper script so ACL can run before the skill tree is copied.
     #>
     [CmdletBinding()]
     [OutputType([int])]
     param(
         [Parameter(Mandatory = $true)][hashtable]$Python,
-        [Parameter(Mandatory = $true)][string]$InstallDir,
+        [Parameter(Mandatory = $true)][string]$PackageRoot,
+        [Parameter(Mandatory = $true)][string]$TmpDir,
         [Parameter(Mandatory = $true)][string]$DataDir
     )
-    $tmpDir = Join-Path $InstallDir "scripts\.tmp"
-    New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
-    $tmpPy = Join-Path $tmpDir ("cg-acl-" + [guid]::NewGuid().ToString('N') + ".py")
+    New-Item -ItemType Directory -Force -Path $TmpDir | Out-Null
+    $tmpPy = Join-Path $TmpDir ("cg-acl-" + [guid]::NewGuid().ToString('N') + ".py")
     $script = @'
 import sys
 from pathlib import Path
@@ -317,7 +313,7 @@ print("hardened")
 '@
     try {
         Write-Utf8NoBomFile -Path $tmpPy -Content $script
-        $null = & $Python.Exe @($Python.PrefixArgs) $tmpPy $InstallDir $DataDir 2>&1
+        $null = & $Python.Exe @($Python.PrefixArgs) $tmpPy $PackageRoot $DataDir 2>&1
         if ($LASTEXITCODE -ne 0) {
             Write-GoalErr ("Failed to harden data dir ACL (exit {0}): {1}" -f $LASTEXITCODE, $DataDir)
             return 1
@@ -400,6 +396,14 @@ function Invoke-GoalInstall {
     New-Item -ItemType Directory -Force -Path $agentsDir | Out-Null
     New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
 
+    # Fail early: harden data-dir ACL before mutating the skill tree (no rollback).
+    $aclTmp = Join-Path $installDir "scripts\.tmp"
+    $aclCode = Protect-GoalDataDirAcl -Python $Python -PackageRoot (Join-Path $RepoRoot "src") -TmpDir $aclTmp -DataDir $dataDir
+    if ($aclCode -ne 0) {
+        Write-GoalErr "Install aborted: data directory ACL harden failed (skill tree not modified)."
+        return 1
+    }
+
     $targetPkg = Join-Path $installDir "cursor_goal"
     $skillBak = $null
     if (Test-Path (Join-Path $installDir "SKILL.md")) {
@@ -418,12 +422,6 @@ function Invoke-GoalInstall {
     Copy-Item (Join-Path $sourceSkill "scripts\run_goal.py") (Join-Path $installDir "scripts\run_goal.py") -Force
     if (Test-Path (Join-Path $sourceSkill "scripts\wake_loop.sh")) {
         Copy-Item (Join-Path $sourceSkill "scripts\wake_loop.sh") (Join-Path $installDir "scripts\wake_loop.sh") -Force
-    }
-
-    $aclCode = Protect-GoalDataDirAcl -Python $Python -InstallDir $installDir -DataDir $dataDir
-    if ($aclCode -ne 0) {
-        Write-GoalErr "Install aborted: data directory ACL harden failed."
-        return 1
     }
 
     $stopScript = Join-Path $installDir "scripts\stop_hook.py"

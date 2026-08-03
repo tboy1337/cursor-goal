@@ -11,6 +11,7 @@ from pathlib import Path
 from cursor_goal.logging_config import get_logger
 from cursor_goal.models import spawn_config_dict
 from cursor_goal.state import (
+    CorruptGoalError,
     GoalLockTimeoutError,
     assert_workdir_usable,
     data_dir,
@@ -37,7 +38,11 @@ def cmd_prompt(argv: list[str]) -> int:
         print(wake_dead.replace("[goal]", "[goal-eval]"), file=sys.stderr)
         return 1
 
-    state = snapshot_goal()
+    try:
+        state = snapshot_goal(raise_corrupt=True)
+    except CorruptGoalError as exc:
+        print(f"[goal-eval] Error: {exc}", file=sys.stderr)
+        return 1
     if state is None:
         print(
             "[goal-eval] Error: No active goal. Run cursor-goal manage create first.",
@@ -49,7 +54,7 @@ def cmd_prompt(argv: list[str]) -> int:
     i = 0
     while i < len(argv):
         if argv[i] == "--work-summary" and i + 1 < len(argv):
-            work_summary = argv[i + 1]
+            work_summary = redact_secrets(argv[i + 1], max_chars=4000)
             i += 2
         else:
             i += 1
@@ -146,7 +151,10 @@ def cmd_validate(_argv: list[str]) -> int:
         return 1
 
     try:
-        state = snapshot_goal()
+        state = snapshot_goal(raise_corrupt=True)
+    except CorruptGoalError as exc:
+        print(f"[goal-eval] Error: {exc}", file=sys.stderr)
+        return 1
     except GoalLockTimeoutError as exc:
         print(f"[goal-eval] Error: {exc}", file=sys.stderr)
         return 1
@@ -181,7 +189,8 @@ def cmd_validate(_argv: list[str]) -> int:
     output = result.output
     if result.timed_out:
         output = f"[timed out]\n{output}".strip()
-    # Persist a redacted copy so later prompts/status do not leak secrets.
+    # Persist and print a redacted copy so agent/terminal context does not
+    # leak secrets (same scrubbing as stored output).
     stored_output = redact_secrets(output, max_chars=4000)
 
     try:
@@ -201,8 +210,8 @@ def cmd_validate(_argv: list[str]) -> int:
     print(f"[goal-eval] Validation exit={result.exit_code}")
     if result.timed_out:
         print("[goal-eval] Validation timed out.")
-    if output:
-        print(output)
+    if stored_output:
+        print(stored_output)
     return 0 if result.exit_code == 0 and not result.timed_out else 1
 
 
@@ -220,7 +229,11 @@ def cmd_signal(argv: list[str]) -> int:
         print(acl_fail.replace("[goal]", "[goal-eval]"), file=sys.stderr)
         return 1
 
-    state = snapshot_goal()
+    try:
+        state = snapshot_goal(raise_corrupt=True)
+    except CorruptGoalError as exc:
+        print(f"[goal-eval] Error: {exc}", file=sys.stderr)
+        return 1
     if state is None:
         print(
             "[goal-eval] Error: No active goal. Run cursor-goal manage create first.",
@@ -401,6 +414,9 @@ def cmd_parse_result(argv: list[str]) -> int:
 
     try:
         updated = record_parse_result(verdict, reason)
+    except ValueError as exc:
+        print(f"[goal-eval] Error: {exc}", file=sys.stderr)
+        return 1
     except GoalLockTimeoutError as exc:
         print(f"[goal-eval] Error: {exc}", file=sys.stderr)
         return 1

@@ -90,6 +90,13 @@ def test_eval_signal_requires_goal(goal_home: Path) -> None:
     assert "No active goal" in err
 
 
+def test_eval_prompt_corrupt_goal(goal_home: Path) -> None:
+    (goal_home / "goal.json").write_text("{not-json", encoding="utf-8")
+    code, _out, err = run_cli("eval", "prompt")
+    assert code == 1
+    assert "corrupt" in err.lower() or "Error" in err
+
+
 def test_eval_parse_result_no_clears_signal(goal_home: Path) -> None:
     run_cli("manage", "create", "test condition")
     run_cli("eval", "parse-result", "YES: done")
@@ -378,6 +385,39 @@ def test_eval_check_no_signal_and_ok(goal_home: Path) -> None:
     code2, out2, _err2 = run_cli("eval", "check")
     assert code2 == 0
     assert "OK" in out2
+
+
+def test_eval_parse_result_yes_rejects_paused(goal_home: Path) -> None:
+    assert run_cli("manage", "create", "paused-yes")[0] == 0
+    assert run_cli("manage", "pause")[0] == 0
+    code, _out, err = run_cli("eval", "parse-result", "YES: done")
+    assert code == 1
+    assert "pursuing" in err.lower()
+
+
+def test_eval_validate_redacts_live_stdout(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import evaluate as eval_mod
+    from cursor_goal.validation import ValidationResult
+
+    run_cli("manage", "create", "g", "--test", f"{sys.executable} -c \"pass\"")
+
+    def fake_run(
+        _cmd: str, *, shell_ok: bool = False, cwd: str | None = None
+    ) -> ValidationResult:
+        del shell_ok, cwd
+        return ValidationResult(
+            exit_code=0,
+            output="api_key=sk-secretvalue1234567890\n",
+            timed_out=False,
+        )
+
+    monkeypatch.setattr(eval_mod, "run_validation", fake_run)
+    code, out, _err = run_cli("eval", "validate")
+    assert code == 0
+    assert "sk-secretvalue1234567890" not in out
+    assert "<redacted>" in out
 
 
 def test_eval_prompt_refuses_dead_wake(

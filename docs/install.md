@@ -41,7 +41,7 @@ After install, **restart Cursor** (or reload hooks) so `hooks.json` takes effect
 | `~/.cursor/skills/goal/scripts/stop_hook.py` | Cursor stop hook |
 | `~/.cursor/skills/goal/scripts/stop_hook.cmd` | Windows stop launcher (classic install: absolute Python baked by `install-goal.ps1`) |
 | `~/.cursor/skills/goal/scripts/wake_loop.cmd` | Windows wake launcher (classic install: absolute Python baked, same as stop) |
-| `~/.cursor/skills/goal/scripts/wake_loop.sh` | Unix/macOS wake launcher helper (optional; agents may also call `run_goal.py wake loop` directly) |
+| `~/.cursor/skills/goal/scripts/wake_loop.sh` | Unix/macOS wake launcher (**required** while pursuing; agents may also call `run_goal.py wake loop` directly) |
 | `~/.cursor/skills/goal/VERSION` | Installed package version stamp |
 | `~/.cursor/agents/goalKeeper.md` | Worker agent (`model: inherit`) |
 | `~/.cursor/agents/goal-evaluator.md` | Readonly evaluator (`model: fast` default) |
@@ -58,10 +58,10 @@ On upgrade, a previous skill tree is copied to `~/.cursor/skills/goal.bak.<UTC>`
 
 ### Install from a tagged release
 
-Package version **2.16.0** pins the clone branch below. Use it when tag `v2.16.0` exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If `git clone --branch` fails, clone `main` with the Quick install steps above ([release.md](release.md)).
+Package version **3.0.0** pins the clone branch below. Use it when tag `v3.0.0` exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If `git clone --branch` fails, clone `main` with the Quick install steps above ([release.md](release.md)).
 
 ```bash
-git clone --branch v2.16.0 https://github.com/tboy1337/cursor-goal.git
+git clone --branch v3.0.0 https://github.com/tboy1337/cursor-goal.git
 cd cursor-goal
 ./scripts/install-goal.sh   # or install-goal.ps1 on Windows
 ```

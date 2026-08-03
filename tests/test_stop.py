@@ -369,7 +369,9 @@ def test_stop_singleflight_refuses_insecure(
         "refuse_if_data_dir_insecure",
         lambda: "[goal] Error: insecure",
     )
-    assert stop_mod._try_acquire_singleflight() is None
+    code, payload = _run_stop({"status": "completed", "loop_count": 0})
+    assert code == 0
+    assert payload == {}
 
 
 def test_stop_singleflight_refuses_acl(
@@ -380,7 +382,9 @@ def test_stop_singleflight_refuses_acl(
         "refuse_if_acl_harden_failed",
         lambda: "[goal] Error: ACL harden failed",
     )
-    assert stop_mod._try_acquire_singleflight() is None
+    code, payload = _run_stop({"status": "completed", "loop_count": 0})
+    assert code == 0
+    assert payload == {}
 
 
 def test_cmd_stop_emit_oserror_fail_open(
