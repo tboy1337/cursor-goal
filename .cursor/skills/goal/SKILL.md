@@ -214,8 +214,9 @@ Default turn budget is 20 (max 500). Customize with `--budget N` or natural lang
 | Symptom | Likely cause | Action |
 |---------|--------------|--------|
 | Goal ends quickly with low `turns_used` | `wake_budget` exhausted | Raise `--wake-budget` or interval |
-| Hooks UI `{}` but `last-stop-response.json` has followup | Cursor stdout race | Rely on wake loop |
+| Hooks UI `{}` but `last-stop-response.json` has followup | Cursor stdout race | Rely on wake loop (stop stamps do not suppress wake) |
 | Wake armed but no continuation | Loop not started / `pid_alive=false` | Start `wake loop` with `notify_on_output` |
+| Double continuation soon after wake tick | Wake→wake coalesce window | Expected if stop also delivered; wake skips only after its own emit |
 | `manage status` ACTION REQUIRED / doctor FAIL wake | Wake not armed or dead while pursuing | Blocking: start wake loop, confirm `pid_alive=true` |
 | Doctor FAIL classic + marketplace | Stacked install paths | Uninstall classic hooks **or** disable marketplace plugin |
 | Marketplace hooks fail on Windows | Missing absolute `CURSOR_GOAL_PYTHON` | Set absolute env or prefer `install-goal.ps1` |

@@ -482,13 +482,20 @@ def refuse_if_wake_dead() -> str | None:
     )
 
 
-def record_agent_nudge() -> None:
-    """Stamp last_nudge_at so stop+wake can coalesce double continuations."""
+def record_agent_nudge(*, source: str = "wake") -> None:
+    """Stamp last_nudge_at / last_nudge_source for wake→wake coalesce.
+
+    Only ``source=\"wake\"`` suppresses a subsequent wake tick. Stop stamps
+    (``source=\"stop\"``) are diagnostics only so a dropped stop followup
+    cannot delay the race-immune wake path for a full interval.
+    """
+    nudge_source = source if source in ("stop", "wake") else "wake"
     with goal_lock():
         config = _read_wake_config()
         if config is None:
             return
         config["last_nudge_at"] = _now_iso()
+        config["last_nudge_source"] = nudge_source
         try:
             _write_wake_config(config)
         except OSError as exc:
@@ -496,8 +503,21 @@ def record_agent_nudge() -> None:
 
 
 def _nudge_within_coalesce_window(config: dict[str, Any] | None) -> bool:
-    """Return True when a recent *stop* nudge should suppress this wake emit."""
+    """Return True when a recent *wake* nudge should suppress this wake emit.
+
+    Stop-originated stamps never coalesce. Missing ``last_nudge_source`` is
+    treated as ``wake`` for older wake.json files written before sourcing.
+    """
     if config is None:
+        return False
+    raw_source = config.get("last_nudge_source")
+    if raw_source is None:
+        nudge_source = "wake"
+    elif isinstance(raw_source, str) and raw_source in ("stop", "wake"):
+        nudge_source = raw_source
+    else:
+        return False
+    if nudge_source != "wake":
         return False
     raw = config.get("last_nudge_at")
     if not raw or not isinstance(raw, str):
@@ -523,12 +543,15 @@ def emit_wake_line(prompt: str | None = None) -> None:
 
 
 def _touch_last_emit() -> None:
-    """Record last_emit_at on wake.json when armed."""
+    """Record last_emit_at and wake-sourced nudge stamp on wake.json when armed."""
     with goal_lock():
         config = _read_wake_config()
         if config is None:
             return
-        config["last_emit_at"] = _now_iso()
+        now = _now_iso()
+        config["last_emit_at"] = now
+        config["last_nudge_at"] = now
+        config["last_nudge_source"] = "wake"
         try:
             _write_wake_config(config)
         except OSError as exc:

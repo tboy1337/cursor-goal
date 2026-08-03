@@ -14,7 +14,7 @@ Cursor can drop stop-hook stdout (`followup_message`) on Windows and Linux (upst
 
 If wake is not started while a goal is `pursuing`, goals can stall when Hooks show `{}`. `eval validate` refuses while pursuing without a live wake loop unless `CURSOR_GOAL_ALLOW_DEAD_WAKE=1` (or wake is disabled via `CURSOR_GOAL_WAKE=0`).
 
-When stop emits a followup and wake ticks soon after, wake **coalesces** (skips emit and `wake_ticks++`) for one wake interval to avoid double-nudging.
+When wake emits a sentinel and ticks again within one wake interval, wake **coalesces** (skips emit and `wake_ticks++`) to avoid double wake nudges. Stop-hook followup stamps do **not** suppress wake — so a dropped stop stdout cannot delay the race-immune path for a full interval.
 
 ## Shell validation defaults to denied
 

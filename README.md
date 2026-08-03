@@ -30,7 +30,7 @@ Three supported paths:
 | Path | Who | How |
 |------|-----|-----|
 | **Clone + installer** | Individuals | Clone `main` (or a GitHub Release source archive) → `install-goal.sh` / `install-goal.ps1` |
-| **Tagged release** | Individuals | When tag `v2.9.0` exists on GitHub: `git clone --branch v2.9.0 …` then installer (see [docs/install.md](docs/install.md)). If that tag is not published yet, use **Clone + installer** from `main`. |
+| **Tagged release** | Individuals | When tag `v2.10.0` exists on GitHub: `git clone --branch v2.10.0 …` then installer (see [docs/install.md](docs/install.md)). If that tag is not published yet, use **Clone + installer** from `main`. |
 | **Teams marketplace** | Teams/Enterprise | Import this repo in Cursor Dashboard → Plugins (see `.cursor-plugin/marketplace.json`) |
 
 **Agent install (explicit steps):**
@@ -121,7 +121,7 @@ Flags / natural language:
 /goal fix bugs, verified by pytest, stop after 15 turns
 ```
 
-**2.9.0:** production hardening (wake liveness gate, stop/wake coalesce, workdir jail, prompt/disk redaction split). New goals still default to `shell_ok=false` (pass `--allow-shell` for shell-mode validation); installers exit non-zero when `manage doctor` hard-fails; validation can bind a `--workdir`.
+**2.10.0:** wake coalesce is wake→wake only (stop stamps no longer delay the race-immune path); classic Windows `stop_hook.cmd` / `wake_loop.cmd` bake marketplace-parity absolute + Python 3.12+ checks for `CURSOR_GOAL_PYTHON`; Unix install fails hard if data-dir `chmod 700` fails and skips `wake_loop.cmd`. Builds on **2.10.0** hardening (wake liveness gate, workdir jail, prompt/disk redaction split, `shell_ok=false` default).
 
 ## Multi-model (maker ≠ checker)
 

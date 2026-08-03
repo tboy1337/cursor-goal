@@ -52,7 +52,7 @@ Override with `CURSOR_GOAL_DATA` to a private directory.
 
 **Recommended fix path (pick one):**
 
-1. **Individuals:** prefer classic `install-goal.ps1`, which bakes an absolute interpreter into `stop_hook.cmd` / `wake_loop.cmd`.
+1. **Individuals:** prefer classic `install-goal.ps1`, which bakes an absolute interpreter into `stop_hook.cmd` / `wake_loop.cmd` and (when `CURSOR_GOAL_PYTHON` is set) requires an absolute 3.12+ path — same gates as the marketplace launcher.
 2. **Teams marketplace:** set an **absolute** `CURSOR_GOAL_PYTHON` (user or system env), then restart Cursor:
 
 ```powershell

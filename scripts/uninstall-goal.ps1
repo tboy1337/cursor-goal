@@ -159,7 +159,9 @@ print("hooks cleaned")
             }
         }
         if (-not $cleaned) {
-            Write-Host "[uninstall-goal] Warning: could not clean hooks via Python; leaving hooks.json unchanged. Remove stop hook entries manually if needed."
+            Write-Host "[uninstall-goal] ACTION REQUIRED: could not clean stop hooks from:"
+            Write-Host "  $hooksFile"
+            Write-Host "  Skill tree deletion continues. Remove cursor-goal stop hook entries manually."
         }
         else {
             Write-Host "[uninstall-goal] Removed stop hook entries from hooks.json"

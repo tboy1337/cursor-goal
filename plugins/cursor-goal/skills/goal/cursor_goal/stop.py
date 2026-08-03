@@ -148,7 +148,7 @@ def emit(payload: dict[str, Any]) -> None:
     followup = payload.get("followup_message")
     if isinstance(followup, str) and followup.strip():
         try:
-            record_agent_nudge()
+            record_agent_nudge(source="stop")
         except OSError as exc:
             logger.debug("Could not record stop nudge stamp: %s", exc)
     drain = _drain_ms()

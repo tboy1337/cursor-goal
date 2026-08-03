@@ -511,6 +511,11 @@ def test_wake_ticks_do_not_consume_turn_budget(wake_on: Path) -> None:
         == 0
     )
     assert run_cli("wake", "tick")[0] == 0
+    # Expire wake→wake coalesce so a second tick can increment wake_ticks.
+    config = json.loads((wake_on / "wake.json").read_text(encoding="utf-8"))
+    config.pop("last_nudge_at", None)
+    config.pop("last_nudge_source", None)
+    (wake_on / "wake.json").write_text(json.dumps(config), encoding="utf-8")
     assert run_cli("wake", "tick")[0] == 0
     from tests.conftest import load_goal_json
 
@@ -1007,20 +1012,51 @@ def test_unix_ownership_proc_oserror(
     assert wake_mod._unix_pid_looks_owned(7) is False
 
 
-def test_wake_coalesce_skips_after_stop_nudge(wake_on: Path) -> None:
-    assert run_cli("manage", "create", "coalesce goal")[0] == 0
+def test_wake_coalesce_does_not_skip_after_stop_nudge(wake_on: Path) -> None:
+    """Stop stamps must not delay the race-immune wake path."""
+    assert run_cli("manage", "create", "coalesce stop")[0] == 0
+    assert (wake_on / "wake.json").is_file()
+    # Clear wake-sourced stamp from any prior emit so only the stop stamp remains.
+    config = json.loads((wake_on / "wake.json").read_text(encoding="utf-8"))
+    config.pop("last_nudge_at", None)
+    config.pop("last_nudge_source", None)
+    (wake_on / "wake.json").write_text(json.dumps(config), encoding="utf-8")
+    wake_mod.record_agent_nudge(source="stop")
+    stamped = json.loads((wake_on / "wake.json").read_text(encoding="utf-8"))
+    assert stamped.get("last_nudge_source") == "stop"
+    code, out, _err = run_cli("wake", "tick")
+    assert code == 0
+    assert out.startswith("AGENT_GOAL_WAKE ")
+    data = json.loads((wake_on / "goal.json").read_text(encoding="utf-8"))
+    assert data["wake_ticks"] == 1
+
+
+def test_wake_coalesce_skips_after_wake_nudge(wake_on: Path) -> None:
+    assert run_cli("manage", "create", "coalesce wake")[0] == 0
     assert (wake_on / "wake.json").is_file()
     code, out, _err = run_cli("wake", "tick")
     assert code == 0
     assert out.startswith("AGENT_GOAL_WAKE ")
     data = json.loads((wake_on / "goal.json").read_text(encoding="utf-8"))
     assert data["wake_ticks"] == 1
-    wake_mod.record_agent_nudge()
+    stamped = json.loads((wake_on / "wake.json").read_text(encoding="utf-8"))
+    assert stamped.get("last_nudge_source") == "wake"
     code, out, _err = run_cli("wake", "tick")
     assert code == 0
     assert out == ""
     data = json.loads((wake_on / "goal.json").read_text(encoding="utf-8"))
     assert data["wake_ticks"] == 1
+
+
+def test_wake_coalesce_missing_source_treated_as_wake(wake_on: Path) -> None:
+    """Older wake.json without last_nudge_source still coalesces (wake back-compat)."""
+    assert run_cli("manage", "create", "legacy source")[0] == 0
+    wake_mod.arm(interval=30)
+    config = json.loads((wake_on / "wake.json").read_text(encoding="utf-8"))
+    config["last_nudge_at"] = wake_mod._now_iso()
+    config.pop("last_nudge_source", None)
+    (wake_on / "wake.json").write_text(json.dumps(config), encoding="utf-8")
+    assert wake_mod._nudge_within_coalesce_window(config) is True
 
 
 def test_refuse_if_wake_dead_while_pursuing(
@@ -1052,6 +1088,22 @@ def test_nudge_coalesce_invalid_timestamp(wake_on: Path) -> None:
     config["last_nudge_at"] = "not-a-timestamp"
     (wake_on / "wake.json").write_text(json.dumps(config), encoding="utf-8")
     assert wake_mod._nudge_within_coalesce_window(config) is False
+
+
+def test_nudge_coalesce_invalid_source_ignored(wake_on: Path) -> None:
+    wake_mod.arm(interval=30)
+    config = json.loads((wake_on / "wake.json").read_text(encoding="utf-8"))
+    config["last_nudge_at"] = wake_mod._now_iso()
+    config["last_nudge_source"] = "other"
+    (wake_on / "wake.json").write_text(json.dumps(config), encoding="utf-8")
+    assert wake_mod._nudge_within_coalesce_window(config) is False
+
+
+def test_record_agent_nudge_unknown_source_defaults_to_wake(wake_on: Path) -> None:
+    wake_mod.arm(interval=5)
+    wake_mod.record_agent_nudge(source="nope")
+    stamped = json.loads((wake_on / "wake.json").read_text(encoding="utf-8"))
+    assert stamped.get("last_nudge_source") == "wake"
 
 
 def test_refuse_if_wake_dead_when_armed(

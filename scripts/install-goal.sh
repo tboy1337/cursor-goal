@@ -114,7 +114,10 @@ install_skill_files() {
   fi
 
   mkdir -p "$INSTALL_DIR/scripts" "$AGENTS_DIR" "$DATA_DIR"
-  chmod 700 "$DATA_DIR" 2>/dev/null || true
+  if ! chmod 700 "$DATA_DIR"; then
+    log_error "Failed to chmod 700 on data dir: $DATA_DIR"
+    exit 1
+  fi
 
   if [ -d "$INSTALL_DIR" ] && [ -f "${INSTALL_DIR}/SKILL.md" ]; then
     SKILL_BACKUP="${INSTALL_DIR}.bak.$(date -u +%Y%m%dT%H%M%SZ)"
@@ -133,9 +136,8 @@ install_skill_files() {
     cp "${SOURCE_SKILL}/scripts/wake_loop.sh" "${INSTALL_DIR}/scripts/wake_loop.sh"
     chmod +x "${INSTALL_DIR}/scripts/wake_loop.sh" || true
   fi
-  if [ -f "${SOURCE_SKILL}/scripts/wake_loop.cmd" ]; then
-    cp "${SOURCE_SKILL}/scripts/wake_loop.cmd" "${INSTALL_DIR}/scripts/wake_loop.cmd"
-  fi
+  # Do not copy wake_loop.cmd onto Unix installs (Windows-only launcher).
+  rm -f "${INSTALL_DIR}/scripts/wake_loop.cmd"
 
   "$PYTHON_BIN" - "$INSTALL_DIR" <<'PY'
 import sys

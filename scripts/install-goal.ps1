@@ -113,17 +113,30 @@ function Write-GoalStopHookCmd {
                 }) -join ' ') + ' '
     }
     else { '' }
-    # cmd.exe batch: bake absolute interpreter + script paths.
+    # Classic bake: absolute interpreter + marketplace-parity CGP absolute/3.12 gates.
     $content = @"
 @echo off
-setlocal
+setlocal EnableExtensions
 set PYTHONUNBUFFERED=1
-if not "%CURSOR_GOAL_PYTHON%"=="" (
-  set "CGP=%CURSOR_GOAL_PYTHON:"=%"
-  "%CURSOR_GOAL_PYTHON%" -u "$StopScriptPy"
-  exit /b %ERRORLEVEL%
-)
+if not "%CURSOR_GOAL_PYTHON%"=="" goto :use_cgp
 "$pyExe" $prefixPart-u "$StopScriptPy"
+exit /b %ERRORLEVEL%
+
+:use_cgp
+set "CGP=%CURSOR_GOAL_PYTHON:"=%"
+set "CGP_ABS="
+if "%CGP:~1,1%"==":" set "CGP_ABS=1"
+if "%CGP:~0,2%"=="\\" set "CGP_ABS=1"
+if not defined CGP_ABS (
+  echo [cursor-goal] CURSOR_GOAL_PYTHON must be an absolute path >&2
+  exit /b 1
+)
+"%CGP%" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)" >nul 2>&1
+if errorlevel 1 (
+  echo [cursor-goal] CURSOR_GOAL_PYTHON is not Python 3.12+ >&2
+  exit /b 1
+)
+"%CGP%" -u "$StopScriptPy"
 exit /b %ERRORLEVEL%
 "@
     Write-Utf8NoBomFile -Path $StopScriptCmd -Content $content
@@ -147,14 +160,28 @@ function Write-GoalWakeLoopCmd {
     $content = @"
 @echo off
 REM Classic Windows install: absolute interpreter baked by install-goal.ps1.
-REM Prefer CURSOR_GOAL_PYTHON when set (absolute), else baked path.
-setlocal
+REM Prefer CURSOR_GOAL_PYTHON when set (absolute 3.12+), else baked path.
+setlocal EnableExtensions
 set PYTHONUNBUFFERED=1
-if not "%CURSOR_GOAL_PYTHON%"=="" (
-  "%CURSOR_GOAL_PYTHON%" -u "$RunGoalPy" wake loop %*
-  exit /b %ERRORLEVEL%
-)
+if not "%CURSOR_GOAL_PYTHON%"=="" goto :use_cgp
 "$pyExe" $prefixPart-u "$RunGoalPy" wake loop %*
+exit /b %ERRORLEVEL%
+
+:use_cgp
+set "CGP=%CURSOR_GOAL_PYTHON:"=%"
+set "CGP_ABS="
+if "%CGP:~1,1%"==":" set "CGP_ABS=1"
+if "%CGP:~0,2%"=="\\" set "CGP_ABS=1"
+if not defined CGP_ABS (
+  echo [cursor-goal] CURSOR_GOAL_PYTHON must be an absolute path >&2
+  exit /b 1
+)
+"%CGP%" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)" >nul 2>&1
+if errorlevel 1 (
+  echo [cursor-goal] CURSOR_GOAL_PYTHON is not Python 3.12+ >&2
+  exit /b 1
+)
+"%CGP%" -u "$RunGoalPy" wake loop %*
 exit /b %ERRORLEVEL%
 "@
     Write-Utf8NoBomFile -Path $WakeLoopCmd -Content $content

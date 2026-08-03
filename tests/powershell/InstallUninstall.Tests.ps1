@@ -87,6 +87,10 @@ Describe 'Write-GoalStopHookCmd' {
             $body | Should -Match '-u'
             $body.Contains($py) | Should -BeTrue
             $body | Should -Not -Match ' -3 '
+            $body | Should -Match 'goto :use_cgp'
+            $body | Should -Match '%CGP%'
+            $body | Should -Match 'must be an absolute path'
+            $body | Should -Match 'is not Python 3\.12\+'
         }
         finally {
             Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
@@ -106,6 +110,7 @@ Describe 'Write-GoalStopHookCmd' {
             $body | Should -Match '"with space"'
             $body | Should -Match 'PYTHONUNBUFFERED=1'
             $body.Contains($py) | Should -BeTrue
+            $body | Should -Match '"%CGP%" -u'
         }
         finally {
             Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
@@ -127,6 +132,9 @@ Describe 'Write-GoalWakeLoopCmd' {
             $body | Should -Match 'wake loop'
             $body.Contains($runGoal) | Should -BeTrue
             $body | Should -Not -Match 'where py'
+            $body | Should -Match 'goto :use_cgp'
+            $body | Should -Match '%CGP%'
+            $body | Should -Match 'must be an absolute path'
         }
         finally {
             Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
@@ -145,6 +153,7 @@ Describe 'Write-GoalWakeLoopCmd' {
             $body | Should -Match '-3'
             $body | Should -Match '"with space"'
             $body | Should -Match 'wake loop'
+            $body | Should -Match '"%CGP%" -u'
         }
         finally {
             Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
@@ -217,6 +226,11 @@ Describe 'Invoke-GoalInstall' {
         $cmdBody = Get-Content -Raw (Join-Path $installDir 'scripts\stop_hook.cmd')
         $cmdBody | Should -Match 'PYTHONUNBUFFERED'
         $cmdBody | Should -Match 'stop_hook\.py'
+        $cmdBody | Should -Match 'goto :use_cgp'
+        $cmdBody | Should -Match '%CGP%'
+        $wakeCmd = Get-Content -Raw (Join-Path $installDir 'scripts\wake_loop.cmd')
+        $wakeCmd | Should -Match 'goto :use_cgp'
+        $wakeCmd | Should -Match '%CGP%'
         $bytes = [System.IO.File]::ReadAllBytes($hooksPath)
         if ($bytes.Length -ge 3) {
             $hasBom = ($bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)

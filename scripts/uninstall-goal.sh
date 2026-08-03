@@ -27,8 +27,9 @@ detect_python() {
 
 if [ -f "$CURSOR_HOOKS_FILE" ]; then
   if PY="$(detect_python)"; then
+    hooks_ok=0
     if [ -d "${INSTALL_DIR}/cursor_goal" ]; then
-      "$PY" - "$INSTALL_DIR" "$CURSOR_HOOKS_FILE" <<'PY'
+      if "$PY" - "$INSTALL_DIR" "$CURSOR_HOOKS_FILE" <<'PY'
 import sys
 from pathlib import Path
 
@@ -38,8 +39,11 @@ from cursor_goal.hooks_config import remove_hooks_at_path
 remove_hooks_at_path(Path(sys.argv[2]))
 print("hooks cleaned")
 PY
+      then
+        hooks_ok=1
+      fi
     else
-      "$PY" - "$CURSOR_HOOKS_FILE" <<'PY'
+      if "$PY" - "$CURSOR_HOOKS_FILE" <<'PY'
 import json
 import os
 import secrets
@@ -71,10 +75,21 @@ tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="
 tmp.replace(path)
 print("hooks cleaned")
 PY
+      then
+        hooks_ok=1
+      fi
     fi
-    echo "[uninstall-goal] Removed stop hook entries from hooks.json"
+    if [ "$hooks_ok" -eq 1 ]; then
+      echo "[uninstall-goal] Removed stop hook entries from hooks.json"
+    else
+      echo "[uninstall-goal] ACTION REQUIRED: could not clean stop hooks from:"
+      echo "  $CURSOR_HOOKS_FILE"
+      echo "  Skill tree deletion continues. Remove cursor-goal stop hook entries manually."
+    fi
   else
-    echo "[uninstall-goal] Warning: Python not found; remove stop hook from $CURSOR_HOOKS_FILE manually"
+    echo "[uninstall-goal] ACTION REQUIRED: Python not found; remove stop hook entries manually from:"
+    echo "  $CURSOR_HOOKS_FILE"
+    echo "  Skill tree deletion continues."
   fi
 fi
 
