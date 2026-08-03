@@ -192,7 +192,9 @@ def test_hooks_look_configured_true(
         '{"hooks":{"stop":[{"command":"stop_hook.cmd"}]}}',
         encoding="utf-8",
     )
-    monkeypatch.setattr(manage_mod.Path, "home", lambda: fake_home)
+    from cursor_goal import doctor as doctor_mod
+
+    monkeypatch.setattr(doctor_mod, "_user_home", lambda: fake_home)
     assert manage_mod._hooks_look_configured() is True
 
 
@@ -205,7 +207,9 @@ def test_hooks_look_configured_skill_without_hooks(
     skill = fake_home / ".cursor" / "skills" / "goal" / "scripts"
     skill.mkdir(parents=True)
     (skill / "stop_hook.py").write_text("#", encoding="utf-8")
-    monkeypatch.setattr(manage_mod.Path, "home", lambda: fake_home)
+    from cursor_goal import doctor as doctor_mod
+
+    monkeypatch.setattr(doctor_mod, "_user_home", lambda: fake_home)
     assert manage_mod._hooks_look_configured() is False
 
 
@@ -216,7 +220,9 @@ def test_hooks_look_configured_none(
 
     fake_home = tmp_path / "emptyhome"
     fake_home.mkdir()
-    monkeypatch.setattr(manage_mod.Path, "home", lambda: fake_home)
+    from cursor_goal import doctor as doctor_mod
+
+    monkeypatch.setattr(doctor_mod, "_user_home", lambda: fake_home)
     assert manage_mod._hooks_look_configured() is None
 
 
@@ -231,7 +237,9 @@ def test_marketplace_hooks_skill_only(
     (scripts / "stop_hook.py").write_text("#", encoding="utf-8")
     fake_home = tmp_path / "home"
     fake_home.mkdir()
-    monkeypatch.setattr(manage_mod.Path, "home", lambda: fake_home)
+    from cursor_goal import doctor as doctor_mod
+
+    monkeypatch.setattr(doctor_mod, "_user_home", lambda: fake_home)
     monkeypatch.setenv("CURSOR_PLUGIN_ROOT", str(plugin))
     assert manage_mod._marketplace_hooks_configured() is False
 
@@ -245,7 +253,9 @@ def test_marketplace_hooks_empty_plugin_root(
     plugin.mkdir()
     fake_home = tmp_path / "home"
     fake_home.mkdir()
-    monkeypatch.setattr(manage_mod.Path, "home", lambda: fake_home)
+    from cursor_goal import doctor as doctor_mod
+
+    monkeypatch.setattr(doctor_mod, "_user_home", lambda: fake_home)
     monkeypatch.setenv("CURSOR_PLUGIN_ROOT", str(plugin))
     assert manage_mod._marketplace_hooks_configured() is False
 
@@ -263,7 +273,9 @@ def test_marketplace_hooks_under_cursor_plugins(
         '{"hooks":{"stop":[{"command":"${CURSOR_PLUGIN_ROOT}/stop_hook.py"}]}}',
         encoding="utf-8",
     )
-    monkeypatch.setattr(manage_mod.Path, "home", lambda: fake_home)
+    from cursor_goal import doctor as doctor_mod
+
+    monkeypatch.setattr(doctor_mod, "_user_home", lambda: fake_home)
     monkeypatch.delenv("CURSOR_PLUGIN_ROOT", raising=False)
     assert manage_mod._marketplace_hooks_configured() is True
 
@@ -299,7 +311,9 @@ def test_marketplace_hooks_read_oserror(
     # No classic home skill; env root present but unreadable -> False
     fake_home = tmp_path / "home2"
     fake_home.mkdir()
-    monkeypatch.setattr(manage_mod.Path, "home", lambda: fake_home)
+    from cursor_goal import doctor as doctor_mod
+
+    monkeypatch.setattr(doctor_mod, "_user_home", lambda: fake_home)
     assert manage_mod._marketplace_hooks_configured() is False
 
 
@@ -323,7 +337,9 @@ def test_marketplace_hooks_and_stacking(
         '{"hooks":{"stop":[{"command":"stop_hook.py"}]}}',
         encoding="utf-8",
     )
-    monkeypatch.setattr(manage_mod.Path, "home", lambda: fake_home)
+    from cursor_goal import doctor as doctor_mod
+
+    monkeypatch.setattr(doctor_mod, "_user_home", lambda: fake_home)
     monkeypatch.setenv("CURSOR_PLUGIN_ROOT", str(plugin))
     assert manage_mod._marketplace_hooks_configured() is True
     assert manage_mod._classic_hooks_configured() is True
@@ -617,7 +633,9 @@ def test_hooks_look_configured_read_oserror(
             raise OSError("denied")
         return Path.read_text(self, *_a, **_k)
 
-    monkeypatch.setattr(manage_mod.Path, "home", lambda: fake_home)
+    from cursor_goal import doctor as doctor_mod
+
+    monkeypatch.setattr(doctor_mod, "_user_home", lambda: fake_home)
     monkeypatch.setattr(Path, "read_text", boom_read)
     assert manage_mod._hooks_look_configured() is None
 

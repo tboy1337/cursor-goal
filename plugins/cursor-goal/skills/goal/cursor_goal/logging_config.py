@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from typing import TextIO
 
+from cursor_goal.native_path import native_path
+
 _CONFIGURED = False
 _LOG_FILE_HANDLE: TextIO | None = None
 
@@ -25,8 +27,10 @@ def _default_log_path() -> Path:
     """Resolve default log path without importing state (avoids cycles)."""
     override = os.environ.get("CURSOR_GOAL_DATA")
     if override:
-        return Path(override).expanduser() / "cursor-goal.log"
-    return Path.home() / ".cursor-goal" / "data" / "cursor-goal.log"
+        return native_path(override) / "cursor-goal.log"
+    return native_path(
+        os.path.join(os.path.expanduser("~"), ".cursor-goal", "data")
+    ) / ("cursor-goal.log")
 
 
 def _maybe_chmod_log_file(path: Path) -> None:

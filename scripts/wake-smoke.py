@@ -84,7 +84,7 @@ def main() -> int:
         finally:
             try:
                 disarm(kill_loop=True)
-            except OSError as exc:
+            except Exception as exc:  # noqa: BLE001 — smoke must not fail on cleanup
                 print(f"wake smoke: disarm warning: {exc}", file=sys.stderr)
             thread.join(timeout=3)
             if loop_error:

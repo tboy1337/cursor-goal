@@ -23,11 +23,11 @@ from cursor_goal.fs_lock import GoalLockTimeoutError
 from cursor_goal.fs_lock import lock_acquire as _fs_lock_acquire
 from cursor_goal.fs_lock import lock_release as _fs_lock_release
 from cursor_goal.logging_config import get_logger
-from cursor_goal.path_trust import _absolute_without_resolve
-from cursor_goal.path_trust import _chmod_dir_private
-from cursor_goal.path_trust import _warn_if_world_writable
-from cursor_goal.path_trust import _windows_path_is_reparse_point
 from cursor_goal.path_trust import (
+    _absolute_without_resolve,
+    _chmod_dir_private,
+    _warn_if_world_writable,
+    _windows_path_is_reparse_point,
     acl_harden_failure_message,
     allow_any_workdir,
     assert_workdir_usable,

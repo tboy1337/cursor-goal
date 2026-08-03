@@ -22,13 +22,11 @@ from cursor_goal.doctor import _hooks_stacking_warning  # noqa: F401
 from cursor_goal.doctor import _is_absolute_interpreter_path  # noqa: F401
 from cursor_goal.doctor import _marketplace_hooks_configured  # noqa: F401
 from cursor_goal.doctor import _stale_baked_python_failures  # noqa: F401
-from cursor_goal.doctor import _validation_mode
-from cursor_goal.doctor import _wake_loop_shell_hint
-from cursor_goal.doctor import cmd_doctor
+from cursor_goal.doctor import _validation_mode, _wake_loop_shell_hint, cmd_doctor
 from cursor_goal.logging_config import get_logger
+from cursor_goal.paths import skill_root  # noqa: F401 — re-export
 from cursor_goal.paths import (
     harness_cmd_report,
-    skill_root,  # noqa: F401 — re-export
     wake_loop_invocation,
 )
 from cursor_goal.state import (

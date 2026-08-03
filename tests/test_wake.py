@@ -565,7 +565,9 @@ def test_windows_kill_refuses_unowned(
     monkeypatch.setattr(wake_process_mod, "_read_pid_record", lambda: None)
     monkeypatch.setattr(wake_process_mod, "_pid_alive", lambda _pid: True)
     monkeypatch.setattr(wake_process_mod.os, "name", "nt")
-    monkeypatch.setattr(wake_process_mod, "_windows_pid_looks_owned", lambda _pid: False)
+    monkeypatch.setattr(
+        wake_process_mod, "_windows_pid_looks_owned", lambda _pid: False
+    )
     calls: list[object] = []
     monkeypatch.setattr(
         wake_process_mod.subprocess,

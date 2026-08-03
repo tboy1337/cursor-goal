@@ -33,6 +33,11 @@ from cursor_goal.wake import wake_enabled
 logger = get_logger("cursor_goal.doctor")
 
 
+def _user_home() -> Path:
+    """Host-native home directory (safe under ``os.name`` monkeypatches)."""
+    return native_path(os.path.expanduser("~"))
+
+
 def _validation_mode(state: GoalState) -> str:
     """Return argv|shell|none|denied for status/doctor."""
     cmd = (state.validation_command or "").strip()
@@ -58,7 +63,7 @@ def _wake_loop_shell_hint() -> str:
 
 def _classic_hooks_configured() -> bool | None:
     """Return True/False if classic hooks.json is detectable; None if unknown."""
-    hooks = Path.home() / ".cursor" / "hooks.json"
+    hooks = _user_home() / ".cursor" / "hooks.json"
     if hooks.is_file():
         try:
             text = hooks.read_text(encoding="utf-8")
@@ -68,7 +73,7 @@ def _classic_hooks_configured() -> bool | None:
             "stop_hook" in text or "cursor_goal" in text or "run_goal" in text
         )
     skill_hook = (
-        Path.home() / ".cursor" / "skills" / "goal" / "scripts" / "stop_hook.py"
+        _user_home() / ".cursor" / "skills" / "goal" / "scripts" / "stop_hook.py"
     )
     if skill_hook.is_file():
         return False
@@ -80,9 +85,9 @@ def _marketplace_hooks_configured() -> bool | None:
     roots: list[Path] = []
     env_root = (os.environ.get("CURSOR_PLUGIN_ROOT") or "").strip()
     if env_root:
-        roots.append(Path(env_root).expanduser())
+        roots.append(native_path(env_root))
     # Common Cursor user plugin layouts (best-effort).
-    cursor_home = Path.home() / ".cursor"
+    cursor_home = _user_home() / ".cursor"
     for candidate in (
         cursor_home / "plugins" / "cursor-goal",
         cursor_home / "plugins" / "cache" / "cursor-goal",
