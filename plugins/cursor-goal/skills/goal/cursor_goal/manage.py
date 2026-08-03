@@ -8,6 +8,7 @@ sites (including tests) keep working unchanged.
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from collections.abc import Callable
@@ -286,14 +287,16 @@ def cmd_create(argv: list[str]) -> int:  # pylint: disable=too-many-branches
             "Use --force to overwrite, or clear first.",
             file=sys.stderr,
         )
-        print(f"[goal] Existing condition: {created.condition}", file=sys.stderr)
+        safe_existing = redact_secrets(created.condition, max_chars=None)
+        print(f"[goal] Existing condition: {safe_existing}", file=sys.stderr)
         print(f"[goal] Existing status: {created.status}", file=sys.stderr)
         return 1
 
+    safe_condition = redact_secrets(args.condition, max_chars=None)
     logger.info(
         "Created goal condition=%r budget=%s wake_budget=%s shell_ok=%s "
         "workdir=%r validation=%r",
-        args.condition,
+        redact_secrets(args.condition, max_chars=200),
         turn_budget,
         wake_budget,
         args.shell_ok,
@@ -302,7 +305,7 @@ def cmd_create(argv: list[str]) -> int:  # pylint: disable=too-many-branches
     )
 
     print("[goal] Goal created:")
-    print(f"  Condition: {args.condition}")
+    print(f"  Condition: {safe_condition}")
     if args.test_cmd:
         print(f"  Validation: {redact_command(args.test_cmd)}")
         mode = _validation_mode(state)
@@ -318,9 +321,9 @@ def cmd_create(argv: list[str]) -> int:  # pylint: disable=too-many-branches
     print(f"  Budget: {turn_budget} turns")
     print(f"  Wake budget: {wake_budget} ticks")
     print(f"  Shell ok: {str(args.shell_ok).lower()}")
-    print("  Status: pursuing")
-
+    # Status reflects real state: wake-on create stays paused until activate.
     if wake_on:
+        print("  Status: paused (awaiting wake arm)")
         arm_result = _maybe_arm_wake()
         if arm_result.status == "failed":
             return _pause_after_arm_failure(arm_result.detail)
@@ -341,8 +344,15 @@ def cmd_create(argv: list[str]) -> int:  # pylint: disable=too-many-branches
                     file=sys.stderr,
                 )
                 return _pause_after_arm_failure(f"activate after arm failed: {exc}")
+            print("  Status: pursuing")
     else:
         _maybe_arm_wake()
+        print("  Status: pursuing")
+    if not os.environ.get("CURSOR_GOAL_LOG_FILE", "").strip():
+        print(
+            "[goal] Tip: set CURSOR_GOAL_LOG_FILE=1 for durable diagnostics "
+            "while debugging stalls."
+        )
     return 0
 
 
@@ -372,7 +382,7 @@ def cmd_status(_argv: list[str]) -> int:  # pylint: disable=too-many-branches
     print("[goal] Status Report")
     print(f"  Active: {str(display_active).lower()}")
     print(f"  Status: {state.status}")
-    print(f"  Condition: {state.condition}")
+    print(f"  Condition: {redact_secrets(state.condition, max_chars=None)}")
     print(f"  Progress: {state.turns_used} / {state.turn_budget} turns")
     print(f"  Wake ticks: {state.wake_ticks} / {state.wake_budget}")
     print(f"  Schema: {state.schema_version}")
@@ -509,7 +519,15 @@ def cmd_resume(_argv: list[str]) -> int:
     if result is None:
         print("[goal] No goal to resume.")
         return 1
-    print(f"[goal] Goal resumed. Continuing toward: {result.condition}")
+    print(
+        "[goal] Goal resumed. Continuing toward: "
+        f"{redact_secrets(result.condition, max_chars=None)}"
+    )
+    if wake_enabled():
+        print(
+            "[goal] Confirm `wake status` continuation_ready=true before other work. "
+            "Tip: CURSOR_GOAL_LOG_FILE=1 for durable diagnostics."
+        )
     return 0
 
 
@@ -559,7 +577,10 @@ def cmd_done(argv: list[str]) -> int:
         print("[goal] No active goal to mark done.")
         return 1
     wake_disarm(kill_loop=True)
-    print(f"[goal] Goal achieved in {state.turns_used} turns: {state.condition}")
+    print(
+        f"[goal] Goal achieved in {state.turns_used} turns: "
+        f"{redact_secrets(state.condition, max_chars=None)}"
+    )
     return 0
 
 

@@ -963,16 +963,26 @@ def test_stop_skips_last_response_when_insecure(
     assert not (goal_home / "last-stop-response.json").is_file()
 
 
-def test_scrubbed_env_adds_comspec_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_scrubbed_env_adds_comspec_on_windows(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     from cursor_goal import validation as val_mod
 
     monkeypatch.setattr(val_mod.os, "name", "nt")
+    system_root = tmp_path / "Windows"
+    cmd = system_root / "System32" / "cmd.exe"
+    cmd.parent.mkdir(parents=True)
+    cmd.write_text("", encoding="utf-8")
     scrubbed = val_mod.scrubbed_validation_env(
-        {"PATH": "C:\\Windows", "ComSpec": "C:\\Windows\\system32\\cmd.exe"}
+        {
+            "PATH": "C:\\Windows",
+            "SystemRoot": str(system_root),
+            "COMSPEC": "C:\\evil\\cmd.exe",
+            "ComSpec": "C:\\evil\\cmd.exe",
+        }
     )
-    assert scrubbed.get("COMSPEC") == "C:\\Windows\\system32\\cmd.exe" or scrubbed.get(
-        "ComSpec"
-    )
+    assert scrubbed.get("COMSPEC") == str(cmd)
+    assert "ComSpec" not in scrubbed
 
 
 def test_stop_redact_without_condition_marker() -> None:

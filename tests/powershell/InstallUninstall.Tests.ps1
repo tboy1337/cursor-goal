@@ -91,6 +91,8 @@ Describe 'Write-GoalStopHookCmd' {
             $body | Should -Match '%CGP%'
             $body | Should -Match 'must be an absolute path'
             $body | Should -Match 'is not Python 3\.12\+'
+            $body | Should -Match 'findstr /R'
+            $body | Should -Match 'unsafe cmd metacharacters'
         }
         finally {
             Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
@@ -111,6 +113,7 @@ Describe 'Write-GoalStopHookCmd' {
             $body | Should -Match 'PYTHONUNBUFFERED=1'
             $body.Contains($py) | Should -BeTrue
             $body | Should -Match '"%CGP%" -u'
+            $body | Should -Match 'findstr /R'
         }
         finally {
             Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
@@ -135,6 +138,8 @@ Describe 'Write-GoalWakeLoopCmd' {
             $body | Should -Match 'goto :use_cgp'
             $body | Should -Match '%CGP%'
             $body | Should -Match 'must be an absolute path'
+            $body | Should -Match 'findstr /R'
+            $body | Should -Match 'unsafe cmd metacharacters'
         }
         finally {
             Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
@@ -154,6 +159,50 @@ Describe 'Write-GoalWakeLoopCmd' {
             $body | Should -Match '"with space"'
             $body | Should -Match 'wake loop'
             $body | Should -Match '"%CGP%" -u'
+        }
+        finally {
+            Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+Describe 'Protect-GoalDataDirAcl' {
+    It 'hardens an existing data dir via vendored package' {
+        $dir = Join-Path ([IO.Path]::GetTempPath()) ("cg-acl-" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        try {
+            $installDir = Join-Path $dir 'skill'
+            $dataDir = Join-Path $dir 'data'
+            New-Item -ItemType Directory -Force -Path (Join-Path $installDir 'scripts') | Out-Null
+            New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
+            Copy-Item -Recurse (Join-Path $RepoRoot 'src\cursor_goal') (Join-Path $installDir 'cursor_goal')
+            $python = Find-GoalPython
+            $code = Protect-GoalDataDirAcl -Python $python -InstallDir $installDir -DataDir $dataDir
+            $code | Should -Be 0
+            Test-Path (Join-Path $installDir 'scripts\.tmp') | Should -BeTrue
+        }
+        finally {
+            Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'returns 1 when python harden exits non-zero' {
+        $dir = Join-Path ([IO.Path]::GetTempPath()) ("cg-acl-fail-" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        try {
+            $installDir = Join-Path $dir 'skill'
+            $dataDir = Join-Path $dir 'data'
+            New-Item -ItemType Directory -Force -Path (Join-Path $installDir 'scripts') | Out-Null
+            New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
+            # Minimal package so import may fail or we use a broken python wrapper.
+            $badPy = Join-Path $dir 'bad.py'
+            Set-Content -Path $badPy -Value 'raise SystemExit(9)' -Encoding utf8
+            $python = @{ Exe = (Find-GoalPython).Exe; PrefixArgs = @('-3', '-u', $badPy) }
+            # PrefixArgs run before the acl script args — force non-zero by using a
+            # python that immediately exits: replace Exe with cmd that fails.
+            $python = @{ Exe = 'cmd.exe'; PrefixArgs = @('/c', 'exit', '7') }
+            $code = Protect-GoalDataDirAcl -Python $python -InstallDir $installDir -DataDir $dataDir
+            $code | Should -Be 1
         }
         finally {
             Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
@@ -228,9 +277,13 @@ Describe 'Invoke-GoalInstall' {
         $cmdBody | Should -Match 'stop_hook\.py'
         $cmdBody | Should -Match 'goto :use_cgp'
         $cmdBody | Should -Match '%CGP%'
+        $cmdBody | Should -Match 'findstr /R'
+        $cmdBody | Should -Match 'unsafe cmd metacharacters'
         $wakeCmd = Get-Content -Raw (Join-Path $installDir 'scripts\wake_loop.cmd')
         $wakeCmd | Should -Match 'goto :use_cgp'
         $wakeCmd | Should -Match '%CGP%'
+        $wakeCmd | Should -Match 'findstr /R'
+        Test-Path (Join-Path $installDir 'scripts\.tmp') | Should -BeTrue
         $bytes = [System.IO.File]::ReadAllBytes($hooksPath)
         if ($bytes.Length -ge 3) {
             $hasBom = ($bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)

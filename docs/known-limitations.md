@@ -40,7 +40,7 @@ No multi-tenant / shared-host isolation. Anyone who can write `~/.cursor-goal/da
 
 ## Marketplace vs classic Windows install
 
-Marketplace `stop_hook.cmd` / `wake_loop.cmd` may fall back to PATH discovery, but **`manage doctor` requires an absolute `CURSOR_GOAL_PYTHON` (Python 3.12+)** for Windows marketplace installs — PATH-only is not treated as success. Classic `install-goal.ps1` bakes an absolute interpreter — preferred for individuals on Windows. Marketplace/template launchers execute quote-stripped `%CGP%` (not the raw env var) and doctor rejects unsafe cmd metacharacters in `CURSOR_GOAL_PYTHON`.
+Marketplace `stop_hook.cmd` / `wake_loop.cmd` may fall back to PATH discovery, but **`manage doctor` requires an absolute `CURSOR_GOAL_PYTHON` (Python 3.12+)** for Windows marketplace installs — PATH-only is not treated as success. Classic `install-goal.ps1` bakes an absolute interpreter — preferred for individuals on Windows. Classic and marketplace/template launchers execute quote-stripped `%CGP%` (not the raw env var), reject unsafe cmd metacharacters in `CURSOR_GOAL_PYTHON`, and doctor rejects the same. Classic install also hardens the data-dir ACL at install time and writes helper scripts under the install tree's `scripts\.tmp` (not shared `%TEMP%`). Residual risk: `echo %CGP%| findstr` can expand nested `%VAR%` inside a crafted path — keep `CURSOR_GOAL_PYTHON` free of percent signs.
 
 Teams marketplace installs are **standalone**: resolve the harness with `manage harness-cmd` or `$CURSOR_PLUGIN_ROOT/skills/goal/scripts/run_goal.py`. Do not stack classic `~/.cursor/hooks.json` entries with marketplace plugin hooks — `manage doctor` **FAIL**s when both look configured. See [teams-agpl.md](teams-agpl.md).
 

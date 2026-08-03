@@ -113,7 +113,7 @@ function Write-GoalStopHookCmd {
                 }) -join ' ') + ' '
     }
     else { '' }
-    # Classic bake: absolute interpreter + marketplace-parity CGP absolute/3.12 gates.
+    # Classic bake: absolute interpreter + marketplace-parity CGP absolute/3.12/metachar gates.
     $content = @"
 @echo off
 setlocal EnableExtensions
@@ -129,6 +129,11 @@ if "%CGP:~1,1%"==":" set "CGP_ABS=1"
 if "%CGP:~0,2%"=="\\" set "CGP_ABS=1"
 if not defined CGP_ABS (
   echo [cursor-goal] CURSOR_GOAL_PYTHON must be an absolute path >&2
+  exit /b 1
+)
+echo %CGP%| findstr /R "[&|<>^]" >nul 2>&1
+if not errorlevel 1 (
+  echo [cursor-goal] CURSOR_GOAL_PYTHON contains unsafe cmd metacharacters >&2
   exit /b 1
 )
 "%CGP%" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)" >nul 2>&1
@@ -174,6 +179,11 @@ if "%CGP:~1,1%"==":" set "CGP_ABS=1"
 if "%CGP:~0,2%"=="\\" set "CGP_ABS=1"
 if not defined CGP_ABS (
   echo [cursor-goal] CURSOR_GOAL_PYTHON must be an absolute path >&2
+  exit /b 1
+)
+echo %CGP%| findstr /R "[&|<>^]" >nul 2>&1
+if not errorlevel 1 (
+  echo [cursor-goal] CURSOR_GOAL_PYTHON contains unsafe cmd metacharacters >&2
   exit /b 1
 )
 "%CGP%" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)" >nul 2>&1
@@ -253,7 +263,10 @@ function Invoke-GoalHooksConfigMerge {
         [Parameter(Mandatory = $true)][string]$HooksFile,
         [Parameter(Mandatory = $true)][string]$HookCommand
     )
-    $tmpPy = Join-Path ([IO.Path]::GetTempPath()) ("cg-hooks-" + [guid]::NewGuid().ToString('N') + ".py")
+    # Prefer install-dir private temp over shared %TEMP% (local TOCTOU class).
+    $tmpDir = Join-Path $InstallDir "scripts\.tmp"
+    New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+    $tmpPy = Join-Path $tmpDir ("cg-hooks-" + [guid]::NewGuid().ToString('N') + ".py")
     # Single-quoted here-string: no PowerShell expansion of Python source.
     $script = @'
 import sys
@@ -267,6 +280,48 @@ print("merged")
         Write-Utf8NoBomFile -Path $tmpPy -Content $script
         $null = & $Python.Exe @($Python.PrefixArgs) $tmpPy $InstallDir $HooksFile $HookCommand 2>&1
         return [int]$LASTEXITCODE
+    }
+    finally {
+        Remove-Item -Force $tmpPy -ErrorAction SilentlyContinue
+    }
+}
+
+function Protect-GoalDataDirAcl {
+    <#
+    .SYNOPSIS
+    Harden ~/.cursor-goal/data ACL at install time (parity with Unix chmod 700).
+    #>
+    [CmdletBinding()]
+    [OutputType([int])]
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Python,
+        [Parameter(Mandatory = $true)][string]$InstallDir,
+        [Parameter(Mandatory = $true)][string]$DataDir
+    )
+    $tmpDir = Join-Path $InstallDir "scripts\.tmp"
+    New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+    $tmpPy = Join-Path $tmpDir ("cg-acl-" + [guid]::NewGuid().ToString('N') + ".py")
+    $script = @'
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from cursor_goal.win_acl import harden_windows_acl
+harden_windows_acl(Path(sys.argv[2]))
+print("hardened")
+'@
+    try {
+        Write-Utf8NoBomFile -Path $tmpPy -Content $script
+        $null = & $Python.Exe @($Python.PrefixArgs) $tmpPy $InstallDir $DataDir 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-GoalErr ("Failed to harden data dir ACL (exit {0}): {1}" -f $LASTEXITCODE, $DataDir)
+            return 1
+        }
+        Write-GoalInfo "Hardened data dir ACL: $DataDir"
+        return 0
+    }
+    catch {
+        Write-GoalErr ("Failed to harden data dir ACL: {0}" -f $_)
+        return 1
     }
     finally {
         Remove-Item -Force $tmpPy -ErrorAction SilentlyContinue
@@ -359,6 +414,12 @@ function Invoke-GoalInstall {
         Copy-Item (Join-Path $sourceSkill "scripts\wake_loop.sh") (Join-Path $installDir "scripts\wake_loop.sh") -Force
     }
 
+    $aclCode = Protect-GoalDataDirAcl -Python $Python -InstallDir $installDir -DataDir $dataDir
+    if ($aclCode -ne 0) {
+        Write-GoalErr "Install aborted: data directory ACL harden failed."
+        return 1
+    }
+
     $stopScript = Join-Path $installDir "scripts\stop_hook.py"
     $stopCmd = Join-Path $installDir "scripts\stop_hook.cmd"
     Write-GoalStopHookCmd -Python $Python -StopScriptPy $stopScript -StopScriptCmd $stopCmd
@@ -367,7 +428,9 @@ function Invoke-GoalInstall {
     Write-GoalWakeLoopCmd -Python $Python -RunGoalPy $runGoal -WakeLoopCmd $wakeCmd
     $hookCommand = Get-GoalHookCommand -Python $Python -StopScript $stopScript
 
-    $tmpVer = Join-Path ([IO.Path]::GetTempPath()) ("cg-ver-" + [guid]::NewGuid().ToString('N') + ".py")
+    $tmpDir = Join-Path $installDir "scripts\.tmp"
+    New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+    $tmpVer = Join-Path $tmpDir ("cg-ver-" + [guid]::NewGuid().ToString('N') + ".py")
     $versionScript = @'
 import sys
 from pathlib import Path

@@ -103,7 +103,7 @@ Then:
   - `force: true` → `--force` (replace existing goal)
   - If parse lacks `allow_shell` but the raw user text contains `--allow-shell` / `--deny-shell`, forward those flags from the raw input before create.
 
-After **every** `create` or `resume`, complete the **Wake handshake** below **before** other work. **Do not skip.** If create/resume exits non-zero (wake arm failed → goal paused), fix the error and `manage resume` — do not work as if pursuing. If `wake status` shows `continuation_ready=false` while pursuing, refuse further goal work until the loop is alive. Then start working toward the condition.
+After **every** `create` or `resume`, complete the **Wake handshake** below **before** other work. **Do not skip.** Create with wake enabled prints `Status: paused (awaiting wake arm)` until arm/activate succeeds, then `Status: pursuing`. If create/resume exits non-zero (wake arm failed → goal paused), fix the error and `manage resume` — do not work as if pursuing. If `wake status` shows `continuation_ready=false` while pursuing, refuse further goal work until the loop is alive. Tip: `CURSOR_GOAL_LOG_FILE=1` for durable diagnostics. Then start working toward the condition.
 
 ## Command Reference
 

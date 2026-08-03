@@ -972,9 +972,12 @@ def test_blocking_checklist_on_create(
     monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
     code, out, _err = run_cli("manage", "create", "checklist")
     assert code == 0
+    assert "Status: paused (awaiting wake arm)" in out
+    assert "Status: pursuing" in out
     assert "GOAL_WAKE_REQUIRED " in out
     assert "BLOCKING CHECKLIST" in out
     assert "continuation_ready" in out or "pid_alive" in out
+    assert "CURSOR_GOAL_LOG_FILE" in out
     # Machine-readable event must be parseable JSON after the prefix.
     line = next(
         line for line in out.splitlines() if line.startswith("GOAL_WAKE_REQUIRED ")
@@ -984,6 +987,29 @@ def test_blocking_checklist_on_create(
     assert payload["notify_pattern"] == payload["pattern"]
     assert "wake" in payload["command"] and "loop" in payload["command"]
     assert "interval_s" in payload
+
+
+def test_create_activate_lock_timeout(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+    from cursor_goal.state import GoalLockTimeoutError
+
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+    monkeypatch.setattr(
+        manage_mod,
+        "_maybe_arm_wake",
+        lambda: manage_mod._ArmWakeResult(status="ok", config={"interval_s": 15}),
+    )
+    monkeypatch.setattr(
+        manage_mod,
+        "mutate_goal",
+        lambda _m: (_ for _ in ()).throw(GoalLockTimeoutError("locked")),
+    )
+    monkeypatch.setattr(manage_mod.time, "sleep", lambda _s: None)
+    code, _out, err = run_cli("manage", "create", "activate fail")
+    assert code == 1
+    assert "wake armed but could not activate" in err or "wake arm failed" in err
 
 
 def test_normalize_workdir_relative_and_empty(
@@ -1447,3 +1473,302 @@ def test_pause_after_arm_failure_exhausted(
     monkeypatch.setattr(manage_mod.time, "sleep", lambda _s: None)
     code = manage_mod._pause_after_arm_failure("arm boom")
     assert code == 1
+
+
+def test_validation_mode_denied_and_none() -> None:
+    from cursor_goal.manage import _validation_mode
+    from cursor_goal.state import GoalState
+
+    assert _validation_mode(GoalState(validation_command="")) == "none"
+    assert (
+        _validation_mode(
+            GoalState(validation_command="echo a && echo b", shell_ok=False)
+        )
+        == "denied"
+    )
+
+
+def test_marketplace_walk_hits_max_hooks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import doctor as doctor_mod
+
+    base = tmp_path / "cache"
+    base.mkdir()
+    # Many sibling dirs each with hooks/hooks.json — walk stops at MAX_HOOKS.
+    for i in range(doctor_mod._MARKETPLACE_WALK_MAX_HOOKS + 5):
+        hooks = base / f"plugin-{i}" / "hooks"
+        hooks.mkdir(parents=True)
+        (hooks / "hooks.json").write_text(
+            '{"hooks":{"stop":[{"command":"stop_hook.py"}]}}',
+            encoding="utf-8",
+        )
+    found = doctor_mod._collect_marketplace_hook_files(base)
+    assert len(found) == doctor_mod._MARKETPLACE_WALK_MAX_HOOKS
+
+
+def test_marketplace_walk_depth_cap(tmp_path: Path) -> None:
+    from cursor_goal import doctor as doctor_mod
+
+    current = tmp_path / "cache"
+    for _ in range(doctor_mod._MARKETPLACE_WALK_MAX_DEPTH + 3):
+        current = current / "nest"
+        current.mkdir(parents=True, exist_ok=True)
+    hooks = current / "hooks"
+    hooks.mkdir(parents=True)
+    (hooks / "hooks.json").write_text(
+        '{"hooks":{"stop":[{"command":"stop_hook.py"}]}}',
+        encoding="utf-8",
+    )
+    found = doctor_mod._collect_marketplace_hook_files(tmp_path / "cache")
+    assert found == []
+
+
+def test_marketplace_walk_iterdir_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import doctor as doctor_mod
+
+    base = tmp_path / "cache"
+    base.mkdir()
+    real_iterdir = Path.iterdir
+
+    def boom(self: Path):  # type: ignore[no-untyped-def]
+        if self == base:
+            raise OSError("denied")
+        return real_iterdir(self)
+
+    monkeypatch.setattr(Path, "iterdir", boom)
+    assert doctor_mod._collect_marketplace_hook_files(base) == []
+
+
+def test_doctor_data_dir_access_failure(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import doctor as doctor_mod
+
+    del goal_home
+
+    def boom(*, check_writable: bool = True) -> Path:
+        del check_writable
+        raise OSError("no access")
+
+    monkeypatch.setattr(doctor_mod, "data_dir", boom)
+    monkeypatch.setattr(doctor_mod, "_hooks_look_configured", lambda: True)
+    code, _out, err = run_cli("manage", "doctor")
+    assert code == 1
+    assert "Cannot access data dir" in err
+    assert "CURSOR_GOAL_LOG_FILE" in err
+
+
+def test_manage_status_redacts_secretish_condition(goal_home: Path) -> None:
+    assert (
+        run_cli("manage", "create", "deploy with api_key=supersecret123")[0] == 0
+    )
+    code, out, _err = run_cli("manage", "status")
+    assert code == 0
+    assert "supersecret123" not in out
+    assert "<redacted>" in out
+
+
+def test_manage_create_conflict_redacts_condition(goal_home: Path) -> None:
+    assert run_cli("manage", "create", "token=leakme-please")[0] == 0
+    code, _out, err = run_cli("manage", "create", "second")
+    assert code == 1
+    assert "leakme-please" not in err
+    assert "<redacted>" in err
+
+
+def test_marketplace_walk_skips_files_and_dotdirs(tmp_path: Path) -> None:
+    from cursor_goal import doctor as doctor_mod
+
+    base = tmp_path / "cache"
+    base.mkdir()
+    (base / "readme.txt").write_text("x", encoding="utf-8")
+    hidden = base / ".hidden" / "hooks"
+    hidden.mkdir(parents=True)
+    (hidden / "hooks.json").write_text(
+        '{"hooks":{"stop":[{"command":"stop_hook.py"}]}}',
+        encoding="utf-8",
+    )
+    real = base / "real" / "hooks"
+    real.mkdir(parents=True)
+    (real / "hooks.json").write_text(
+        '{"hooks":{"stop":[{"command":"stop_hook.py"}]}}',
+        encoding="utf-8",
+    )
+    found = doctor_mod._collect_marketplace_hook_files(base)
+    assert len(found) == 1
+    assert "real" in str(found[0])
+
+
+def test_install_version_missing_on_classic_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import doctor as doctor_mod
+
+    skill = tmp_path / ".cursor" / "skills" / "goal"
+    scripts = skill / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "run_goal.py").write_text("# stub\n", encoding="utf-8")
+    monkeypatch.setattr(doctor_mod, "skill_root", lambda: skill)
+    fails = doctor_mod._install_version_failures()
+    assert fails
+    assert "VERSION missing" in fails[0]
+
+
+def test_install_version_read_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import doctor as doctor_mod
+
+    skill = tmp_path / "skill"
+    scripts = skill / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "run_goal.py").write_text("# stub\n", encoding="utf-8")
+    version = skill / "VERSION"
+    version.write_text("1.0.0\n", encoding="utf-8")
+    monkeypatch.setattr(doctor_mod, "skill_root", lambda: skill)
+    real_read = Path.read_text
+
+    def boom(self: Path, *a: object, **k: object) -> str:
+        if self.name == "VERSION":
+            raise OSError("denied")
+        return real_read(self, *a, **k)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "read_text", boom)
+    fails = doctor_mod._install_version_failures()
+    assert fails
+    assert "Could not read" in fails[0]
+
+
+def test_doctor_goal_lock_timeout(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import doctor as doctor_mod
+    from cursor_goal.state import GoalLockTimeoutError
+
+    del goal_home
+    monkeypatch.setattr(doctor_mod, "_hooks_look_configured", lambda: True)
+    monkeypatch.setattr(
+        doctor_mod,
+        "snapshot_goal",
+        lambda **_k: (_ for _ in ()).throw(GoalLockTimeoutError("locked")),
+    )
+    code, _out, err = run_cli("manage", "doctor")
+    assert code == 1
+    assert "goal.lock timeout" in err
+
+
+def test_doctor_shell_mode_and_heartbeat_warnings(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import doctor as doctor_mod
+
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+    assert (
+        run_cli(
+            "manage",
+            "create",
+            "shell goal",
+            "--test",
+            "echo a && echo b",
+            "--allow-shell",
+        )[0]
+        == 0
+    )
+    monkeypatch.setattr(doctor_mod, "_hooks_look_configured", lambda: True)
+    monkeypatch.setattr(
+        doctor_mod,
+        "wake_status_info",
+        lambda: {
+            "armed": True,
+            "pid_alive": True,
+            "continuation_ready": True,
+            "continuation_reason": "heartbeat_stale",
+            "heartbeat_stale": True,
+            "command": "wake loop",
+            "notify_pattern": "^AGENT_GOAL_WAKE",
+            "interval_s": 15,
+        },
+    )
+    code, out, _err = run_cli("manage", "doctor")
+    assert code == 0
+    assert "Shell-mode validation" in out or "shell" in out.lower()
+    assert "heartbeat_stale" in out
+
+
+def test_create_skips_log_tip_when_log_file_set(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CURSOR_GOAL_LOG_FILE", "1")
+    code, out, _err = run_cli("manage", "create", "logged")
+    assert code == 0
+    assert "Tip: set CURSOR_GOAL_LOG_FILE" not in out
+
+
+def test_create_deny_shell_env_message(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CURSOR_GOAL_DENY_SHELL", "1")
+    code, _out, err = run_cli("manage", "create", "x", "--test", "echo a && echo b")
+    assert code == 1
+    assert "CURSOR_GOAL_DENY_SHELL" in err
+
+
+def test_install_version_skill_root_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import doctor as doctor_mod
+
+    monkeypatch.setattr(
+        doctor_mod,
+        "skill_root",
+        lambda: (_ for _ in ()).throw(ValueError("unresolved")),
+    )
+    assert doctor_mod._install_version_failures() == []
+
+    empty = tmp_path / "empty-skill"
+    empty.mkdir()
+    monkeypatch.setattr(doctor_mod, "skill_root", lambda: empty)
+    assert doctor_mod._install_version_failures() == []
+
+    plugin_skill = tmp_path / "plugins" / "cursor-goal" / "skills" / "goal"
+    scripts = plugin_skill / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "run_goal.py").write_text("# stub\n", encoding="utf-8")
+    monkeypatch.setattr(doctor_mod, "skill_root", lambda: plugin_skill)
+    assert doctor_mod._install_version_failures() == []
+
+
+def test_doctor_unsafe_cursor_goal_python(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import doctor as doctor_mod
+
+    del goal_home
+    monkeypatch.setattr(doctor_mod.os, "name", "nt")
+    monkeypatch.setenv("CURSOR_GOAL_PYTHON", r"C:\Python\python.exe & calc.exe")
+    monkeypatch.setattr(doctor_mod, "_hooks_look_configured", lambda: True)
+    monkeypatch.setattr(doctor_mod, "_marketplace_hooks_configured", lambda: False)
+    monkeypatch.setattr(doctor_mod, "_stale_baked_python_failures", lambda: [])
+    code, _out, err = run_cli("manage", "doctor")
+    assert code == 1
+    assert "unsafe cmd metacharacters" in err
+
+
+def test_doctor_workdir_unusable_warning(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import doctor as doctor_mod
+
+    assert run_cli("manage", "create", "wd")[0] == 0
+    monkeypatch.setattr(doctor_mod, "_hooks_look_configured", lambda: True)
+    monkeypatch.setattr(
+        doctor_mod,
+        "assert_workdir_usable",
+        lambda _w: (_ for _ in ()).throw(ValueError("workdir gone")),
+    )
+    code, out, _err = run_cli("manage", "doctor")
+    assert code == 0
+    assert "workdir gone" in out

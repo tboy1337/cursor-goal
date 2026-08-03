@@ -230,6 +230,19 @@ def test_plugin_manifests_and_hooks_contract() -> None:
     assert "WARNING" in wake_cmd
     assert '"%CGP%" -u' in wake_cmd
     assert '"%CURSOR_GOAL_PYTHON%" -u' not in wake_cmd
+    assert 'findstr /R "[&|<>^]"' in stop_cmd
+    assert "unsafe cmd metacharacters" in stop_cmd
+    assert 'findstr /R "[&|<>^]"' in wake_cmd
+
+
+def test_classic_install_ps1_cgp_metachar_parity() -> None:
+    """Classic install-goal.ps1 must bake marketplace-parity CGP metachar gates."""
+    root = Path(__file__).resolve().parents[1]
+    ps1 = (root / "scripts" / "install-goal.ps1").read_text(encoding="utf-8")
+    assert ps1.count('findstr /R "[&|<>^]"') >= 2
+    assert "unsafe cmd metacharacters" in ps1
+    assert "Protect-GoalDataDirAcl" in ps1
+    assert r"scripts\.tmp" in ps1
 
 
 def test_sync_plugin_tree_check() -> None:
@@ -257,8 +270,8 @@ def test_compare_file_ignores_crlf_vs_lf(tmp_path: Path) -> None:
     right = tmp_path / "right" / "VERSION"
     left.parent.mkdir()
     right.parent.mkdir()
-    left.write_bytes(b"2.14.0\n")
-    right.write_bytes(b"2.14.0\r\n")
+    left.write_bytes(b"2.15.0\n")
+    right.write_bytes(b"2.15.0\r\n")
     assert mod._compare_file(left, right, Path("VERSION")) is None
 
     right.write_bytes(b"9.9.9\r\n")
@@ -326,7 +339,7 @@ def test_check_version_sync_detects_readme_pin_drift(tmp_path: Path) -> None:
     # Isolated helper: conflicting pins raise.
     bad = tmp_path / "README.md"
     bad.write_text(
-        "git clone --branch v1.0.0 x\ngit clone --branch v2.14.0 y\n",
+        "git clone --branch v1.0.0 x\ngit clone --branch v2.15.0 y\n",
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="Conflicting README"):

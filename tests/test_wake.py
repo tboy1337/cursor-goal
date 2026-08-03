@@ -1367,3 +1367,71 @@ def test_record_agent_nudge_write_oserror(
 
 def test_nudge_within_coalesce_none() -> None:
     assert wake_mod._nudge_within_coalesce_window(None) is False
+
+
+def test_heartbeat_stale_typing_edges() -> None:
+    """Non-string / invalid ISO / string interval must not raise."""
+    assert (
+        wake_mod._heartbeat_stale(
+            armed=True,
+            pid_alive=True,
+            last_emit_at=12345,
+            interval_s=15,
+        )
+        is False
+    )
+    assert (
+        wake_mod._heartbeat_stale(
+            armed=True,
+            pid_alive=True,
+            last_emit_at="not-an-iso",
+            interval_s=15,
+        )
+        is False
+    )
+    assert (
+        wake_mod._heartbeat_stale(
+            armed=True,
+            pid_alive=True,
+            last_emit_at="2000-01-01T00:00:00+00:00",
+            interval_s="5",
+        )
+        is True
+    )
+    assert (
+        wake_mod._heartbeat_stale(
+            armed=True,
+            pid_alive=True,
+            last_emit_at="2000-01-01T00:00:00+00:00",
+            interval_s="nope",
+        )
+        is True
+    )
+    assert (
+        wake_mod._heartbeat_stale(
+            armed=True,
+            pid_alive=True,
+            last_emit_at="2000-01-01T00:00:00+00:00",
+            interval_s=True,  # bool must not be treated as int
+        )
+        is True
+    )
+    assert (
+        wake_mod._heartbeat_stale(
+            armed=False,
+            pid_alive=True,
+            last_emit_at="2000-01-01T00:00:00+00:00",
+            interval_s=5,
+        )
+        is False
+    )
+
+
+def test_wake_loop_command_unresolved(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        wake_mod,
+        "wake_loop_invocation",
+        lambda: (_ for _ in ()).throw(ValueError("no skill")),
+    )
+    hint = wake_mod._wake_loop_command()
+    assert "unresolved-skill" in hint

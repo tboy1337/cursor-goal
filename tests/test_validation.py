@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -117,10 +118,17 @@ def test_run_validation_uses_shell_for_metacharacters(
         return Result()
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    result = run_validation("npm test && npm run lint")
+    result = run_validation("npm test && npm run lint", shell_ok=True)
     assert result.exit_code == 0
     assert seen["shell"] is True
     assert seen["args"] == "npm test && npm run lint"
+
+
+def test_run_validation_default_shell_ok_false() -> None:
+    """Library default must refuse shell metacharacters (fail closed)."""
+    result = run_validation("echo a && echo b")
+    assert result.exit_code == 1
+    assert "shell_ok=false" in result.output
 
 
 def test_try_split_argv_windows_percent(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -162,6 +170,9 @@ def test_scrubbed_validation_env_drops_secrets() -> None:
         "AWS_SECRET_ACCESS_KEY": "aws-secret",
         "CURSOR_GOAL_DATA": "/tmp/data",
         "CURSOR_GOAL_LOG_SECRETS": "1",
+        "CURSOR_GOAL_SKIP_ACL": "1",
+        "CURSOR_GOAL_ALLOW_ANY_WORKDIR": "1",
+        "CURSOR_GOAL_ALLOW_DEAD_WAKE": "1",
         "LANG": "C",
         "PYTHONPATH": "/evil/inject",
         "PYTHONHOME": "/evil/home",
@@ -178,6 +189,9 @@ def test_scrubbed_validation_env_drops_secrets() -> None:
     assert "OPENAI_API_KEY" not in scrubbed
     assert "AWS_SECRET_ACCESS_KEY" not in scrubbed
     assert "CURSOR_GOAL_LOG_SECRETS" not in scrubbed
+    assert "CURSOR_GOAL_SKIP_ACL" not in scrubbed
+    assert "CURSOR_GOAL_ALLOW_ANY_WORKDIR" not in scrubbed
+    assert "CURSOR_GOAL_ALLOW_DEAD_WAKE" not in scrubbed
     assert "PYTHONPATH" not in scrubbed
     assert "PYTHONHOME" not in scrubbed
     assert "NODE_PATH" not in scrubbed
@@ -260,3 +274,49 @@ def test_run_validation_shell_ok_false() -> None:
     result = run_validation("echo a && echo b", shell_ok=False)
     assert result.exit_code == 1
     assert "shell_ok=false" in result.output
+
+
+def test_redact_akia_basic_auth_and_jwt() -> None:
+    from cursor_goal.validation import redact_secrets
+
+    assert "<redacted>" in redact_secrets("id=AKIAAAAAAAAAAAAAAAAA")
+    assert "<redacted>" in redact_secrets("Authorization: Basic dXNlcjpwYXNz")
+    jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signaturexx"
+    assert "<redacted-jwt>" in redact_secrets(jwt)
+
+
+def test_pinned_comspec_fallback_and_oserror(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from cursor_goal import validation as val_mod
+
+    monkeypatch.setattr(val_mod.os, "name", "nt")
+    # Missing System32\cmd.exe → ambient COMSPEC fallback.
+    scrubbed = val_mod.scrubbed_validation_env(
+        {
+            "PATH": "C:\\Windows",
+            "SystemRoot": str(tmp_path / "MissingWin"),
+            "COMSPEC": "C:\\fallback\\cmd.exe",
+        }
+    )
+    assert scrubbed.get("COMSPEC") == "C:\\fallback\\cmd.exe"
+
+    system_root = tmp_path / "Windows"
+    (system_root / "System32").mkdir(parents=True)
+    (system_root / "System32" / "cmd.exe").write_text("", encoding="utf-8")
+    real_is_file = Path.is_file
+
+    def boom(self: Path) -> bool:
+        if "cmd.exe" in str(self):
+            raise OSError("probe failed")
+        return real_is_file(self)
+
+    monkeypatch.setattr(Path, "is_file", boom)
+    scrubbed2 = val_mod.scrubbed_validation_env(
+        {
+            "PATH": "C:\\Windows",
+            "SystemRoot": str(system_root),
+            "ComSpec": "C:\\ambient\\cmd.exe",
+        }
+    )
+    assert scrubbed2.get("COMSPEC") == "C:\\ambient\\cmd.exe"

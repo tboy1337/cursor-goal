@@ -561,6 +561,11 @@ def cmd_doctor(_argv: list[str]) -> int:
 
     if hard_fails:
         print("[goal] Doctor: FAILED", file=sys.stderr)
+        if not os.environ.get("CURSOR_GOAL_LOG_FILE", "").strip():
+            print(
+                "[goal] Tip: set CURSOR_GOAL_LOG_FILE=1 for durable diagnostics.",
+                file=sys.stderr,
+            )
         return 1
     if warnings:
         print("[goal] Doctor: OK (with warnings)")

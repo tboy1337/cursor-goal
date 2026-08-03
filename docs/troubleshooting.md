@@ -36,6 +36,8 @@ py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" wake loop
 
 Doctor **hard-fails** when a goal is `pursuing`, wake is enabled, and the loop is missing or dead. `manage status` prints an **ACTION REQUIRED** recovery command, `Continuation ready: false (…)`, and exits **1**. Immediately start `wake loop` as above. If create/resume exited 1 with the goal paused, fix data-dir/ACL issues then `manage resume`. Disable wake only with `CURSOR_GOAL_WAKE=0` (not recommended while the stop race remains).
 
+Create with wake enabled prints `Status: paused (awaiting wake arm)` then `Status: pursuing` only after a successful arm/activate — do not treat the early paused line as a failure. For durable diagnostics set `CURSOR_GOAL_LOG_FILE=1` (create and doctor FAIL also print this tip).
+
 ## Classic + marketplace hooks stacked
 
 Doctor **FAIL**s when both classic `~/.cursor/hooks.json` stop entries and Teams marketplace plugin hooks look configured. Marketplace detection walks `~/.cursor/plugins/cache/**` and `~/.cursor/plugins/local/**` (bounded) for `hooks/hooks.json` goal stop markers, plus `CURSOR_PLUGIN_ROOT`. Pick **one** install path: uninstall classic hooks (`uninstall-goal.*` without necessarily purging data) **or** disable the marketplace plugin — do not run both.

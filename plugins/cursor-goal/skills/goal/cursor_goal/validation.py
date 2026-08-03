@@ -7,6 +7,7 @@ import re
 import shlex
 import subprocess  # nosec B404
 from dataclasses import dataclass
+from pathlib import Path
 
 from cursor_goal.logging_config import get_logger
 
@@ -154,6 +155,36 @@ _ENV_ALLOWLIST_PREFIXES = (
     "LC_",
 )
 
+# Privilege / safety toggles must not reach validation children (nested harness).
+_CURSOR_GOAL_CHILD_DROP = frozenset(
+    {
+        "CURSOR_GOAL_LOG_SECRETS",
+        "CURSOR_GOAL_SKIP_ACL",
+        "CURSOR_GOAL_ALLOW_ANY_WORKDIR",
+        "CURSOR_GOAL_ALLOW_DEAD_WAKE",
+    }
+)
+
+
+def _pinned_windows_comspec(env_in: dict[str, str]) -> str | None:
+    """Prefer ``%SystemRoot%\\System32\\cmd.exe`` over ambient COMSPEC."""
+    system_root = (
+        env_in.get("SystemRoot")
+        or env_in.get("SYSTEMROOT")
+        or os.environ.get("SystemRoot")
+        or os.environ.get("SYSTEMROOT")
+        or ""
+    ).strip()
+    if system_root:
+        candidate = Path(system_root) / "System32" / "cmd.exe"
+        try:
+            if candidate.is_file():
+                return str(candidate)
+        except OSError:
+            pass
+    ambient = (env_in.get("COMSPEC") or env_in.get("ComSpec") or "").strip()
+    return ambient or None
+
 
 def scrubbed_validation_env(
     source: dict[str, str] | None = None,
@@ -161,25 +192,30 @@ def scrubbed_validation_env(
     """Return a reduced environment for validation subprocesses.
 
     Keeps PATH/home/locale/shell basics, ``VIRTUAL_ENV``, and ``CURSOR_GOAL_*``
-    (except log-secret toggles). Drops ambient API tokens, ``PYTHONPATH``,
-    ``PYTHONHOME``, ``NODE_PATH``, ``NPM_CONFIG_USERCONFIG``, ``MAVEN_OPTS``,
-    ``SBT_OPTS``, and unrelated secrets from the parent.
+    (except log-secret and privilege toggles). Drops ambient API tokens,
+    ``PYTHONPATH``, ``PYTHONHOME``, ``NODE_PATH``, ``NPM_CONFIG_USERCONFIG``,
+    ``MAVEN_OPTS``, ``SBT_OPTS``, and unrelated secrets from the parent.
+
+    On Windows, pins ``COMSPEC`` to ``%SystemRoot%\\System32\\cmd.exe`` when that
+    file exists so a poisoned ambient ``COMSPEC`` cannot redirect shell mode.
     """
     env_in = os.environ if source is None else source
     out: dict[str, str] = {}
     for key, value in env_in.items():
         if key in _ENV_ALLOWLIST_EXACT:
+            # Skip ambient COMSPEC — pin below on Windows.
+            if key.upper() == "COMSPEC":
+                continue
             out[key] = value
             continue
         if key.startswith(_ENV_ALLOWLIST_PREFIXES):
-            if key.upper() in {"CURSOR_GOAL_LOG_SECRETS"}:
+            if key.upper() in _CURSOR_GOAL_CHILD_DROP:
                 continue
             out[key] = value
-    # Ensure COMSPEC exists on Windows for shell=True.
-    if os.name == "nt" and "COMSPEC" not in out and "ComSpec" not in out:
-        comspec = env_in.get("COMSPEC") or env_in.get("ComSpec")
-        if comspec:
-            out["COMSPEC"] = comspec
+    if os.name == "nt":
+        pinned = _pinned_windows_comspec(dict(env_in))
+        if pinned:
+            out["COMSPEC"] = pinned
     return out
 
 
@@ -227,14 +263,15 @@ def run_validation(
     *,
     timeout_sec: float = DEFAULT_TIMEOUT_SEC,
     cwd: str | None = None,
-    shell_ok: bool = True,
+    shell_ok: bool = False,
 ) -> ValidationResult:
     """Run a validation command via subprocess.
 
     Prefers ``shell=False`` with argv from :func:`try_split_argv`. Falls back to
     ``shell=True`` for user/agent shell snippets (e.g. ``npm test && npm run lint``)
-    unless ``CURSOR_GOAL_DENY_SHELL`` is set or ``shell_ok`` is False. On Windows,
-    shell mode uses ``COMSPEC`` (cmd.exe), not PowerShell.
+    only when ``shell_ok`` is True and ``CURSOR_GOAL_DENY_SHELL`` is unset.
+    Defaults to ``shell_ok=False`` (fail closed; matches create defaults). On
+    Windows, shell mode uses pinned ``COMSPEC`` (cmd.exe), not PowerShell.
 
     Shell mode is intentional but risky if an attacker controls goal.json.
     """
