@@ -689,6 +689,10 @@ def _maybe_arm_wake() -> _ArmWakeResult:
         "(pid_alive=true and armed=true)"
     )
     print("  3) Only then continue working toward the condition")
+    print(
+        "[goal] BLOCKING: continuation_ready=false until wake loop started "
+        "with notify_on_output matching the pattern above"
+    )
     return _ArmWakeResult(status="ok", config=config)
 
 

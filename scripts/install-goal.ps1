@@ -305,8 +305,14 @@ function Protect-GoalDataDirAcl {
 import sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
-from cursor_goal.win_acl import harden_windows_acl
-harden_windows_acl(Path(sys.argv[2]))
+from cursor_goal.win_acl import failure_reason, harden_windows_acl
+path = Path(sys.argv[2])
+ok = harden_windows_acl(path)
+reason = failure_reason(path)
+if not ok or reason:
+    detail = reason or "harden_windows_acl returned False"
+    print(f"ACL harden failed: {detail}", file=sys.stderr)
+    raise SystemExit(1)
 print("hardened")
 '@
     try {
@@ -527,10 +533,11 @@ print(__version__)
     Write-Host "============================================" -ForegroundColor Green
     Write-Host ""
     Write-Host "Next steps:"
-    Write-Host "  1) In Cursor: /goal <verifiable condition>"
-    Write-Host "  2) Start wake loop with notify_on_output matching ^AGENT_GOAL_WAKE"
-    Write-Host "  3) Confirm wake status shows pid_alive=true before other work"
-    Write-Host "  4) If Hooks UI shows {} but last-stop-response.json has followup_message, rely on wake"
+    Write-Host "  1) Restart Cursor (or reload hooks) so hooks.json takes effect"
+    Write-Host "  2) In Cursor: /goal <verifiable condition>"
+    Write-Host "  3) Start wake loop with notify_on_output matching ^AGENT_GOAL_WAKE"
+    Write-Host "  4) Confirm wake status shows pid_alive=true / continuation_ready=true before other work"
+    Write-Host "  5) If Hooks UI shows {} but last-stop-response.json has followup_message, rely on wake"
     Write-GoalInfo "Windows stop hook uses stop_hook.cmd + stdout drain delay (Cursor capture race mitigation)."
     Write-GoalInfo "Wake watchdog: after create/resume, start wake loop with notify_on_output on ^AGENT_GOAL_WAKE."
     Write-GoalWarn "If stop followups still drop, wake continues the goal; last-stop-response.json is always written."

@@ -52,7 +52,15 @@ def _open_log_file() -> TextIO | None:
         if raw.lower() in {".", "1", "true", "yes", "on"}:
             path = _default_log_path()
         else:
-            path = Path(raw).expanduser()
+            expanded = Path(raw).expanduser()
+            # Match CURSOR_GOAL_DATA: custom paths must be absolute.
+            if not expanded.is_absolute():
+                sys.stderr.write(
+                    "[cursor_goal] CURSOR_GOAL_LOG_FILE must be an absolute "
+                    f"path (got {raw!r}); durable file logging disabled\n"
+                )
+                return None
+            path = expanded
         path.parent.mkdir(parents=True, exist_ok=True)
         # Keep handle open for the process lifetime (logger owns it).
         handle = open(

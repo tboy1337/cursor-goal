@@ -26,10 +26,12 @@ from cursor_goal.state import (
     data_dir_is_insecure,
     snapshot_goal,
 )
-from cursor_goal.validation import deny_shell_enabled, try_split_argv
+from cursor_goal.validation import deny_shell_enabled, redact_secrets, try_split_argv
 from cursor_goal.wake import NOTIFY_PATTERN
 from cursor_goal.wake import status_info as wake_status_info
 from cursor_goal.wake import wake_enabled
+from cursor_goal.wake_process import read_orphan_wake
+from cursor_goal.win_acl import harden_windows_acl
 
 logger = get_logger("cursor_goal.doctor")
 
@@ -340,9 +342,22 @@ def cmd_doctor(_argv: list[str]) -> int:
                 "group/world-writable. Run chmod 700 or set CURSOR_GOAL_DATA."
             )
 
+    if ddir is not None and os.name == "nt":
+        # Force re-harden so long-lived processes cannot stale-trust forever.
+        harden_windows_acl(ddir, force=True)
+
     acl_fail = acl_harden_failure_message(ddir) if ddir is not None else None
     if acl_fail is not None:
         hard_fails.append(acl_fail)
+
+    orphan = read_orphan_wake()
+    if orphan is not None:
+        orphan_pid = orphan.get("pid", "?")
+        orphan_reason = str(orphan.get("reason") or "unspecified")
+        hard_fails.append(
+            f"Orphan wake suspected (pid={orphan_pid}): {orphan_reason}. "
+            "Confirm no leftover wake loop, then re-arm or clear the goal."
+        )
 
     hooks_state = _hooks_look_configured()
     classic_hooks = _classic_hooks_configured()
@@ -441,7 +456,10 @@ def cmd_doctor(_argv: list[str]) -> int:
 
     wake_info = wake_status_info()
     if state is not None and state.active and state.status == "pursuing":
-        print(f"  Goal: pursuing ({state.condition[:60]})")
+        print(
+            f"  Goal: pursuing "
+            f"({redact_secrets(state.condition, max_chars=60)})"
+        )
         print(
             f"  Budgets: turns {state.turns_used}/{state.turn_budget}, "
             f"wake {state.wake_ticks}/{state.wake_budget}"

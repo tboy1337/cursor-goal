@@ -30,7 +30,7 @@ Three supported paths:
 | Path | Who | How |
 |------|-----|-----|
 | **Clone + installer** | Individuals | Clone `main` (or a GitHub Release source archive) → `install-goal.sh` / `install-goal.ps1` |
-| **Tagged release** | Individuals | `git clone --branch v2.15.0 …` then installer (see [docs/install.md](docs/install.md)). |
+| **Tagged release** | Individuals | `git clone --branch v2.16.0 …` then installer (see [docs/install.md](docs/install.md)). |
 | **Teams marketplace** | Teams/Enterprise | Import this repo in Cursor Dashboard → Plugins (see `.cursor-plugin/marketplace.json`) |
 
 **Agent install (explicit steps):**
@@ -129,9 +129,11 @@ Flags / natural language:
 /goal fix bugs, verified by pytest, stop after 15 turns
 ```
 
-**2.15.0:** Production hardening — `run_validation` defaults to `shell_ok=False`, scrubbed env pins Windows `COMSPEC` and drops privilege toggles, manage status/create redact secret-ish conditions, classic install `.cmd` CGP metachar parity + install-time data-dir ACL harden + private installer temps, create prints real paused→pursuing status with wake checklist and `CURSOR_GOAL_LOG_FILE` tip. Builds on **2.15.0**.
+**2.16.0:** Production audit epic — install ACL soft-failure hard-fails, doctor/eval/wake budget redact conditions, absolute `CURSOR_GOAL_LOG_FILE` paths, legacy wake orphan kill-or-doctor-warn, doctor/wake ACL force re-harden, install restart UX + create `continuation_ready=false` BLOCKING line, trim unused pytest extras.
 
-**2.15.0:** Reliability/security hardening — wake tick fail-closed on persist failure, transactional create/resume arm, doctor marketplace deep scan + VERSION sync, wake ownership in continuation_ready, create requires `--force` for any existing goal, marketplace `.cmd` uses `%CGP%`, eval/stop refuse insecure dirs, probe OSError fail-closed, scrub drops `NODE_PATH`/`MAVEN_OPTS`-class vars. Also: host-native path helpers, doctor data-dir `ValueError`, wake ownership null-subprocess tolerance, macOS install-smoke non-symlink HOME, `wake-smoke.py` in CI, module splits (`path_trust` / `doctor` / `wake_process`), clearer first-run wake handshake docs.
+**2.16.0:** Production hardening — `run_validation` defaults to `shell_ok=False`, scrubbed env pins Windows `COMSPEC` and drops privilege toggles, manage status/create redact secret-ish conditions, classic install `.cmd` CGP metachar parity + install-time data-dir ACL harden + private installer temps, create prints real paused→pursuing status with wake checklist and `CURSOR_GOAL_LOG_FILE` tip.
+
+**2.14.0:** Reliability/security hardening — wake tick fail-closed on persist failure, transactional create/resume arm, doctor marketplace deep scan + VERSION sync, wake ownership in continuation_ready, create requires `--force` for any existing goal, marketplace `.cmd` uses `%CGP%`, eval/stop refuse insecure dirs, probe OSError fail-closed, scrub drops `NODE_PATH`/`MAVEN_OPTS`-class vars. Also: host-native path helpers, doctor data-dir `ValueError`, wake ownership null-subprocess tolerance, macOS install-smoke non-symlink HOME, `wake-smoke.py` in CI, module splits (`path_trust` / `doctor` / `wake_process`), clearer first-run wake handshake docs.
 
 ## Multi-model (maker ≠ checker)
 

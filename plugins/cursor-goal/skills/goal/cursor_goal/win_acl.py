@@ -90,29 +90,35 @@ def restore_windows_acl_inheritance(icacls: str, path: Path) -> None:
     )
 
 
-def harden_windows_acl(path: Path) -> None:
+def harden_windows_acl(path: Path, *, force: bool = False) -> bool:
     """Best-effort private ACL via icacls (no hard deps).
 
     Tries ``/inheritance:r`` then grants the current user full control. If
-    inheritance strip fails, records a doctor hard-fail and returns without
-    marking the path hardened. If the grant fails after inheritance was
+    inheritance strip fails, records a doctor hard-fail and returns ``False``
+    without marking the path hardened. If the grant fails after inheritance was
     stripped, restores inheritance (``/inheritance:e``), records a doctor
-    hard-fail, and logs loudly. ``CURSOR_GOAL_SKIP_ACL=1`` is
+    hard-fail, and returns ``False``. ``CURSOR_GOAL_SKIP_ACL=1`` is
     test/emergency-only.
+
+    Returns ``True`` when harden succeeded, was skipped (non-Windows / SKIP_ACL),
+    or was already hardened this process (unless *force*). Returns ``False`` when
+    harden was attempted and failed.
     """
     if os.name != "nt" or acl_harden_disabled():
-        return
+        return True
     key = str(path)
+    if force:
+        HARDENED_PATHS.discard(key)
     if key in HARDENED_PATHS:
-        return
+        return True
     user = windows_username()
     if not user:
         record_acl_failure(path, "could not determine a safe Windows username")
-        return
+        return False
     icacls = shutil.which("icacls")
     if not icacls:
         record_acl_failure(path, "icacls not found on PATH")
-        return
+        return False
     grant = f"{user}:(OI)(CI)F" if path.is_dir() else f"{user}:F"
     inheritance_stripped = False
     try:
@@ -130,7 +136,7 @@ def harden_windows_acl(path: Path) -> None:
                 path,
                 f"inheritance strip failed ({detail})",
             )
-            return
+            return False
         inheritance_stripped = True
         completed = subprocess.run(  # nosec B603
             [icacls, str(path), "/grant:r", grant],
@@ -148,7 +154,7 @@ def harden_windows_acl(path: Path) -> None:
             )
         else:
             record_acl_failure(path, f"icacls failed: {exc}")
-        return
+        return False
     if completed.returncode != 0:
         err = (completed.stderr or completed.stdout or "").strip()
         detail = err[:200] or f"exit={completed.returncode}"
@@ -157,7 +163,7 @@ def harden_windows_acl(path: Path) -> None:
             path,
             f"inheritance stripped but grant failed ({detail})",
         )
-        return
+        return False
     ACL_HARDEN_FAILURES.pop(key, None)
     HARDENED_PATHS.add(key)
     logger.debug(
@@ -166,6 +172,7 @@ def harden_windows_acl(path: Path) -> None:
         user,
         inheritance_stripped,
     )
+    return True
 
 
 def failure_reason(path: Path) -> str | None:

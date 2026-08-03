@@ -18,6 +18,8 @@ Manual `wake tick` **coalesces** (skips emit) when a recent *wake*-sourced nudge
 
 If wake arm fails during create/resume, the harness leaves the goal **`paused`** (exit 1) rather than pursuing without an armed wake.
 
+Legacy tokenless `wake.pid` files (pre-token format): the harness kills the PID only when an ownership probe confirms a wake/goal process; otherwise it clears the pid file, writes `wake.orphan`, and `manage doctor` hard-fails until you confirm no leftover loop and re-arm.
+
 ## Shell validation defaults to denied
 
 New goals use `shell_ok=false`. `--test` commands that need shell metacharacters require `--allow-shell` at create time (create **refuses** otherwise). Prefer argv-safe commands, or set `CURSOR_GOAL_DENY_SHELL=1` as a hard global refuse. Only schema v1 `goal.json` is supported — clear or recreate incompatible state files. `parse` extracts `--allow-shell` / `--deny-shell` / `--workdir` / `--wake-budget` / `--force` into JSON so agents can forward them to `manage create`.

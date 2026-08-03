@@ -28,10 +28,56 @@ from cursor_goal.state import atomic_write_text, data_dir, goal_lock
 logger = get_logger("cursor_goal.wake_process")
 
 WAKE_PID_NAME = "wake.pid"
+WAKE_ORPHAN_NAME = "wake.orphan"
 
 
 def wake_pid_path() -> Path:
     return data_dir() / WAKE_PID_NAME
+
+
+def wake_orphan_path() -> Path:
+    return data_dir() / WAKE_ORPHAN_NAME
+
+
+def mark_orphan_wake(pid: int, reason: str) -> None:
+    """Persist a doctor-visible warning about a suspected orphan wake loop."""
+    payload = {
+        "pid": int(pid),
+        "reason": reason[:500],
+        "marked_at": _now_iso(),
+    }
+    try:
+        with goal_lock():
+            atomic_write_text(
+                wake_orphan_path(),
+                json.dumps(payload, indent=2) + "\n",
+            )
+    except OSError as exc:
+        logger.warning("Could not write wake orphan marker: %s", exc)
+
+
+def clear_orphan_wake() -> None:
+    """Remove orphan wake marker if present."""
+    path = wake_orphan_path()
+    try:
+        if path.is_file():
+            path.unlink()
+    except OSError as exc:
+        logger.debug("Could not clear wake orphan marker: %s", exc)
+
+
+def read_orphan_wake() -> dict[str, Any] | None:
+    """Return orphan wake marker payload, or None."""
+    path = wake_orphan_path()
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
 
 
 def _now_iso() -> str:
@@ -113,6 +159,7 @@ def _write_pid_record(pid: int, token: str) -> None:
             wake_pid_path(),
             json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
         )
+    clear_orphan_wake()
 
 
 def _write_pid(pid: int, token: str | None = None) -> None:
@@ -234,29 +281,34 @@ def _kill_pid(pid: int, *, token: str | None = None) -> None:
     if not _pid_alive(pid):
         return
 
-    # Legacy plain-int wake.pid has no ownership token — refuse kill to avoid
-    # PID-reuse taskkill/SIGTERM against an unrelated process.
+    # Legacy plain-int wake.pid has no ownership token — only kill when the
+    # cmdline ownership probe confirms this still looks like a wake loop.
     if not token:
-        logger.warning(
-            "Refusing to kill pid=%s: missing wake ownership token "
-            "(legacy wake.pid or unverified). Clear wake.pid manually or "
-            "re-arm wake after disarm.",
-            pid,
-        )
-        return
-
-    record = _read_pid_record()
-    if record is not None:
-        stored = str(record.get("token") or "")
-        if stored and stored != token:
-            logger.warning("Refusing to kill pid=%s: wake token mismatch", pid)
-            return
-        if int(record.get("pid", -1)) != pid:
+        if not _pid_looks_owned(pid):
             logger.warning(
-                "Refusing to kill pid=%s: wake.pid points elsewhere",
+                "Refusing to kill pid=%s: missing wake ownership token and "
+                "ownership check failed (legacy wake.pid or unverified). "
+                "Clear wake.pid manually or re-arm wake after disarm.",
                 pid,
             )
             return
+        logger.warning(
+            "Killing legacy tokenless wake pid=%s after ownership probe OK",
+            pid,
+        )
+    else:
+        record = _read_pid_record()
+        if record is not None:
+            stored = str(record.get("token") or "")
+            if stored and stored != token:
+                logger.warning("Refusing to kill pid=%s: wake token mismatch", pid)
+                return
+            if int(record.get("pid", -1)) != pid:
+                logger.warning(
+                    "Refusing to kill pid=%s: wake.pid points elsewhere",
+                    pid,
+                )
+                return
 
     if os.name == "nt":
         if not _windows_pid_looks_owned(pid):

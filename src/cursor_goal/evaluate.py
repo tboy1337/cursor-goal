@@ -87,7 +87,7 @@ def cmd_prompt(argv: list[str]) -> int:
         "(maker). Judge whether the goal condition has been achieved based "
         "on the evidence provided below — validation output and work summary.\n"
         "\n"
-        f"Goal condition: {state.condition}\n"
+        f"Goal condition: {redact_secrets(state.condition, max_chars=None)}\n"
         "\n"
         f"{validation_section}\n"
         "\n"

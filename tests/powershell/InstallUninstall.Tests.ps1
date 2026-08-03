@@ -208,6 +208,34 @@ Describe 'Protect-GoalDataDirAcl' {
             Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
         }
     }
+
+    It 'returns 1 when harden_windows_acl soft-fails without raising' {
+        $dir = Join-Path ([IO.Path]::GetTempPath()) ("cg-acl-soft-" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        try {
+            $installDir = Join-Path $dir 'skill'
+            $dataDir = Join-Path $dir 'data'
+            New-Item -ItemType Directory -Force -Path (Join-Path $installDir 'scripts') | Out-Null
+            New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
+            $pkg = Join-Path $installDir 'cursor_goal'
+            New-Item -ItemType Directory -Force -Path $pkg | Out-Null
+            Set-Content -Path (Join-Path $pkg '__init__.py') -Value '' -Encoding utf8
+            # Soft-fail shim: record failure and return False (no exception).
+            @'
+def harden_windows_acl(path, *, force=False):
+    return False
+
+def failure_reason(path):
+    return "simulated soft failure"
+'@ | Set-Content -Path (Join-Path $pkg 'win_acl.py') -Encoding utf8
+            $python = Find-GoalPython
+            $code = Protect-GoalDataDirAcl -Python $python -InstallDir $installDir -DataDir $dataDir
+            $code | Should -Be 1
+        }
+        finally {
+            Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 Describe 'Merge-GoalStopHook' {

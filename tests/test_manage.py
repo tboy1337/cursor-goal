@@ -976,6 +976,7 @@ def test_blocking_checklist_on_create(
     assert "Status: pursuing" in out
     assert "GOAL_WAKE_REQUIRED " in out
     assert "BLOCKING CHECKLIST" in out
+    assert "BLOCKING: continuation_ready=false until wake loop started" in out
     assert "continuation_ready" in out or "pid_alive" in out
     assert "CURSOR_GOAL_LOG_FILE" in out
     # Machine-readable event must be parseable JSON after the prefix.

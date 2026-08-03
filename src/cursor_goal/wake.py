@@ -41,6 +41,7 @@ from cursor_goal.state import (
 )
 from cursor_goal.validation import redact_secrets
 from cursor_goal.wake_process import (  # noqa: F401 — re-exports for tests/callers
+    WAKE_ORPHAN_NAME,
     WAKE_PID_NAME,
     _clear_pid,
     _cmdline_looks_owned,
@@ -53,8 +54,13 @@ from cursor_goal.wake_process import (  # noqa: F401 — re-exports for tests/ca
     _windows_pid_looks_owned,
     _write_pid,
     _write_pid_record,
+    clear_orphan_wake,
+    mark_orphan_wake,
+    read_orphan_wake,
+    wake_orphan_path,
     wake_pid_path,
 )
+from cursor_goal.win_acl import harden_windows_acl
 
 logger = get_logger("cursor_goal.wake")
 
@@ -153,15 +159,35 @@ def _kill_existing_loop() -> None:
     if pid == os.getpid():
         return
     if not token:
-        logger.warning(
-            "Leaving orphan wake pid=%s (no ownership token); clearing wake.pid "
-            "without signaling. Re-arm after confirming no leftover loop.",
-            pid,
-        )
+        if _pid_alive(pid) and _pid_looks_owned(pid):
+            logger.warning(
+                "Killing legacy tokenless wake pid=%s after ownership probe OK",
+                pid,
+            )
+            _kill_pid(pid, token="")
+            _clear_pid()
+            clear_orphan_wake()
+            return
+        if _pid_alive(pid):
+            logger.warning(
+                "Leaving orphan wake pid=%s (no ownership token; ownership "
+                "unverified); clearing wake.pid without signaling. Re-arm "
+                "after confirming no leftover loop.",
+                pid,
+            )
+            mark_orphan_wake(
+                pid,
+                "legacy tokenless wake.pid while pid still alive and "
+                "ownership unverified",
+            )
+            _clear_pid()
+            return
         _clear_pid()
+        clear_orphan_wake()
         return
     _kill_pid(pid, token=token)
     _clear_pid()
+    clear_orphan_wake()
 
 
 def _goal_is_pursuing() -> bool:
@@ -729,6 +755,12 @@ def run_loop(*, interval: int | None = None) -> int:  # pylint: disable=too-many
         print(acl_fail, file=sys.stderr)
         return 1
 
+    # Re-verify ACL harden at loop start (process-local cache can go stale).
+    try:
+        harden_windows_acl(data_dir(check_writable=False), force=True)
+    except OSError as exc:
+        logger.warning("Wake loop ACL re-harden failed: %s", exc)
+
     _kill_existing_loop()
     config = arm(interval=interval)
     if not config:
@@ -781,10 +813,11 @@ def run_loop(*, interval: int | None = None) -> int:  # pylint: disable=too-many
             if result.status == "budget_limited":
                 state = result.state
                 assert state is not None
+                safe_condition = redact_secrets(state.condition, max_chars=None)
                 emit_wake_line(
                     f"[GOAL BUDGET] Wake tick limit ({state.wake_budget}) reached. "
                     f"Wrap up current work and summarize progress toward: "
-                    f"{state.condition}"
+                    f"{safe_condition}"
                 )
                 disarm(kill_loop=False)
                 break

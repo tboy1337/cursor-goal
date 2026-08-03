@@ -836,6 +836,27 @@ def test_get_logger_invalid_level_and_log_file(
     assert (goal_home / "cursor-goal.log").is_file()
 
 
+def test_get_logger_rejects_relative_log_file(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import logging
+
+    from cursor_goal import logging_config as log_mod
+
+    monkeypatch.setenv("CURSOR_GOAL_LOG_FILE", "relative/path.log")
+    log_mod._reset_for_tests()
+    name = f"cursor_goal.test_log_rel_{os.getpid()}"
+    logging.getLogger(name).handlers.clear()
+    log_mod.get_logger(name)
+    err = capsys.readouterr().err
+    assert "must be an absolute path" in err
+    root = logging.getLogger("cursor_goal")
+    assert not any(
+        getattr(h, "stream", None) is log_mod._LOG_FILE_HANDLE for h in root.handlers
+    )
+    assert log_mod._LOG_FILE_HANDLE is None
+
+
 def test_get_logger_log_file_oserror(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

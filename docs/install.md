@@ -29,6 +29,8 @@ cd cursor-goal
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-goal.ps1
 ```
 
+After install, **restart Cursor** (or reload hooks) so `hooks.json` takes effect, then run `manage doctor` before the first `/goal`.
+
 ## What gets installed
 
 | Path | Purpose |
@@ -46,7 +48,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-goal.ps1
 | `~/.cursor/hooks.json` | Stop hook registration. Unix: `<absolute-python> -u …/stop_hook.py`. Windows: absolute `…/stop_hook.cmd` (cmd launcher). `loop_limit: null`, `timeout: 30`. Prior file is copied to a timestamped `.bak.<UTC>` |
 | `~/.cursor-goal/data/` | Runtime state (`goal.json`, `goal-eval-done`) — trusted-user local state (≡ shell trust) |
 
-Override data directory with `CURSOR_GOAL_DATA` (resolved absolute path).
+Override data directory with `CURSOR_GOAL_DATA` (must be an absolute path; relative paths are rejected).
 
 Override evaluator model with `CURSOR_GOAL_EVAL_MODEL` (default `fast`). See [platform-compatibility.md](platform-compatibility.md).
 
@@ -56,10 +58,10 @@ On upgrade, a previous skill tree is copied to `~/.cursor/skills/goal.bak.<UTC>`
 
 ### Install from a tagged release
 
-Package version **2.15.0** pins the clone branch below. Use it when tag `v2.15.0` exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If `git clone --branch` fails, clone `main` with the Quick install steps above ([release.md](release.md)).
+Package version **2.16.0** pins the clone branch below. Use it when tag `v2.16.0` exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If `git clone --branch` fails, clone `main` with the Quick install steps above ([release.md](release.md)).
 
 ```bash
-git clone --branch v2.15.0 https://github.com/tboy1337/cursor-goal.git
+git clone --branch v2.16.0 https://github.com/tboy1337/cursor-goal.git
 cd cursor-goal
 ./scripts/install-goal.sh   # or install-goal.ps1 on Windows
 ```

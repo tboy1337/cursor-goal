@@ -22,6 +22,15 @@ def test_eval_prompt_active_goal(goal_home: Path) -> None:
     assert "Goal condition: all tests pass" in out
 
 
+def test_eval_prompt_redacts_secretish_condition(goal_home: Path) -> None:
+    run_cli("manage", "create", "deploy with api_key=supersecret123")
+    code, out, _err = run_cli("eval", "prompt")
+    assert code == 0
+    assert "supersecret123" not in out
+    assert "<redacted>" in out
+    assert "Goal condition:" in out
+
+
 def test_eval_prompt_work_summary(goal_home: Path) -> None:
     run_cli("manage", "create", "fix the login bug")
     code, out, _err = run_cli("eval", "prompt", "--work-summary", "did X")

@@ -1207,6 +1207,71 @@ def test_manage_status_redacts_reason(goal_home: Path) -> None:
     assert "<redacted>" in out
 
 
+def test_doctor_redacts_goal_condition(goal_home: Path) -> None:
+    run_cli("manage", "create", "ship with api_key=doctorsecret99")
+    code, out, _err = run_cli("manage", "doctor")
+    assert "doctorsecret99" not in out
+    assert code in {0, 1}
+
+
+def test_doctor_hard_fails_orphan_wake(goal_home: Path) -> None:
+    from cursor_goal.wake import mark_orphan_wake
+
+    mark_orphan_wake(999001, "test orphan marker")
+    assert (goal_home / "wake.orphan").is_file()
+    code, out, err = run_cli("manage", "doctor")
+    combined = out + err
+    assert code == 1
+    assert "Orphan wake suspected" in combined
+    assert "999001" in combined
+
+
+def test_harden_windows_acl_returns_bool(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import win_acl as acl_mod
+
+    monkeypatch.setattr(acl_mod.os, "name", "posix")
+    assert acl_mod.harden_windows_acl(goal_home) is True
+
+    monkeypatch.setattr(acl_mod.os, "name", "nt")
+    monkeypatch.setattr(acl_mod, "acl_harden_disabled", lambda: True)
+    assert acl_mod.harden_windows_acl(goal_home) is True
+
+
+def test_harden_windows_acl_force_reharden(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import win_acl as acl_mod
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **_k: object) -> object:
+        calls.append(list(cmd))
+
+        class Result:
+            returncode = 0
+            stderr = ""
+            stdout = ""
+
+        return Result()
+
+    monkeypatch.setattr(acl_mod.os, "name", "nt")
+    monkeypatch.setattr(acl_mod, "acl_harden_disabled", lambda: False)
+    monkeypatch.setattr(acl_mod, "windows_username", lambda: "testuser")
+    monkeypatch.setattr(acl_mod.shutil, "which", lambda _n: "icacls.exe")
+    monkeypatch.setattr(acl_mod.subprocess, "run", fake_run)
+    acl_mod.HARDENED_PATHS.clear()
+    acl_mod.ACL_HARDEN_FAILURES.clear()
+    assert acl_mod.harden_windows_acl(goal_home) is True
+    first = len(calls)
+    assert first >= 2
+    assert acl_mod.harden_windows_acl(goal_home) is True
+    assert len(calls) == first  # cached
+    assert acl_mod.harden_windows_acl(goal_home, force=True) is True
+    assert len(calls) > first
+
+
 def test_is_absolute_interpreter_path() -> None:
     from cursor_goal.manage import _is_absolute_interpreter_path
 
