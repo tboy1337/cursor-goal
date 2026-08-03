@@ -8,7 +8,7 @@ import sys
 from typing import Any
 
 from cursor_goal.logging_config import get_logger
-from cursor_goal.state import MAX_TURN_BUDGET, clamp_turn_budget
+from cursor_goal.state import MAX_TURN_BUDGET, clamp_turn_budget, clamp_wake_budget
 from cursor_goal.validation import redact_command
 
 logger = get_logger("cursor_goal.parse")
@@ -229,7 +229,7 @@ def parse_raw(raw: str) -> dict[str, Any]:  # pylint: disable=too-many-branches
             raise ValueError(
                 f"Wake budget must be <= {MAX_TURN_BUDGET}, got {wake_budget}"
             )
-        wake_budget = clamp_turn_budget(wake_budget)
+        wake_budget = clamp_wake_budget(wake_budget)
 
     result = {
         "subcommand": None,

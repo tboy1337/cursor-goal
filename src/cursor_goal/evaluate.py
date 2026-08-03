@@ -13,6 +13,7 @@ from cursor_goal.models import spawn_config_dict
 from cursor_goal.state import (
     CorruptGoalError,
     GoalLockTimeoutError,
+    GoalState,
     assert_workdir_usable,
     data_dir,
     has_eval_signal,
@@ -24,7 +25,7 @@ from cursor_goal.state import (
     update_goal_fields,
 )
 from cursor_goal.validation import redact_command, redact_secrets, run_validation
-from cursor_goal.wake import refuse_if_wake_dead
+from cursor_goal.wake import refuse_if_wake_dead, wake_dead_warning
 
 logger = get_logger("cursor_goal.eval")
 
@@ -32,11 +33,70 @@ _VERDICT_LINE = re.compile(r"^(YES|NO):\s*(.*)$", re.IGNORECASE)
 MAX_PARSE_RESULT_BYTES = 2 * 1024 * 1024
 
 
-def cmd_prompt(argv: list[str]) -> int:
-    wake_dead = refuse_if_wake_dead()
-    if wake_dead is not None:
-        print(wake_dead.replace("[goal]", "[goal-eval]"), file=sys.stderr)
+def _refuse_if_data_dir_unsafe() -> str | None:
+    """Combined insecure-dir / Windows-ACL-harden-failure gate.
+
+    Every ``eval`` entry point needs both checks before touching the data
+    dir; keep the two-step preamble in one place instead of repeating it
+    at each call site.
+    """
+    insecure = refuse_if_data_dir_insecure()
+    if insecure is not None:
+        return insecure
+    return refuse_if_acl_harden_failed()
+
+
+def _check_wake() -> int | None:
+    """Print wake-dead diagnostics; return an exit code only in strict mode.
+
+    Default (non-strict) behavior prints a loud warning and returns None so
+    the caller continues — wake is a best-effort watchdog, not a requirement.
+    Set ``CURSOR_GOAL_REQUIRE_WAKE=1`` to make this block with exit 1.
+    """
+    hard = refuse_if_wake_dead()
+    if hard is not None:
+        print(hard.replace("[goal]", "[goal-eval]"), file=sys.stderr)
         return 1
+    warning = wake_dead_warning()
+    if warning is not None:
+        print(warning.replace("[goal]", "[goal-eval]"), file=sys.stderr)
+    return None
+
+
+def _extract_work_summary(argv: list[str]) -> str:
+    """Pull ``--work-summary <text>`` out of *argv*, redacted and truncated."""
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--work-summary" and i + 1 < len(argv):
+            return redact_secrets(argv[i + 1], max_chars=4000)
+        i += 1
+    return ""
+
+
+def _build_validation_section(state: GoalState) -> str:
+    """Render the validation-command evidence block for the eval prompt."""
+    safe_cmd = (
+        redact_command(state.validation_command) if state.validation_command else ""
+    )
+    if state.last_validation_output:
+        exit_note = ""
+        if state.last_validation_exit_code is not None:
+            passed = state.last_validation_exit_code == 0
+            exit_note = (
+                f"\nExit code: {state.last_validation_exit_code} "
+                f"({'passed' if passed else 'failed'})"
+            )
+        safe_output = redact_secrets(state.last_validation_output, max_chars=4000)
+        return f"Validation command: {safe_cmd}{exit_note}\n" f"Output:\n{safe_output}"
+    if state.validation_command:
+        return f"Validation command ({safe_cmd}) has not been run yet."
+    return "No validation command configured."
+
+
+def cmd_prompt(argv: list[str]) -> int:
+    wake_code = _check_wake()
+    if wake_code is not None:
+        return wake_code
 
     try:
         state = snapshot_goal(raise_corrupt=True)
@@ -50,34 +110,8 @@ def cmd_prompt(argv: list[str]) -> int:
         )
         return 1
 
-    work_summary = ""
-    i = 0
-    while i < len(argv):
-        if argv[i] == "--work-summary" and i + 1 < len(argv):
-            work_summary = redact_secrets(argv[i + 1], max_chars=4000)
-            i += 2
-        else:
-            i += 1
-
-    safe_cmd = (
-        redact_command(state.validation_command) if state.validation_command else ""
-    )
-    if state.last_validation_output:
-        exit_note = ""
-        if state.last_validation_exit_code is not None:
-            passed = state.last_validation_exit_code == 0
-            exit_note = (
-                f"\nExit code: {state.last_validation_exit_code} "
-                f"({'passed' if passed else 'failed'})"
-            )
-        safe_output = redact_secrets(state.last_validation_output, max_chars=4000)
-        validation_section = (
-            f"Validation command: {safe_cmd}{exit_note}\n" f"Output:\n{safe_output}"
-        )
-    elif state.validation_command:
-        validation_section = f"Validation command ({safe_cmd}) has not been run yet."
-    else:
-        validation_section = "No validation command configured."
+    work_summary = _extract_work_summary(argv)
+    validation_section = _build_validation_section(state)
 
     if work_summary:
         work_section = f"Recent work summary:\n{work_summary}"
@@ -112,10 +146,9 @@ def cmd_prompt(argv: list[str]) -> int:
 
 def cmd_spawn_config(_argv: list[str]) -> int:
     """Print JSON Task parameters for the readonly goal evaluator."""
-    wake_dead = refuse_if_wake_dead()
-    if wake_dead is not None:
-        print(wake_dead.replace("[goal]", "[goal-eval]"), file=sys.stderr)
-        return 1
+    wake_code = _check_wake()
+    if wake_code is not None:
+        return wake_code
     config = spawn_config_dict()
     logger.info(
         "spawn-config subagent_type=%s model=%s readonly=%s",
@@ -135,40 +168,61 @@ def _emit_prompt(prompt: str) -> None:
     sys.stdout.flush()
 
 
-def cmd_validate(_argv: list[str]) -> int:
-    """Run the goal's validation command and persist output for eval prompts."""
-    insecure = refuse_if_data_dir_insecure()
-    if insecure is not None:
-        print(insecure.replace("[goal]", "[goal-eval]"), file=sys.stderr)
-        return 1
-    acl_fail = refuse_if_acl_harden_failed()
-    if acl_fail is not None:
-        print(acl_fail.replace("[goal]", "[goal-eval]"), file=sys.stderr)
-        return 1
-    wake_dead = refuse_if_wake_dead()
-    if wake_dead is not None:
-        print(wake_dead.replace("[goal]", "[goal-eval]"), file=sys.stderr)
-        return 1
+def _load_validate_state() -> GoalState | None:
+    """Load the active goal and confirm it has a validation command.
 
+    Prints a ``[goal-eval] Error: ...`` diagnostic and returns ``None`` for
+    every failure mode; callers only need to check for ``None``.
+    """
     try:
         state = snapshot_goal(raise_corrupt=True)
-    except CorruptGoalError as exc:
+    except (CorruptGoalError, GoalLockTimeoutError) as exc:
         print(f"[goal-eval] Error: {exc}", file=sys.stderr)
-        return 1
-    except GoalLockTimeoutError as exc:
-        print(f"[goal-eval] Error: {exc}", file=sys.stderr)
-        return 1
+        return None
     if state is None:
         print(
             "[goal-eval] Error: No active goal. Run cursor-goal manage create first.",
             file=sys.stderr,
         )
-        return 1
+        return None
     if not state.validation_command.strip():
         print(
             "[goal-eval] Error: No validation command configured for this goal.",
             file=sys.stderr,
         )
+        return None
+    return state
+
+
+def _resolve_validate_cwd(state: GoalState) -> tuple[str | None, bool]:
+    """Resolve the validation working directory.
+
+    Returns ``(cwd, ok)``; on failure ``ok`` is ``False`` and an error has
+    already been printed to stderr.
+    """
+    if not state.workdir.strip():
+        return None, True
+    try:
+        cwd = assert_workdir_usable(state.workdir)
+        logger.info("eval validate workdir=%s", cwd)
+        return cwd, True
+    except ValueError as exc:
+        print(f"[goal-eval] Error: {exc}", file=sys.stderr)
+        return None, False
+
+
+def cmd_validate(_argv: list[str]) -> int:
+    """Run the goal's validation command and persist output for eval prompts."""
+    unsafe = _refuse_if_data_dir_unsafe()
+    if unsafe is not None:
+        print(unsafe.replace("[goal]", "[goal-eval]"), file=sys.stderr)
+        return 1
+    wake_code = _check_wake()
+    if wake_code is not None:
+        return wake_code
+
+    state = _load_validate_state()
+    if state is None:
         return 1
 
     cmd = state.validation_command.strip()
@@ -177,14 +231,9 @@ def cmd_validate(_argv: list[str]) -> int:
         "Running trusted-user validation_command from goal.json "
         "(~/.cursor-goal/data is shell-equivalent trust)"
     )
-    cwd: str | None = None
-    if state.workdir.strip():
-        try:
-            cwd = assert_workdir_usable(state.workdir)
-            logger.info("eval validate workdir=%s", cwd)
-        except ValueError as exc:
-            print(f"[goal-eval] Error: {exc}", file=sys.stderr)
-            return 1
+    cwd, cwd_ok = _resolve_validate_cwd(state)
+    if not cwd_ok:
+        return 1
     result = run_validation(cmd, shell_ok=bool(state.shell_ok), cwd=cwd)
     output = result.output
     if result.timed_out:
@@ -220,13 +269,9 @@ def cmd_signal(argv: list[str]) -> int:
 
     Prefer parse-result auto-signal; use --force for recovery.
     """
-    insecure = refuse_if_data_dir_insecure()
-    if insecure is not None:
-        print(insecure.replace("[goal]", "[goal-eval]"), file=sys.stderr)
-        return 1
-    acl_fail = refuse_if_acl_harden_failed()
-    if acl_fail is not None:
-        print(acl_fail.replace("[goal]", "[goal-eval]"), file=sys.stderr)
+    unsafe = _refuse_if_data_dir_unsafe()
+    if unsafe is not None:
+        print(unsafe.replace("[goal]", "[goal-eval]"), file=sys.stderr)
         return 1
 
     try:
@@ -395,13 +440,9 @@ def _read_parse_result_text(argv: list[str]) -> str | None:
 
 
 def cmd_parse_result(argv: list[str]) -> int:
-    insecure = refuse_if_data_dir_insecure()
-    if insecure is not None:
-        print(insecure.replace("[goal]", "[goal-eval]"), file=sys.stderr)
-        return 1
-    acl_fail = refuse_if_acl_harden_failed()
-    if acl_fail is not None:
-        print(acl_fail.replace("[goal]", "[goal-eval]"), file=sys.stderr)
+    unsafe = _refuse_if_data_dir_unsafe()
+    if unsafe is not None:
+        print(unsafe.replace("[goal]", "[goal-eval]"), file=sys.stderr)
         return 1
 
     result = _read_parse_result_text(argv)

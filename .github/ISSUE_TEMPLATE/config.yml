@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability report
+    url: https://github.com/tboy1337/cursor-goal/security/advisories/new
+    about: Do not open a public issue for a vulnerability — report it privately here. See SECURITY.md.
+  - name: Documentation
+    url: https://github.com/tboy1337/cursor-goal/tree/main/docs
+    about: Check install/troubleshooting/known-limitations docs before filing an issue.

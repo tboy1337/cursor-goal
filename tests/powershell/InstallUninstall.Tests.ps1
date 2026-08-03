@@ -663,3 +663,136 @@ Describe 'Invoke-GoalInstall default repo root' {
         $code | Should -Be 0
     }
 }
+
+Describe 'Test-GoalManagedAgentFile' {
+    It 'returns false when the file does not exist' {
+        $missing = Join-Path ([IO.Path]::GetTempPath()) ("cg-agent-missing-" + [guid]::NewGuid().ToString('N') + '.md')
+        Test-GoalManagedAgentFile -Path $missing | Should -BeFalse
+    }
+
+    It 'returns false for a foreign file lacking the provenance marker' {
+        $path = Join-Path ([IO.Path]::GetTempPath()) ("cg-agent-foreign-" + [guid]::NewGuid().ToString('N') + '.md')
+        try {
+            Set-Content -Path $path -Value '# hand-authored agent, not ours' -Encoding utf8
+            Test-GoalManagedAgentFile -Path $path | Should -BeFalse
+        }
+        finally {
+            if (Test-Path $path) { Remove-Item -Force $path }
+        }
+    }
+
+    It 'returns true for a file carrying the provenance marker' {
+        $path = Join-Path ([IO.Path]::GetTempPath()) ("cg-agent-managed-" + [guid]::NewGuid().ToString('N') + '.md')
+        try {
+            Set-Content -Path $path -Value "<!-- cursor-goal:managed-agent -->`n# agent" -Encoding utf8
+            Test-GoalManagedAgentFile -Path $path | Should -BeTrue
+        }
+        finally {
+            if (Test-Path $path) { Remove-Item -Force $path }
+        }
+    }
+}
+
+Describe 'Invoke-GoalInstall rollback restores prior agent files' {
+    It 'restores pre-existing goalKeeper.md and goal-evaluator.md when the hook merge fails' {
+        Mock Invoke-GoalHooksConfigMerge { return 1 }
+        $TempHome = Join-Path ([IO.Path]::GetTempPath()) ("cg-agentrestore-" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $TempHome | Out-Null
+        try {
+            $agentsDir = Join-Path $TempHome '.cursor\agents'
+            New-Item -ItemType Directory -Force -Path $agentsDir | Out-Null
+            $priorKeeper = "<!-- cursor-goal:managed-agent -->`nprior keeper v1"
+            $priorEvaluator = "<!-- cursor-goal:managed-agent -->`nprior evaluator v1"
+            Set-Content -Path (Join-Path $agentsDir 'goalKeeper.md') -Value $priorKeeper -Encoding utf8
+            Set-Content -Path (Join-Path $agentsDir 'goal-evaluator.md') -Value $priorEvaluator -Encoding utf8
+
+            $code = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $RepoRoot -Python (Find-GoalPython)
+            $code | Should -Be 1
+
+            (Get-Content -Raw (Join-Path $agentsDir 'goalKeeper.md')).Trim() | Should -Be $priorKeeper
+            (Get-Content -Raw (Join-Path $agentsDir 'goal-evaluator.md')).Trim() | Should -Be $priorEvaluator
+            Get-ChildItem -LiteralPath $agentsDir -Filter '*.bak.*' | Should -BeNullOrEmpty
+        }
+        finally {
+            if (Test-Path $TempHome) { Remove-Item -Recurse -Force $TempHome }
+        }
+    }
+}
+
+Describe 'Invoke-GoalInstall doctor failure' {
+    It 'returns 1 and leaves install files in place when manage doctor fails' {
+        $TempHome = Join-Path ([IO.Path]::GetTempPath()) ("cg-doctorfail-" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $TempHome | Out-Null
+        $env:CURSOR_GOAL_PYTHON = 'C:\bad" & calc.exe'
+        try {
+            $code = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $RepoRoot -Python (Find-GoalPython)
+            $code | Should -Be 1
+            Test-Path (Join-Path $TempHome '.cursor\skills\goal\SKILL.md') | Should -BeTrue
+        }
+        finally {
+            Remove-Item Env:CURSOR_GOAL_PYTHON -ErrorAction SilentlyContinue
+            if (Test-Path $TempHome) { Remove-Item -Recurse -Force $TempHome }
+        }
+    }
+}
+
+Describe 'Invoke-GoalUninstall inline fallback with py launcher unavailable' {
+    It 'falls back to python for the inline-JSON cleanup path when the package is missing' {
+        $TempHome = Join-Path ([IO.Path]::GetTempPath()) ("cg-pyfallback2-" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $TempHome | Out-Null
+        try {
+            $null = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $RepoRoot -Python (Find-GoalPython)
+            $pythonExe = (Find-GoalPython).Exe
+            # Removing the package forces the second (package-independent) cleanup
+            # path, which has its own py/python resolution to exercise.
+            Remove-Item -Recurse -Force (Join-Path $TempHome '.cursor\skills\goal\cursor_goal')
+            Mock Get-Command {
+                param($Name, $ErrorAction)
+                if ($Name -eq 'py') { return $null }
+                if ($Name -eq 'python') {
+                    return [pscustomobject]@{ Name = 'python'; Source = $pythonExe }
+                }
+                return $null
+            }
+            $code = Invoke-GoalUninstall -HomeDir $TempHome
+            $code | Should -Be 0
+            $hooks = Get-Content -Raw (Join-Path $TempHome '.cursor\hooks.json') | ConvertFrom-Json
+            @($hooks.hooks.stop).Count | Should -Be 0
+        }
+        finally {
+            if (Test-Path $TempHome) { Remove-Item -Recurse -Force $TempHome }
+        }
+    }
+}
+
+Describe 'Invoke-GoalUninstall leaves foreign or backup artifacts as documented' {
+    BeforeEach {
+        $script:TempHome = Join-Path ([IO.Path]::GetTempPath()) ("cg-unforeign-" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $TempHome | Out-Null
+        $null = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $RepoRoot -Python (Find-GoalPython)
+    }
+
+    AfterEach {
+        if (Test-Path $TempHome) {
+            Remove-Item -Recurse -Force $TempHome
+        }
+    }
+
+    It 'leaves hand-edited agent files in place (missing provenance marker)' {
+        $agentsDir = Join-Path $TempHome '.cursor\agents'
+        Set-Content -Path (Join-Path $agentsDir 'goalKeeper.md') -Value 'hand-edited, no marker' -Encoding utf8
+        Set-Content -Path (Join-Path $agentsDir 'goal-evaluator.md') -Value 'hand-edited, no marker' -Encoding utf8
+        $code = Invoke-GoalUninstall -HomeDir $TempHome
+        $code | Should -Be 0
+        Test-Path (Join-Path $agentsDir 'goalKeeper.md') | Should -BeTrue
+        Test-Path (Join-Path $agentsDir 'goal-evaluator.md') | Should -BeTrue
+    }
+
+    It 'removes stale hooks.json.bak.* backup files' {
+        $hooksBak = Join-Path $TempHome '.cursor\hooks.json.bak.20200101T000000Z'
+        Set-Content -Path $hooksBak -Value '{}' -Encoding utf8
+        $code = Invoke-GoalUninstall -HomeDir $TempHome
+        $code | Should -Be 0
+        Test-Path -LiteralPath $hooksBak | Should -BeFalse
+    }
+}

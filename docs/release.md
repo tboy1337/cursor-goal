@@ -2,7 +2,7 @@
 
 Checklist for cutting a tagged GitHub Release (`vX.Y.Z`).
 
-Current package version is **3.0.0**. The public GitHub tag for this release is **`v3.0.0`**. After tagging, README/install pins work with `git clone --branch v3.0.0`.
+Current package version is **4.0.0**. The public GitHub tag for this release is **`v4.0.0`**. After tagging, README/install pins work with `git clone --branch v4.0.0`.
 
 ## Manual Cursor IDE smoke (before tagging)
 
@@ -60,7 +60,13 @@ Non-IDE wake smoke: `python scripts/wake-smoke.py` (also run by `scripts/verify.
    git push origin vX.Y.Z
    ```
 
-6. The [Release workflow](../.github/workflows/release.yml) runs Unix verify + Windows smoke/Pester, then publishes the GitHub Release (source install path; Teams marketplace imports the **git repo/tag**, not a plugin zip).
+6. The [Release workflow](../.github/workflows/release.yml) runs the full pytest suite (with the 95% multi-metric coverage gate) on Linux, Windows, and macOS gates, plus Windows Pester/PSScriptAnalyzer and install smoke on all three OSes, then builds the sdist/wheel, writes `SHA256SUMS.txt`, generates a [Sigstore-signed build provenance attestation](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations) for the built artifacts, and finally publishes the GitHub Release (source install path; Teams marketplace imports the **git repo/tag**, not a plugin zip).
+
+   Verify a downloaded artifact's provenance after release:
+
+   ```bash
+   gh attestation verify cursor_goal-X.Y.Z-py3-none-any.whl --owner tboy1337
+   ```
 
 ## Do not
 

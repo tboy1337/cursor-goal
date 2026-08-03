@@ -22,6 +22,14 @@ done <<EOF
 $(find "${REPO_ROOT}/scripts" -type f \( -name '*.sh' -o -name '*.bash' \) | sort)
 EOF
 
+# The marketplace/plugin skill tree ships its own bash entry point (the wake
+# watchdog loop launcher); keep local runs in parity with CI by scanning it
+# too instead of only scripts/.
+WAKE_LOOP_SH="${REPO_ROOT}/.cursor/skills/goal/scripts/wake_loop.sh"
+if [ -f "${WAKE_LOOP_SH}" ]; then
+  SCRIPTS+=("${WAKE_LOOP_SH}")
+fi
+
 if [ "${#SCRIPTS[@]}" -eq 0 ]; then
   echo "[shellcheck] No bash scripts found under scripts/" >&2
   exit 1

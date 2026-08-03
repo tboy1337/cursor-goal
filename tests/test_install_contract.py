@@ -174,6 +174,107 @@ def test_merge_and_remove_hooks_at_path(tmp_path: Path) -> None:
     remove_hooks_at_path(tmp_path / "missing.json")  # no-op
 
 
+def test_merge_hooks_at_path_with_subagent_stop(tmp_path: Path) -> None:
+    from cursor_goal.hooks_config import merge_hooks_at_path
+
+    path = tmp_path / "hooks.json"
+    merge_hooks_at_path(
+        path,
+        "python3 -u /abs/stop_hook.py",
+        subagent_stop_command="python3 -u /abs/stop_hook.py",
+    )
+    data = read_hooks_file(path)
+    assert len(data["hooks"]["stop"]) == 1
+    subagent_stop = data["hooks"]["subagentStop"]
+    assert len(subagent_stop) == 1
+    assert subagent_stop[0]["matcher"] == "goal-evaluator"
+    assert subagent_stop[0]["command"] == "python3 -u /abs/stop_hook.py"
+
+    # Re-merging (upgrade path) replaces rather than duplicating the marked entry.
+    merge_hooks_at_path(
+        path,
+        "python3 -u /abs/stop_hook.py",
+        subagent_stop_command="python3 -u /abs/stop_hook.py",
+    )
+    data = read_hooks_file(path)
+    assert len(data["hooks"]["stop"]) == 1
+    assert len(data["hooks"]["subagentStop"]) == 1
+
+
+def test_remove_hooks_at_path_removes_subagent_stop(tmp_path: Path) -> None:
+    from cursor_goal.hooks_config import merge_hooks_at_path, remove_hooks_at_path
+
+    path = tmp_path / "hooks.json"
+    merge_hooks_at_path(
+        path,
+        "python3 -u /abs/stop_hook.py",
+        subagent_stop_command="python3 -u /abs/stop_hook.py",
+    )
+    remove_hooks_at_path(path)
+    data = read_hooks_file(path)
+    assert data["hooks"]["stop"] == []
+    assert data["hooks"]["subagentStop"] == []
+
+
+def test_merge_subagent_stop_hook_preserves_other_matchers() -> None:
+    from cursor_goal.hooks_config import (
+        build_subagent_stop_entry,
+        is_goal_subagent_stop_hook,
+        merge_subagent_stop_hook,
+    )
+
+    data = {
+        "version": 1,
+        "hooks": {
+            "subagentStop": [
+                {"command": "./user-hook.sh", "matcher": "other-agent"},
+            ]
+        },
+    }
+    entry = build_subagent_stop_entry("python3 -u /abs/stop_hook.py")
+    merged = merge_subagent_stop_hook(data, entry)
+    subagent_stop = merged["hooks"]["subagentStop"]
+    assert len(subagent_stop) == 2
+    assert any(item.get("command") == "./user-hook.sh" for item in subagent_stop)
+    assert is_goal_subagent_stop_hook(subagent_stop[-1])
+    assert subagent_stop[-1]["matcher"] == "goal-evaluator"
+
+
+def test_remove_subagent_stop_hooks_leaves_user_entries() -> None:
+    from cursor_goal.hooks_config import (
+        build_subagent_stop_entry,
+        remove_subagent_stop_hooks,
+    )
+
+    data = {
+        "version": 1,
+        "hooks": {
+            "subagentStop": [
+                {"command": "./user-hook.sh", "matcher": "other-agent"},
+                build_subagent_stop_entry("python3 -u /abs/stop_hook.py"),
+            ]
+        },
+    }
+    result = remove_subagent_stop_hooks(data)
+    subagent_stop = result["hooks"]["subagentStop"]
+    assert len(subagent_stop) == 1
+    assert subagent_stop[0]["command"] == "./user-hook.sh"
+
+
+def test_remove_subagent_stop_hooks_no_hooks_key_is_noop() -> None:
+    from cursor_goal.hooks_config import remove_subagent_stop_hooks
+
+    data: dict[str, object] = {"version": 1}
+    assert remove_subagent_stop_hooks(data) == data
+
+
+def test_is_goal_subagent_stop_hook_rejects_non_dict() -> None:
+    from cursor_goal.hooks_config import is_goal_subagent_stop_hook
+
+    assert is_goal_subagent_stop_hook("not-a-dict") is False
+    assert is_goal_subagent_stop_hook(None) is False
+
+
 def test_read_hooks_file_accepts_bom(tmp_path: Path) -> None:
     path = tmp_path / "hooks.json"
     path.write_bytes(b'\xef\xbb\xbf{"version": 1, "hooks": {"stop": []}}\n')
@@ -208,6 +309,17 @@ def test_plugin_manifests_and_hooks_contract() -> None:
         assert "${CURSOR_PLUGIN_ROOT}" in entry["command"]
         assert entry["loop_limit"] is None
         assert entry["_cursor_goal"] == HOOK_MARKER
+    subagent_stop_list = hooks_data["hooks"]["subagentStop"]
+    assert isinstance(subagent_stop_list, list) and len(subagent_stop_list) == 2
+    for entry in subagent_stop_list:
+        assert "${CURSOR_PLUGIN_ROOT}" in entry["command"]
+        assert entry["loop_limit"] is None
+        assert entry["matcher"] == "goal-evaluator"
+        assert entry["_cursor_goal"] == "cursor_goal_subagent_stop_hook"
+    # Same launcher commands as stop — cmd_stop() dispatches on payload shape.
+    assert {e["command"] for e in subagent_stop_list} == {
+        e["command"] for e in stop_list
+    }
     assert (plugin / "skills" / "goal" / "cursor_goal" / "__init__.py").is_file()
     assert (plugin / "agents" / "goalKeeper.md").is_file()
     assert (plugin / "skills" / "goal" / "scripts" / "stop_hook.cmd").is_file()
@@ -272,7 +384,9 @@ def test_marketplace_hooks_and_doctor_fixture(tmp_path: Path) -> None:
     )
     loaded = json.loads(dest.read_text(encoding="utf-8"))
     assert len(loaded["hooks"]["stop"]) == 2
-    assert all(item.get("_cursor_goal") == HOOK_MARKER for item in loaded["hooks"]["stop"])
+    assert all(
+        item.get("_cursor_goal") == HOOK_MARKER for item in loaded["hooks"]["stop"]
+    )
 
 
 def test_sync_plugin_tree_check() -> None:

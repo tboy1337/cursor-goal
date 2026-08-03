@@ -20,6 +20,12 @@ fail-under = 9.5
 [MESSAGES CONTROL]
 # C011x: docstrings optional for small internal helpers
 # E1205: false positives with logger = get_logger(...) factories
+# R0401: logging_config <-> path_trust is a deliberate, documented cycle
+#        (path_trust needs get_logger; logging_config's optional log-file
+#        writer needs path_trust's insecure-dir/symlink checks). Broken at
+#        runtime with a function-local import in logging_config.py per the
+#        no-inline-imports rule's documented circular-dependency exception;
+#        pylint's static analysis still reports the module-level edge.
 # R0801: small CLI dispatch blocks are intentionally similar
 # W0511: allow TODO notes
 # W0718: stop hook must fail-open on any unexpected error
@@ -28,6 +34,7 @@ disable =
     C0115,
     C0116,
     E1205,
+    R0401,
     R0801,
     R0903,
     W0511,

@@ -266,12 +266,27 @@ import sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
 from cursor_goal.hooks_config import merge_hooks_at_path
-merge_hooks_at_path(Path(sys.argv[2]), sys.argv[3])
+# Same launcher command for both events: cmd_stop() dispatches on payload
+# shape (subagentStop payloads carry "subagent_type"), scoped further by the
+# installed hooks.json "matcher": "goal-evaluator".
+merge_hooks_at_path(Path(sys.argv[2]), sys.argv[3], subagent_stop_command=sys.argv[3])
 print("merged")
 '@
     try {
         Write-Utf8NoBomFile -Path $tmpPy -Content $script
-        $null = & $Python.Exe @($Python.PrefixArgs) $tmpPy $InstallDir $HooksFile $HookCommand 2>&1
+        # With $ErrorActionPreference = 'Stop' (set at the top of this script),
+        # merging a native command's stderr via 2>&1 turns any stderr line into a
+        # terminating exception the instant it reaches the pipeline - before
+        # $LASTEXITCODE can be inspected below. Locally downgrade to 'Continue' so
+        # stderr flows through as plain text instead.
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $null = & $Python.Exe @($Python.PrefixArgs) $tmpPy $InstallDir $HooksFile $HookCommand 2>&1
+        }
+        finally {
+            $ErrorActionPreference = $prevEap
+        }
         return [int]$LASTEXITCODE
     }
     finally {
@@ -313,7 +328,16 @@ print("hardened")
 '@
     try {
         Write-Utf8NoBomFile -Path $tmpPy -Content $script
-        $null = & $Python.Exe @($Python.PrefixArgs) $tmpPy $PackageRoot $DataDir 2>&1
+        # See the comment in Invoke-GoalHooksConfigMerge: 2>&1 under
+        # $ErrorActionPreference = 'Stop' throws before $LASTEXITCODE can be read.
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $null = & $Python.Exe @($Python.PrefixArgs) $tmpPy $PackageRoot $DataDir 2>&1
+        }
+        finally {
+            $ErrorActionPreference = $prevEap
+        }
         if ($LASTEXITCODE -ne 0) {
             Write-GoalErr ("Failed to harden data dir ACL (exit {0}): {1}" -f $LASTEXITCODE, $DataDir)
             return 1
@@ -446,7 +470,16 @@ print(__version__)
 '@
     try {
         Write-Utf8NoBomFile -Path $tmpVer -Content $versionScript
-        $null = & $Python.Exe @($Python.PrefixArgs) $tmpVer $installDir 2>&1
+        # See the comment in Invoke-GoalHooksConfigMerge: 2>&1 under
+        # $ErrorActionPreference = 'Stop' throws before $LASTEXITCODE can be read.
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $null = & $Python.Exe @($Python.PrefixArgs) $tmpVer $installDir 2>&1
+        }
+        finally {
+            $ErrorActionPreference = $prevEap
+        }
     }
     finally {
         Remove-Item -Force $tmpVer -ErrorAction SilentlyContinue
@@ -462,15 +495,19 @@ print(__version__)
     $agentTs = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
     $destKeeper = Join-Path $agentsDir "goalKeeper.md"
     $destEvaluator = Join-Path $agentsDir "goal-evaluator.md"
+    # $null means the agent file did not exist before this install (rollback
+    # should delete it, not "restore" a backup that never existed).
+    $keeperBak = $null
+    $evaluatorBak = $null
     if (Test-Path -LiteralPath $destKeeper) {
-        $bak = Join-Path $agentsDir "goalKeeper.md.bak.$agentTs"
-        Copy-Item -LiteralPath $destKeeper -Destination $bak -Force
-        Write-GoalInfo "Backed up existing goalKeeper.md to $bak"
+        $keeperBak = Join-Path $agentsDir "goalKeeper.md.bak.$agentTs"
+        Copy-Item -LiteralPath $destKeeper -Destination $keeperBak -Force
+        Write-GoalInfo "Backed up existing goalKeeper.md to $keeperBak"
     }
     if (Test-Path -LiteralPath $destEvaluator) {
-        $bak = Join-Path $agentsDir "goal-evaluator.md.bak.$agentTs"
-        Copy-Item -LiteralPath $destEvaluator -Destination $bak -Force
-        Write-GoalInfo "Backed up existing goal-evaluator.md to $bak"
+        $evaluatorBak = Join-Path $agentsDir "goal-evaluator.md.bak.$agentTs"
+        Copy-Item -LiteralPath $destEvaluator -Destination $evaluatorBak -Force
+        Write-GoalInfo "Backed up existing goal-evaluator.md to $evaluatorBak"
     }
     Copy-Item $sourceAgent $destKeeper -Force
     Write-GoalInfo "Installed: $destKeeper"
@@ -489,7 +526,7 @@ print(__version__)
 
     $mergeCode = Invoke-GoalHooksConfigMerge -Python $Python -InstallDir $installDir -HooksFile $hooksFile -HookCommand $hookCommand
     if ($mergeCode -ne 0) {
-        Write-GoalErr "Failed to merge stop hook via hooks_config (exit $mergeCode)."
+        Write-GoalErr "Failed to merge stop/subagentStop hooks via hooks_config (exit $mergeCode)."
         if ($hooksBak -and (Test-Path -LiteralPath $hooksBak)) {
             Write-GoalWarn "Restoring hooks.json from $hooksBak"
             Copy-Item -LiteralPath $hooksBak -Destination $hooksFile -Force
@@ -506,9 +543,25 @@ print(__version__)
         else {
             Write-GoalErr "Skill files were installed under $installDir (no prior backup to restore)."
         }
+        if ($keeperBak -and (Test-Path -LiteralPath $keeperBak)) {
+            Write-GoalWarn "Restoring goalKeeper.md from $keeperBak"
+            Move-Item -LiteralPath $keeperBak -Destination $destKeeper -Force
+        }
+        elseif (Test-Path -LiteralPath $destKeeper) {
+            Write-GoalWarn "Removing goalKeeper.md installed this run (no prior version existed)"
+            Remove-Item -Force -LiteralPath $destKeeper
+        }
+        if ($evaluatorBak -and (Test-Path -LiteralPath $evaluatorBak)) {
+            Write-GoalWarn "Restoring goal-evaluator.md from $evaluatorBak"
+            Move-Item -LiteralPath $evaluatorBak -Destination $destEvaluator -Force
+        }
+        elseif (Test-Path -LiteralPath $destEvaluator) {
+            Write-GoalWarn "Removing goal-evaluator.md installed this run (no prior version existed)"
+            Remove-Item -Force -LiteralPath $destEvaluator
+        }
         return 1
     }
-    Write-GoalInfo "Merged/upgraded stop hook in hooks.json"
+    Write-GoalInfo "Merged/upgraded stop + subagentStop hooks in hooks.json"
 
     Write-Host ""
     Write-Host "Stop hook command: $hookCommand"
@@ -516,9 +569,21 @@ print(__version__)
     Write-Host ("  {0} -u {1} manage doctor" -f $Python.Exe, (Join-Path $installDir "scripts\run_goal.py"))
     Write-Host ("  {0} -u {1} manage status" -f $Python.Exe, (Join-Path $installDir "scripts\run_goal.py"))
     Write-GoalInfo "Running manage doctor..."
-    # Pipe through Out-Host so doctor stdout does not become the function return value.
-    & $Python.Exe -u (Join-Path $installDir "scripts\run_goal.py") manage doctor 2>&1 |
-        ForEach-Object { Write-Host $_ }
+    # Pipe through Write-Host so doctor stdout does not become the function return
+    # value. doctor intentionally writes "FAIL: ..." lines to stderr on failure -
+    # exactly the case this block exists to handle - and merging stderr via 2>&1
+    # under $ErrorActionPreference = 'Stop' would otherwise throw a terminating
+    # exception before $LASTEXITCODE can be checked below. Locally downgrade to
+    # 'Continue' so stderr flows through as plain text instead.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Python.Exe -u (Join-Path $installDir "scripts\run_goal.py") manage doctor 2>&1 |
+            ForEach-Object { Write-Host $_ }
+    }
+    finally {
+        $ErrorActionPreference = $prevEap
+    }
     if ($LASTEXITCODE -ne 0) {
         Write-GoalErr "manage doctor FAILED (exit $LASTEXITCODE) - install files were written, but the harness is not healthy."
         Write-Host ("Fix FAIL lines above, then re-run: {0} -u {1} manage doctor" -f $Python.Exe, (Join-Path $installDir "scripts\run_goal.py"))

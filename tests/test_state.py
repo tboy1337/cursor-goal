@@ -322,36 +322,36 @@ def test_chmod_private_noop_on_windows(
 def test_warn_if_world_writable(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import cursor_goal.state as state_mod
+    import cursor_goal.path_trust as path_trust_mod
 
     class FakeStat:
         st_mode = 0o777
 
-    monkeypatch.setattr(state_mod.os, "name", "posix")
+    monkeypatch.setattr(path_trust_mod.os, "name", "posix")
     monkeypatch.setattr(Path, "stat", lambda self: FakeStat())
-    state_mod._warn_if_world_writable(goal_home)
+    path_trust_mod._warn_if_world_writable(goal_home)
 
 
 def test_warn_if_world_writable_noop_on_windows(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import cursor_goal.state as state_mod
+    import cursor_goal.path_trust as path_trust_mod
 
-    monkeypatch.setattr(state_mod.os, "name", "nt")
-    state_mod._warn_if_world_writable(goal_home)
+    monkeypatch.setattr(path_trust_mod.os, "name", "nt")
+    path_trust_mod._warn_if_world_writable(goal_home)
 
 
 def test_warn_if_world_writable_stat_oserror(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import cursor_goal.state as state_mod
+    import cursor_goal.path_trust as path_trust_mod
 
     def boom_stat(self: Path) -> object:
         raise OSError("stat failed")
 
-    monkeypatch.setattr(state_mod.os, "name", "posix")
+    monkeypatch.setattr(path_trust_mod.os, "name", "posix")
     monkeypatch.setattr(Path, "stat", boom_stat)
-    state_mod._warn_if_world_writable(goal_home)
+    path_trust_mod._warn_if_world_writable(goal_home)
 
 
 def test_lock_acquire_windows(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1058,10 +1058,10 @@ def test_stop_redact_without_condition_marker() -> None:
 def test_absolute_without_resolve_relative(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from cursor_goal import state as state_mod
+    from cursor_goal import path_trust as path_trust_mod
 
     monkeypatch.chdir(tmp_path)
-    out = state_mod._absolute_without_resolve(Path("rel-data"))
+    out = path_trust_mod._absolute_without_resolve(Path("rel-data"))
     assert out.is_absolute()
     assert out.name == "rel-data"
 

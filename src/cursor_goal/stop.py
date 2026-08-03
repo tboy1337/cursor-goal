@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import IO, Any
 
 from cursor_goal.logging_config import get_logger
+from cursor_goal.models import EVAL_SUBAGENT_TYPE
 from cursor_goal.state import (
     LAST_STOP_RESPONSE_NAME,
     GoalState,
@@ -29,11 +30,26 @@ from cursor_goal.wake import record_agent_nudge
 
 logger = get_logger("cursor_goal.stop")
 
+
+def _now_iso_micros() -> str:
+    """Microsecond-precision timestamp for on-disk diagnostic envelopes.
+
+    Distinct from :func:`cursor_goal.state.now_iso` (second precision, used
+    for user-facing ``goal.json`` fields): dedupe/last-response envelopes
+    benefit from finer resolution when debugging rapid successive hook
+    invocations.
+    """
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 MAX_STDIN_BYTES = 1 * 1024 * 1024
 DEFAULT_DRAIN_MS = 100
 DEFAULT_DRAIN_MS_WINDOWS = 250
 MAX_DRAIN_MS = 2000
 STOP_SINGLEFLIGHT_NAME = "stop-emit.lock"
+SUBAGENT_STOP_SINGLEFLIGHT_NAME = "subagent-stop-emit.lock"
+STOP_DEDUPE_NAME = "stop-generation.json"
+LAST_SUBAGENT_STOP_RESPONSE_NAME = "last-subagent-stop-response.json"
 _FAIL_OPEN_CONTINUE_NAME = "stop-failopen-continues"
 MAX_FAIL_OPEN_CONTINUES = 3
 _FOLLOWUP_CONDITION_MARKERS = ("toward:", "Goal:", "progress toward:")
@@ -86,6 +102,19 @@ def _fsync_stdout() -> None:
         pass
 
 
+def _refuse_if_data_dir_unsafe() -> str | None:
+    """Combined insecure-dir / Windows-ACL-harden-failure gate.
+
+    Every stop/subagentStop write path needs both checks before touching
+    the data dir; keep the two-step preamble in one place instead of
+    repeating it at each call site.
+    """
+    insecure = refuse_if_data_dir_insecure()
+    if insecure is not None:
+        return insecure
+    return refuse_if_acl_harden_failed()
+
+
 def _redact_followup_for_disk(msg: str) -> str:
     """Strip trailing goal-condition text from followup messages for disk storage."""
     lowered = msg.lower()
@@ -117,17 +146,13 @@ def _redact_payload_for_disk(payload: dict[str, Any]) -> dict[str, Any]:
 def _write_last_stop_response(payload: dict[str, Any]) -> None:
     """Persist last stop response for diagnosis (always on; redacted)."""
     try:
-        insecure = refuse_if_data_dir_insecure()
-        if insecure is not None:
-            logger.warning("Skip last-stop-response write: %s", insecure)
-            return
-        acl_fail = refuse_if_acl_harden_failed()
-        if acl_fail is not None:
-            logger.warning("Skip last-stop-response write: %s", acl_fail)
+        unsafe = _refuse_if_data_dir_unsafe()
+        if unsafe is not None:
+            logger.warning("Skip last-stop-response write: %s", unsafe)
             return
         path = data_dir() / LAST_STOP_RESPONSE_NAME
         envelope = {
-            "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "ts": _now_iso_micros(),
             "pid": os.getpid(),
             "payload": _redact_payload_for_disk(payload),
         }
@@ -137,6 +162,64 @@ def _write_last_stop_response(payload: dict[str, Any]) -> None:
         )
     except OSError as exc:
         logger.debug("Could not write %s: %s", LAST_STOP_RESPONSE_NAME, exc)
+
+
+def _stop_dedupe_path() -> Path:
+    return data_dir() / STOP_DEDUPE_NAME
+
+
+def _read_stop_dedupe() -> dict[str, Any] | None:
+    path = _stop_dedupe_path()
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _write_stop_dedupe(generation_id: str, response: dict[str, Any]) -> None:
+    payload = {
+        "generation_id": generation_id,
+        "response": response,
+        "ts": _now_iso_micros(),
+    }
+    try:
+        atomic_write_text(
+            _stop_dedupe_path(), json.dumps(payload, ensure_ascii=False) + "\n"
+        )
+    except OSError as exc:
+        logger.debug("Could not persist stop dedupe stamp: %s", exc)
+
+
+def _cached_stop_response_for(generation_id: str) -> dict[str, Any] | None:
+    """Return the cached response for *generation_id*, or None if unseen.
+
+    Guards against *sequential* dual marketplace stop hooks: the singleflight
+    lock only prevents concurrent double-processing, but two hook entries
+    that run one after another (each acquiring the now-free lock in turn)
+    would otherwise both mutate ``turns_used`` and both emit a
+    ``followup_message`` for the exact same Cursor turn. Cursor's stop
+    payload carries a per-turn ``generation_id``; once one process has fully
+    handled it, a repeat is answered from the cached response with no further
+    goal-state mutation.
+    """
+    if not generation_id:
+        return None
+    with goal_lock():
+        dedupe = _read_stop_dedupe()
+    if dedupe is None or str(dedupe.get("generation_id") or "") != generation_id:
+        return None
+    response = dedupe.get("response")
+    return response if isinstance(response, dict) else {}
+
+
+def _remember_stop_response(generation_id: str, response: dict[str, Any]) -> None:
+    if not generation_id:
+        return
+    with goal_lock():
+        _write_stop_dedupe(generation_id, response)
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -161,14 +244,56 @@ def emit_empty() -> int:
     return 0
 
 
-def _try_acquire_singleflight() -> IO[bytes] | None:
+def _write_last_subagent_stop_response(payload: dict[str, Any]) -> None:
+    """Persist last subagentStop response for diagnosis (always on; redacted)."""
+    try:
+        unsafe = _refuse_if_data_dir_unsafe()
+        if unsafe is not None:
+            logger.warning("Skip last-subagent-stop-response write: %s", unsafe)
+            return
+        path = data_dir() / LAST_SUBAGENT_STOP_RESPONSE_NAME
+        envelope = {
+            "ts": _now_iso_micros(),
+            "pid": os.getpid(),
+            "payload": _redact_payload_for_disk(payload),
+        }
+        atomic_write_text(
+            path,
+            json.dumps(envelope, indent=2, ensure_ascii=False) + "\n",
+        )
+    except OSError as exc:
+        logger.debug("Could not write %s: %s", LAST_SUBAGENT_STOP_RESPONSE_NAME, exc)
+
+
+def emit_subagent_stop(payload: dict[str, Any]) -> None:
+    """Write a subagentStop JSON response to stdout, flush, and drain."""
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+    _fsync_stdout()
+    _write_last_subagent_stop_response(payload)
+    followup = payload.get("followup_message")
+    if isinstance(followup, str) and followup.strip():
+        try:
+            record_agent_nudge(source="subagent_stop")
+        except OSError as exc:
+            logger.debug("Could not record subagent-stop nudge stamp: %s", exc)
+    drain = _drain_ms()
+    if drain > 0:
+        time.sleep(drain / 1000.0)
+
+
+def _try_acquire_singleflight(
+    lock_name: str = STOP_SINGLEFLIGHT_NAME,
+) -> IO[bytes] | None:
     """Non-blocking exclusive lock so dual marketplace hooks emit once.
 
     Caller must already refuse insecure/ACL paths (those emit ``{}``). A
     lock miss returns None for silent exit so a dual-hook loser cannot
-    overwrite a real followup with empty JSON.
+    overwrite a real followup with empty JSON. ``stop`` and ``subagentStop``
+    events use separate lock files (*lock_name*) so one event type can never
+    block the other.
     """
-    path = data_dir() / STOP_SINGLEFLIGHT_NAME
+    path = data_dir() / lock_name
     path.parent.mkdir(parents=True, exist_ok=True)
     # Lock must stay open until emit finishes (dual marketplace singleflight).
     handle = open(path, "a+b")  # pylint: disable=consider-using-with
@@ -215,10 +340,21 @@ def _release_singleflight(handle: IO[bytes] | None) -> None:
 
 
 def _budget_limited_response(state: GoalState) -> dict[str, Any]:
+    """Build the budget-exhausted followup, naming whichever budget tripped.
+
+    Turn and wake budgets are independent counters (see
+    ``budgets_exhausted``); always saying "Turn limit" even when the *wake*
+    budget was the one that tripped is misleading to whoever reads the
+    followup.
+    """
     safe_condition = redact_secrets(state.condition, max_chars=None)
+    if state.turns_used >= state.turn_budget:
+        budget_label = f"Turn limit ({state.turn_budget})"
+    else:
+        budget_label = f"Wake tick limit ({state.wake_budget})"
     return {
         "followup_message": (
-            f"[GOAL BUDGET] Turn limit ({state.turn_budget}) reached. "
+            f"[GOAL BUDGET] {budget_label} reached. "
             f"Wrap up current work and summarize progress toward: {safe_condition}"
         )
     }
@@ -287,7 +423,83 @@ def _bump_fail_open_continues() -> int:
         return count
 
 
-# pylint: disable-next=too-many-return-statements
+def handle_subagent_stop(payload: dict[str, Any] | None) -> dict[str, Any]:
+    """Compute subagentStop-hook response. Never raises — fail open to {}.
+
+    Documented (https://cursor.com/docs/hooks.md), race-free continuation
+    point: the instant the goal-evaluator subagent finishes, nudge the
+    worker to parse its verdict — *without* ever calling ``manage done``
+    itself. Defensive ``subagent_type`` check backs up the installer-side
+    ``matcher`` so no other subagent type can ever trigger this followup,
+    even if a hooks.json is hand-edited to drop the matcher.
+    """
+    if not isinstance(payload, dict):
+        return {}
+    if payload.get("subagent_type") != EVAL_SUBAGENT_TYPE:
+        return {}
+    if payload.get("status") != "completed":
+        return {}
+
+    unsafe = _refuse_if_data_dir_unsafe()
+    if unsafe is not None:
+        logger.warning("Subagent-stop refuse data dir unsafe: %s", unsafe)
+        return {}
+
+    state = snapshot_goal()
+    if state is None or not state.active or state.status != "pursuing":
+        return {}
+    safe_condition = redact_secrets(state.condition, max_chars=None)
+    message = (
+        "[GOAL] The evaluator subagent finished. Run `eval parse-result` on "
+        "its response now — YES: `manage done`; NO: continue working toward: "
+        f"{safe_condition}"
+    )
+    return {"followup_message": message}
+
+
+def _handle_stop_persist_failure(exc: OSError) -> dict[str, Any]:
+    """Best-effort continuation when persisting the turn-count mutation fails.
+
+    Caps fail-open continuations against ``MAX_FAIL_OPEN_CONTINUES`` and the
+    turn/wake budgets so a persistently failing data dir cannot grant an
+    unbounded number of free turns.
+    """
+    logger.error("Failed to persist stop-hook turn update: %s", exc)
+    try:
+        count = _bump_fail_open_continues()
+    except OSError as lock_exc:
+        logger.error("Fail-open counter lock failed: %s", lock_exc)
+        return {}
+    if count > MAX_FAIL_OPEN_CONTINUES:
+        logger.error(
+            "Stop persist failures exceeded %s; fail-open empty",
+            MAX_FAIL_OPEN_CONTINUES,
+        )
+        return {}
+    state = snapshot_goal()
+    if state is None or not state.active or state.status != "pursuing":
+        return {}
+    # Account fail-open continues against turn budget so free loops cannot
+    # bypass the budget beyond MAX_FAIL_OPEN_CONTINUES.
+    effective_turns = int(state.turns_used) + count
+    if effective_turns >= int(state.turn_budget) or budgets_exhausted(
+        effective_turns,
+        state.turn_budget,
+        state.wake_ticks,
+        state.wake_budget,
+    ):
+        logger.warning(
+            "Fail-open continue would exhaust budget "
+            "(turns_used=%s + failopen=%s >= %s); stopping",
+            state.turns_used,
+            count,
+            state.turn_budget,
+        )
+        return {}
+    remaining = max(0, state.turn_budget - effective_turns)
+    return _continue_followup(state, remaining)
+
+
 def handle_stop(
     payload: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -295,13 +507,9 @@ def handle_stop(
     if not isinstance(payload, dict):
         return {}
 
-    insecure = refuse_if_data_dir_insecure()
-    if insecure is not None:
-        logger.warning("Stop refuse insecure data dir: %s", insecure)
-        return {}
-    acl_fail = refuse_if_acl_harden_failed()
-    if acl_fail is not None:
-        logger.warning("Stop refuse ACL harden failure: %s", acl_fail)
+    unsafe = _refuse_if_data_dir_unsafe()
+    if unsafe is not None:
+        logger.warning("Stop refuse data dir unsafe: %s", unsafe)
         return {}
 
     status = payload.get("status", "unknown")
@@ -344,41 +552,7 @@ def handle_stop(
     except ValueError:
         return {}
     except OSError as exc:
-        logger.error("Failed to persist stop-hook turn update: %s", exc)
-        # Cap fail-open continuations to avoid unbounded free loops.
-        try:
-            count = _bump_fail_open_continues()
-        except OSError as lock_exc:
-            logger.error("Fail-open counter lock failed: %s", lock_exc)
-            return {}
-        if count > MAX_FAIL_OPEN_CONTINUES:
-            logger.error(
-                "Stop persist failures exceeded %s; fail-open empty",
-                MAX_FAIL_OPEN_CONTINUES,
-            )
-            return {}
-        state = snapshot_goal()
-        if state is None or not state.active or state.status != "pursuing":
-            return {}
-        # Account fail-open continues against turn budget so free loops cannot
-        # bypass the budget beyond MAX_FAIL_OPEN_CONTINUES.
-        effective_turns = int(state.turns_used) + count
-        if effective_turns >= int(state.turn_budget) or budgets_exhausted(
-            effective_turns,
-            state.turn_budget,
-            state.wake_ticks,
-            state.wake_budget,
-        ):
-            logger.warning(
-                "Fail-open continue would exhaust budget "
-                "(turns_used=%s + failopen=%s >= %s); stopping",
-                state.turns_used,
-                count,
-                state.turn_budget,
-            )
-            return {}
-        remaining = max(0, state.turn_budget - effective_turns)
-        return _continue_followup(state, remaining)
+        return _handle_stop_persist_failure(exc)
 
     if state is None:
         return {}
@@ -395,53 +569,117 @@ def handle_stop(
 
 
 def cmd_stop(_argv: list[str] | None = None) -> int:
-    """Read Cursor stop JSON from stdin; always exit 0.
+    """Read Cursor stop/subagentStop JSON from stdin; always exit 0.
+
+    The same launcher is registered for both the ``stop`` and
+    ``subagentStop`` (matcher: goal-evaluator) hook events, so this reads one
+    payload and dispatches on shape: only ``subagentStop`` payloads carry
+    ``subagent_type``. Each event uses its own singleflight lock file so one
+    event type can never block the other.
 
     Dual marketplace hooks use singleflight: the lock holder emits JSON; the
-    loser exits silently (no stdout, no last-stop-response write) so Cursor
-    cannot overwrite a real followup with ``{}``.
+    loser exits silently (no stdout, no last-response write) so Cursor
+    cannot overwrite a real followup with ``{}``. A ``generation_id``-keyed
+    dedupe stamp additionally guards *sequential* dual hooks (one hook fully
+    finishes, then the other starts) from re-charging ``turns_used`` or
+    emitting a second followup for the same Cursor turn.
 
     Insecure/ACL refuse paths emit ``{}`` (fail-open), distinct from a
     singleflight lock miss.
     """
-    insecure = refuse_if_data_dir_insecure()
-    if insecure is not None:
-        logger.warning("Stop refused (fail-open {}): %s", insecure)
-        return emit_empty()
-    acl_fail = refuse_if_acl_harden_failed()
-    if acl_fail is not None:
-        logger.warning("Stop refused (fail-open {}): %s", acl_fail)
+    unsafe = _refuse_if_data_dir_unsafe()
+    if unsafe is not None:
+        logger.warning("Stop refused (fail-open {}): %s", unsafe)
         return emit_empty()
 
-    lock = _try_acquire_singleflight()
+    try:
+        raw = sys.stdin.read(MAX_STDIN_BYTES + 1)
+    except OSError as exc:
+        logger.error("Failed to read stdin: %s", exc)
+        return emit_empty()
+
+    if len(raw) > MAX_STDIN_BYTES:
+        logger.error("Stop stdin exceeds %s bytes; fail-open", MAX_STDIN_BYTES)
+        return emit_empty()
+
+    if not raw.strip():
+        return emit_empty()
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        logger.error("Invalid stop JSON: %s", exc)
+        return emit_empty()
+
+    payload_dict = payload if isinstance(payload, dict) else None
+    is_subagent_event = (
+        isinstance(payload_dict, dict) and "subagent_type" in payload_dict
+    )
+
+    if is_subagent_event:
+        return _handle_subagent_stop_invocation(payload_dict)
+    return _handle_stop_invocation(payload_dict)
+
+
+def _handle_subagent_stop_invocation(payload_dict: dict[str, Any] | None) -> int:
+    lock = _try_acquire_singleflight(SUBAGENT_STOP_SINGLEFLIGHT_NAME)
+    if lock is None:
+        logger.info("Subagent-stop singleflight miss: silent exit (no stdout)")
+        return 0
+    try:
+        try:
+            response = handle_subagent_stop(payload_dict)
+        except Exception as exc:  # noqa: BLE001 — fail-open for subagentStop hook
+            logger.error("Unhandled subagent-stop error: %s", exc)
+            response = {}
+        try:
+            emit_subagent_stop(response if isinstance(response, dict) else {})
+        except OSError as exc:
+            logger.error("Subagent-stop emit failed (fail-open empty): %s", exc)
+            try:
+                sys.stdout.write("{}\n")
+                sys.stdout.flush()
+            except OSError as write_exc:
+                logger.error(
+                    "Subagent-stop fail-open stdout write failed: %s", write_exc
+                )
+        return 0
+    finally:
+        _release_singleflight(lock)
+
+
+def _stop_generation_id(payload_dict: dict[str, Any] | None) -> str:
+    if payload_dict is None:
+        return ""
+    raw_gen = payload_dict.get("generation_id")
+    return raw_gen.strip() if isinstance(raw_gen, str) else ""
+
+
+def _handle_stop_invocation(payload_dict: dict[str, Any] | None) -> int:
+    lock = _try_acquire_singleflight(STOP_SINGLEFLIGHT_NAME)
     if lock is None:
         logger.info("Stop singleflight miss: silent exit (no stdout)")
         return 0
     try:
-        try:
-            raw = sys.stdin.read(MAX_STDIN_BYTES + 1)
-        except OSError as exc:
-            logger.error("Failed to read stdin: %s", exc)
-            return emit_empty()
-
-        if len(raw) > MAX_STDIN_BYTES:
-            logger.error("Stop stdin exceeds %s bytes; fail-open", MAX_STDIN_BYTES)
-            return emit_empty()
-
-        if not raw.strip():
-            return emit_empty()
-
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            logger.error("Invalid stop JSON: %s", exc)
-            return emit_empty()
-
-        try:
-            response = handle_stop(payload if isinstance(payload, dict) else None)
-        except Exception as exc:  # noqa: BLE001 — fail-open for stop hook
-            logger.error("Unhandled stop error: %s", exc)
-            return emit_empty()
+        generation_id = _stop_generation_id(payload_dict)
+        cached = _cached_stop_response_for(generation_id) if generation_id else None
+        if cached is not None:
+            logger.info(
+                "Stop dedupe hit for generation_id=%s...; re-emitting cached "
+                "response without re-charging turns_used",
+                generation_id[:8],
+            )
+            response = cached
+        else:
+            try:
+                response = handle_stop(payload_dict)
+            except Exception as exc:  # noqa: BLE001 — fail-open for stop hook
+                logger.error("Unhandled stop error: %s", exc)
+                return emit_empty()
+            if generation_id:
+                _remember_stop_response(
+                    generation_id, response if isinstance(response, dict) else {}
+                )
 
         try:
             emit(response if isinstance(response, dict) else {})

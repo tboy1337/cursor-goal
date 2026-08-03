@@ -13,22 +13,26 @@ process-control surface is easy to audit on its own.
 
 from __future__ import annotations
 
+import ctypes
 import json
 import os
-import secrets
 import signal
 import subprocess  # nosec B404 — taskkill / ownership checks only
-from datetime import datetime, timezone
+import time
 from pathlib import Path
 from typing import Any
 
 from cursor_goal.logging_config import get_logger
 from cursor_goal.state import atomic_write_text, data_dir, goal_lock
+from cursor_goal.state import now_iso as _now_iso
 
 logger = get_logger("cursor_goal.wake_process")
 
 WAKE_PID_NAME = "wake.pid"
 WAKE_ORPHAN_NAME = "wake.orphan"
+# Bounded grace period after SIGTERM before escalating to SIGKILL (Unix).
+_SIGTERM_GRACE_S = 2.0
+_SIGTERM_POLL_S = 0.1
 
 
 def wake_pid_path() -> Path:
@@ -72,7 +76,7 @@ def read_orphan_wake() -> dict[str, Any] | None:
     if not path.is_file():
         return None
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
         return None
     if not isinstance(data, dict):
@@ -80,13 +84,50 @@ def read_orphan_wake() -> dict[str, Any] | None:
     return data
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+# Windows-only OpenProcess/GetExitCodeProcess constants for _windows_pid_alive.
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_STILL_ACTIVE = 259
+
+
+def _windows_pid_alive(pid: int) -> bool:
+    """Windows liveness probe via OpenProcess + GetExitCodeProcess.
+
+    ``os.kill(pid, 0)`` is NOT a safe liveness probe on Windows: CPython's
+    Windows shim only special-cases ``CTRL_C_EVENT``/``CTRL_BREAK_EVENT``,
+    and for any other signal value (including ``0``) it calls
+    ``TerminateProcess(pid, sig)`` — i.e. ``os.kill(pid, 0)`` unconditionally
+    **kills** the target process (with exit code 0) instead of merely
+    checking whether it exists. Never call ``os.kill(..., 0)`` on Windows.
+    """
+    kernel32 = getattr(ctypes, "windll", None)
+    if kernel32 is None:
+        # Host has no Win32 APIs (e.g. posix test with os.name mocked).
+        return False
+    handle = None
+    try:
+        handle = kernel32.kernel32.OpenProcess(
+            _PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid)
+        )
+        if not handle:
+            return False
+        exit_code = ctypes.c_ulong(0)
+        ok = kernel32.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+        if not ok:
+            return False
+        return exit_code.value == _STILL_ACTIVE
+    except (AttributeError, OSError, ValueError, TypeError) as exc:
+        logger.debug("Windows liveness probe failed for pid=%s: %s", pid, exc)
+        return False
+    finally:
+        if handle:
+            kernel32.kernel32.CloseHandle(handle)
 
 
 def _pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
+    if os.name == "nt":
+        return _windows_pid_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -110,7 +151,8 @@ def _read_pid_record() -> (  # pylint: disable=too-many-return-statements
     if not path.is_file():
         return None
     try:
-        raw = path.read_text(encoding="utf-8").strip()
+        # utf-8-sig tolerates a BOM (e.g. from a Windows editor).
+        raw = path.read_text(encoding="utf-8-sig").strip()
     except OSError:
         return None
     if not raw:
@@ -143,9 +185,7 @@ def _read_pid_record() -> (  # pylint: disable=too-many-return-statements
         except (TypeError, ValueError):
             return None
         if not token:
-            logger.warning(
-                "Clearing wake.pid pid=%s with empty ownership token", pid
-            )
+            logger.warning("Clearing wake.pid pid=%s with empty ownership token", pid)
             if _pid_alive(pid):
                 mark_orphan_wake(
                     pid,
@@ -185,11 +225,6 @@ def _write_pid_record(pid: int, token: str) -> None:
             json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
         )
     clear_orphan_wake()
-
-
-def _write_pid(pid: int, token: str | None = None) -> None:
-    """Write pid ownership record (token required; generated if omitted)."""
-    _write_pid_record(pid, token if token else secrets.token_hex(8))
 
 
 def _clear_pid(
@@ -237,9 +272,7 @@ def _cmdline_looks_owned(cmdline: str) -> bool:
     if not has_wake_token:
         return False
     return (
-        "cursor_goal" in lowered
-        or "cursor-goal" in lowered
-        or "run_goal.py" in lowered
+        "cursor_goal" in lowered or "cursor-goal" in lowered or "run_goal.py" in lowered
     )
 
 
@@ -368,3 +401,31 @@ def _kill_pid(pid: int, *, token: str | None = None) -> None:
         os.kill(pid, signal.SIGTERM)
     except OSError as exc:  # pragma: no cover
         logger.debug("Could not signal wake pid %s: %s", pid, exc)
+        return
+    # A hung loop (e.g. blocked in a syscall) can survive SIGTERM; escalate
+    # to SIGKILL after a bounded grace period so disarm never leaves an
+    # orphaned process behind.
+    deadline = time.monotonic() + _SIGTERM_GRACE_S
+    while time.monotonic() < deadline:  # pragma: no cover — Unix CI
+        if not _pid_alive(pid):
+            return
+        time.sleep(_SIGTERM_POLL_S)
+    if _pid_alive(pid):  # pragma: no cover — Unix CI
+        logger.warning(
+            "wake pid=%s still alive %.1fs after SIGTERM; escalating to SIGKILL",
+            pid,
+            _SIGTERM_GRACE_S,
+        )
+        # getattr, not signal.SIGKILL directly: this branch only runs on Unix
+        # at runtime (Windows returns earlier via taskkill above), but
+        # typeshed hides SIGKILL from the signal module stub entirely when
+        # type-checking for win32, so a direct attribute reference is a false
+        # positive on Windows dev machines / CI legs.
+        sigkill = getattr(signal, "SIGKILL", None)
+        if sigkill is None:  # pragma: no cover — defensive; Unix always has it
+            logger.debug("SIGKILL unavailable on this platform for pid %s", pid)
+            return
+        try:
+            os.kill(pid, sigkill)
+        except OSError as exc:
+            logger.debug("SIGKILL failed for wake pid %s: %s", pid, exc)

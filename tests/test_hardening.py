@@ -1050,11 +1050,14 @@ def test_create_refuses_acl_harden_failure(
 def test_doctor_wake_warning_includes_command(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from cursor_goal import manage as manage_mod
+    from cursor_goal import doctor as doctor_mod
 
     monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
     run_cli("manage", "create", "doctor wake")
-    monkeypatch.setattr(manage_mod, "_hooks_look_configured", lambda: True)
+    # Patch on doctor_mod (where cmd_doctor's globals actually resolve the
+    # name from), not manage_mod's re-export — patching the re-export alias
+    # has no effect on cmd_doctor's own module-level lookup.
+    monkeypatch.setattr(doctor_mod, "_hooks_look_configured", lambda: True)
     # Armed but no loop pid → hard-fail with exact command
     code, out, err = run_cli("manage", "doctor")
     assert code == 1
@@ -1119,7 +1122,7 @@ def test_windows_reparse_point_is_insecure(
 def test_windows_reparse_helper_symlink(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import cursor_goal.state as state_mod
+    import cursor_goal.path_trust as path_trust_mod
 
     del goal_home
     del monkeypatch
@@ -1128,7 +1131,7 @@ def test_windows_reparse_helper_symlink(
         def is_symlink(self) -> bool:
             return True
 
-    assert state_mod._windows_path_is_reparse_point(Fake()) is True  # type: ignore[arg-type]
+    assert path_trust_mod._windows_path_is_reparse_point(Fake()) is True  # type: ignore[arg-type]
 
 
 def test_stop_and_wake_refuse_acl_harden(
@@ -1273,7 +1276,7 @@ def test_harden_windows_acl_force_reharden(
 
 
 def test_is_absolute_interpreter_path() -> None:
-    from cursor_goal.manage import _is_absolute_interpreter_path
+    from cursor_goal.doctor import _is_absolute_interpreter_path
 
     assert _is_absolute_interpreter_path(r"C:\Python\python.exe") is True
     assert _is_absolute_interpreter_path("/usr/bin/python3") is True

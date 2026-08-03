@@ -46,4 +46,4 @@ python3 -u ~/.cursor/skills/goal/scripts/run_goal.py manage status
 python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval spawn-config
 ```
 
-Workloads in `workloads.py` invoke `run_goal.py` with `eval spawn-config` so evaluator Task calls use `goal-evaluator` + the configured model (default `fast`).
+Workloads in `workloads.py` invoke `run_goal.py` with `eval spawn-config` so evaluator Task calls use `goal-evaluator` + the configured model (default `composer-2.5`; override with `CURSOR_GOAL_EVAL_MODEL`).

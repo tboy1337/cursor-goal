@@ -8,11 +8,11 @@ Also: [known-limitations.md](known-limitations.md) · [troubleshooting.md](troub
 
 ## Compatibility Matrix
 
-| Platform | Agent Defs | Subagent Tool | Stop Hook | Tested |
-|----------|------------|---------------|-----------|--------|
-| Cursor IDE (Unix) | `goalKeeper.md` + `goal-evaluator.md` | `Task` | `hooks.json` → `stop_hook.py` | **Harness YES**; stop followups best-effort (residual race — use wake) |
-| Cursor IDE (Windows) | same | `Task` | `stop_hook.cmd` (+ drain) + wake watchdog | Harness YES; race mitigated; wake bypass ([research](cursor-windows-stop-hook-race.md)) |
-| Teams marketplace plugin | same | `Task` | Dual `stop_hook.cmd` + `python3` + singleflight; wake watchdog | Harness YES; set absolute `CURSOR_GOAL_PYTHON` (doctor requires it on Windows marketplace) |
+| Platform | Agent Defs | Subagent Tool | Stop / subagentStop Hooks | Tested |
+|----------|------------|---------------|---------------------------|--------|
+| Cursor IDE (Unix) | `goalKeeper.md` + `goal-evaluator.md` | `Task` | `hooks.json` → `stop_hook.py` (both events) | **Harness YES**; hook followups documented and primary; occasional stdout-capture race — arm wake as a best-effort supplement |
+| Cursor IDE (Windows) | same | `Task` | `stop_hook.cmd` (+ drain), both events | Harness YES; race mitigated; wake is a recommended best-effort supplement ([research](cursor-windows-stop-hook-race.md)) |
+| Teams marketplace plugin | same | `Task` | Dual `stop_hook.cmd` + `python3` + singleflight/dedupe, both events | Harness YES; set absolute `CURSOR_GOAL_PYTHON` (doctor requires it on Windows marketplace) |
 | Cursor CLI | same | `Task` | `hooks.json` | NO (E2E) |
 
 ## Installed Layout
@@ -23,8 +23,9 @@ Also: [known-limitations.md](known-limitations.md) · [troubleshooting.md](troub
 .cursor/skills/goal/SKILL.md       → ~/.cursor/skills/goal/SKILL.md
 .cursor/skills/goal/scripts/*      → ~/.cursor/skills/goal/scripts/
 src/cursor_goal/                   → ~/.cursor/skills/goal/cursor_goal/
-~/.cursor/hooks.json               → stop → (Unix) <python> -u …/stop_hook.py
-                                   → stop → (Windows) …/stop_hook.cmd
+~/.cursor/hooks.json               → stop, subagentStop (matcher: goal-evaluator)
+                                   → (Unix) <python> -u …/stop_hook.py
+                                   → (Windows) …/stop_hook.cmd
 VERSION                            → ~/.cursor/skills/goal/VERSION (package stamp)
 ```
 
@@ -33,17 +34,17 @@ VERSION                            → ~/.cursor/skills/goal/VERSION (package st
 | Role | Model | Mechanism |
 |------|--------|-----------|
 | Worker | Session model | Skill + `goalKeeper` (`model: inherit`) |
-| Evaluator | `CURSOR_GOAL_EVAL_MODEL` or default `fast` | `goal-evaluator` via `Task` |
-| Continuation | N/A (no LLM) | Stop hook (`followup_message`) + wake watchdog (`AGENT_GOAL_WAKE`) |
+| Evaluator | `CURSOR_GOAL_EVAL_MODEL` or default `composer-2.5` | `goal-evaluator` via `Task` |
+| Continuation | N/A (no LLM) | `stop` + `subagentStop` hooks (`followup_message`, documented, primary) + wake watchdog (`AGENT_GOAL_WAKE`, undocumented, best-effort) |
 
 Resolve Task spawn parameters from the harness (do not hardcode a premium model):
 
 ```bash
 python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval spawn-config
-# → {"subagent_type":"goal-evaluator","model":"fast","readonly":true}
+# → {"subagent_type":"goal-evaluator","model":"composer-2.5","readonly":true}
 ```
 
-Some Cursor plans only accept Task `model: "fast"`; specific model IDs work when your plan allows them. See [Cursor subagents](https://cursor.com/docs/subagents.md).
+`fast` is **not** a valid Cursor `model` ID — it is only a bracket parameter on a real model (e.g. `composer-2.5[fast=false]`). Setting `CURSOR_GOAL_EVAL_MODEL=fast` is treated as a known-invalid legacy value: it logs a warning and falls back to the default rather than being passed through, and `manage doctor` hard-fails on it. On legacy request-based Cursor plans without Max Mode, Task subagents may still run on a Cursor-selected model regardless of the requested `model` — `spawn-config` reflects the *requested* model, not a runtime guarantee. See [Cursor subagents](https://cursor.com/docs/subagents.md).
 
 ## Environment Variables
 
@@ -52,13 +53,14 @@ Some Cursor plans only accept Task `model: "fast"`; specific model IDs work when
 | `CURSOR_GOAL_DATA` | Absolute override for `~/.cursor-goal/data` |
 | `CURSOR_GOAL_HOME` | Absolute override for skill/home resolution used by path helpers (when set) |
 | `CURSOR_GOAL_PYTHON` | Absolute Python 3.12+ interpreter for marketplace/classic Windows `.cmd` launchers (required for reliable Teams marketplace on Windows) |
-| `CURSOR_GOAL_EVAL_MODEL` | Evaluator model slug for `eval spawn-config` (default `fast`) |
+| `CURSOR_GOAL_EVAL_MODEL` | Evaluator model slug for `eval spawn-config` (default `composer-2.5`; `fast` is a known-invalid legacy value that falls back to the default) |
 | `CURSOR_GOAL_LOG` | Log level (`WARNING` default; invalid values fall back to WARNING). `last-stop-response.json` is always written on stop emit (redacted) |
 | `CURSOR_GOAL_LOG_FILE` | Optional durable log path, or `1`/`.` for `cursor-goal.log` under the data dir |
 | `CURSOR_GOAL_STOP_DRAIN_MS` | Stop-hook stdout drain delay before exit (default ~250 on Windows, ~100 elsewhere; max 2000) |
 | `CURSOR_GOAL_WAKE` | When `0`/`false`/`off`, disable wake watchdog arming |
 | `CURSOR_GOAL_WAKE_INTERVAL_S` | Wake loop interval seconds (default 15, min 5, max 600) |
-| `CURSOR_GOAL_ALLOW_DEAD_WAKE` | When `1`/`true`/`yes`/`on`, allow `eval validate` while pursuing without a live wake loop (not recommended) |
+| `CURSOR_GOAL_ALLOW_DEAD_WAKE` | When `1`/`true`/`yes`/`on`, silence the wake-dead warning printed by `eval validate`/`prompt`/`spawn-config` (they already continue by default) |
+| `CURSOR_GOAL_REQUIRE_WAKE` | When `1`/`true`/`yes`/`on`, restore the old strict behavior: `eval validate`/`prompt`/`spawn-config` **refuse** (exit 1) while pursuing without a live wake loop, instead of only warning |
 | `CURSOR_GOAL_ALLOW_ANY_WORKDIR` | When set, allow `--workdir` outside the create-time process cwd (still rejects symlink/junction/reparse) |
 | `CURSOR_GOAL_DENY_SHELL` | When `1`/`true`/`yes`/`on`, refuse shell-mode validation (argv only) |
 | `CURSOR_GOAL_LOG_SECRETS` | When set, DEBUG may log full validation commands (default: never) |
@@ -106,7 +108,7 @@ On Windows, pipe the response into `eval parse-result --stdin` (or use `@file`) 
 
 ## Design notes
 
-- **Primary evaluation is in-turn.** The stop hook is a Cursor safety net only.
+- **Primary evaluation is in-turn.** The `stop`/`subagentStop` hooks are Cursor's documented continuation mechanism, not the evaluator — they only keep the turn loop going.
 - Installer sets `loop_limit: null` so product `turn_budget` governs length (Cursor default would be 5).
 - Prefer `--test "..."` for compound validation commands; NL runner hints truncate at `&&` / `|` / `;`.
-- **Windows stop-hook mitigation:** installer writes `stop_hook.cmd` (cmd.exe launcher with absolute Python) and the Python hook flushes + waits (~250ms on Windows via `CURSOR_GOAL_STOP_DRAIN_MS`) before exit so Cursor’s stdout reader can catch `followup_message` ([Cursor race](https://forum.cursor.com/t/race-condition-silently-disables-hooks-that-exit-quickly/165818)). Residual risk remains until Cursor ships a permanent launcher fix. Always writes `last-stop-response.json`. **Wake watchdog** (`wake loop` + `notify_on_output`) continues goals when followups drop — see [cursor-windows-stop-hook-race.md](cursor-windows-stop-hook-race.md).
+- **Windows stop-hook mitigation:** installer writes `stop_hook.cmd` (cmd.exe launcher with absolute Python) and the Python hook flushes + waits (~250ms on Windows via `CURSOR_GOAL_STOP_DRAIN_MS`) before exit so Cursor's stdout reader can catch `followup_message` ([Cursor race](https://forum.cursor.com/t/race-condition-silently-disables-hooks-that-exit-quickly/165818)). Residual risk remains until Cursor ships a permanent launcher fix. Always writes `last-stop-response.json`. **Wake watchdog** (`wake loop` + `notify_on_output`) is a best-effort, undocumented supplement that continues goals when followups drop — see [cursor-windows-stop-hook-race.md](cursor-windows-stop-hook-race.md) and [known-limitations.md](known-limitations.md).

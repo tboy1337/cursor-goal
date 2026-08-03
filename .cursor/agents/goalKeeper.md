@@ -80,9 +80,10 @@ Do **not** put long evaluator responses on the Windows command line (argv length
 ## Platform Notes (Cursor)
 
 - **Worker model:** session / `inherit` (this agent).
-- **Evaluator model:** from `eval spawn-config` (default `fast`; override with `CURSOR_GOAL_EVAL_MODEL`).
+- **Evaluator model:** from `eval spawn-config` (default `composer-2.5`; override with `CURSOR_GOAL_EVAL_MODEL`).
 - **Subagent tool:** `Task` — spawn `goal-evaluator` with spawn-config params.
-- **Stop hook:** Cursor `hooks.json` → `stop_hook.py` (Unix) or `stop_hook.cmd` (Windows) returns `followup_message` (safety net). Prefer in-turn evaluation. Windows uses a cmd launcher + stdout drain delay to mitigate Cursor’s capture race. Marketplace installs register both launchers; singleflight prevents double followups.
+- **Stop hook (primary, documented):** Cursor `hooks.json` → `stop_hook.py` (Unix) or `stop_hook.cmd` (Windows) returns `followup_message`. Prefer in-turn evaluation. Windows uses a cmd launcher + stdout drain delay to mitigate Cursor's capture race. Marketplace installs register both launchers; singleflight + a `generation_id` dedupe stamp prevent double followups / double-charged turns.
+- **subagentStop hook (documented, race-free):** the same script is also registered for `subagentStop` scoped to `goal-evaluator` (`matcher`). The instant the evaluator subagent finishes it returns a `followup_message` reminding the worker to run `eval parse-result`. It never calls `manage done` itself — only the worker does, after parsing the verdict.
 - **Wake watchdog (required while pursuing):** After `manage create` / `resume`, parse `GOAL_WAKE_REQUIRED`, start its `command` in a background Shell with `notify_on_output` matching `pattern` or `notify_pattern` (`^AGENT_GOAL_WAKE`), then verify `wake status` shows `continuation_ready=true`. Prefer the event/`harness-cmd` command over hardcoded paths. Continues even when Cursor drops stop-hook stdout. Disarmed on done/pause/clear. Disable with `CURSOR_GOAL_WAKE=0`.
 - **No idle while pursuing:** do not end a turn without `manage done` or a completed evaluate→NO cycle with the next action started.
 
@@ -97,3 +98,6 @@ Do **not** put long evaluator responses on the Windows command line (argv length
 - On `AGENT_GOAL_WAKE`, check `manage status` then continue if still pursuing
 - `--force` on `done` / `signal` is recovery only — not cryptographic attestation
 - Never claim wake is running from `pid_alive` alone without having started Shell with `notify_on_output`
+
+<!-- cursor-goal:managed-agent - installed/uninstalled by scripts/install-goal.*; back up before hand-editing -->
+

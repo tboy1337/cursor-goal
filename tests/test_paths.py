@@ -147,7 +147,6 @@ def test_absolute_without_resolve_oserror(monkeypatch: pytest.MonkeyPatch) -> No
         raise OSError("nope")
 
     monkeypatch.setattr(path_trust_mod, "_absolute_without_resolve", boom)
-    monkeypatch.setattr(state_mod, "_absolute_without_resolve", boom)
     assert state_mod.path_has_symlink_or_reparse(P(".")) is True
 
 

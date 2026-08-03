@@ -1,6 +1,6 @@
 ---
 name: goal
-description: Autonomous goal loop. Use when the user types /goal followed by a completion condition, or asks to pursue a goal until tests/lint/build pass. Keeps working across turns until the condition is met via a separate evaluator model and a stop-hook safety net.
+description: Autonomous goal loop. Use when the user types /goal followed by a completion condition, or asks to pursue a goal until tests/lint/build pass. Keeps working across turns until the condition is met via a separate evaluator model and documented stop/subagentStop hooks.
 ---
 
 # /goal — Autonomous Goal Loop
@@ -48,7 +48,7 @@ py -3 -u "$env:CURSOR_PLUGIN_ROOT\skills\goal\scripts\run_goal.py" <command> ...
 | `parse "<input>"` | Parse `/goal` input → JSON |
 | `manage create\|status\|doctor\|harness-cmd\|pause\|resume\|done\|clear` | Goal state lifecycle |
 | `eval validate\|spawn-config\|prompt\|parse-result\|signal\|check` | Evaluator harness |
-| `stop` | Stop hook (stdin JSON → stdout JSON) |
+| `stop` | Stop **and** subagentStop hook (stdin JSON → stdout JSON; dispatches on payload shape) |
 | `wake arm\|tick\|disarm\|status\|loop` | Wake watchdog (shell notify sentinel) |
 
 State file: `~/.cursor-goal/data/goal.json` (override with `CURSOR_GOAL_DATA`, must be absolute when set).
@@ -103,7 +103,7 @@ Then:
   - `force: true` → `--force` (replace existing goal)
   - If parse lacks `allow_shell` but the raw user text contains `--allow-shell` / `--deny-shell`, forward those flags from the raw input before create.
 
-After **every** `create` or `resume`, complete the **Wake handshake** below **before** other work. **Do not skip.** Create with wake enabled prints `Status: paused (awaiting wake arm)` until arm/activate succeeds, then `Status: pursuing`. If create/resume exits non-zero (wake arm failed → goal paused), fix the error and `manage resume` — do not work as if pursuing. If `wake status` shows `continuation_ready=false` while pursuing, refuse further goal work until the loop is alive. Tip: `CURSOR_GOAL_LOG_FILE=1` for durable diagnostics. Then start working toward the condition.
+After **every** `create` or `resume`, complete the **Wake handshake** below **before** other work. **Do not skip.** Create with wake enabled prints `Status: paused (awaiting wake arm)` until arm/activate succeeds, then `Status: pursuing`. If create/resume exits non-zero (wake arm failed → goal paused), fix the error and `manage resume` — do not work as if pursuing. If `wake status` shows `continuation_ready=false` while pursuing, `manage status` / `manage doctor` treat that as blocking (ACTION REQUIRED / FAIL, exit non-zero) — start the loop before relying on those commands' success. Tip: `CURSOR_GOAL_LOG_FILE=1` for durable diagnostics. Then start working toward the condition.
 
 ## Command Reference
 
@@ -122,7 +122,7 @@ Aliases for clear: `stop`, `off`, `reset`, `cancel`
 | Role | Model | How |
 |------|--------|-----|
 | Worker | Session model | This skill / `goalKeeper` (`inherit`) |
-| Evaluator | `CURSOR_GOAL_EVAL_MODEL` or default `fast` | `Task` → `goal-evaluator` |
+| Evaluator | `CURSOR_GOAL_EVAL_MODEL` or default `composer-2.5` | `Task` → `goal-evaluator` |
 
 Always resolve Task params from the harness:
 
@@ -138,9 +138,9 @@ SPAWN=$(python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval spawn-config)
 $SPAWN = py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" eval spawn-config
 ```
 
-Example: `{"subagent_type":"goal-evaluator","model":"fast","readonly":true}`
+Example: `{"subagent_type":"goal-evaluator","model":"composer-2.5","readonly":true}`
 
-Never evaluate with `generalPurpose` or the same Task call as the worker. Some Cursor plans only accept Task `model: "fast"`; override with a specific slug only when your plan allows it.
+Never evaluate with `generalPurpose` or the same Task call as the worker. `CURSOR_GOAL_EVAL_MODEL` must be `inherit` or a real Cursor model ID — `fast` is **not** a valid value (it is only a bracket option on a real model, e.g. `composer-2.5[fast=false]`); a legacy `fast` override is rejected and silently falls back to the default. On legacy request-based Cursor plans without Max Mode, Task subagents may still run on a Cursor-selected model regardless of the requested `model` — spawn-config reflects the *requested* model, not a runtime guarantee.
 
 ## Working Toward the Goal
 
@@ -175,7 +175,7 @@ EOF
 '@ | py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" eval parse-result --stdin
 ```
 
-Alternatively: `eval parse-result @path\to\file.txt` or (short output only) `eval parse-result "YES: …"`.
+Alternatively: `eval parse-result @path\to\file.txt` or (short output only) `eval parse-result "YES: …"`. `@file` paths must resolve under the goal data directory unless `--allow-cwd` is also passed, which additionally permits paths under the current working directory.
 
 On YES: automatically records a YES-bound evaluator signal (exit 0). On NO/UNCLEAR: exit 1.
 
@@ -191,17 +191,20 @@ Evaluate after validation results, logical units of work, or changes that could 
 
 **While `status` is `pursuing`, do not end the turn idle.** Either mark the goal done (`manage done` after YES) or finish an evaluate cycle (NO) and start the next concrete action in the same turn. Do not stop mid-goal waiting for the stop hook to wake you.
 
-## Stop Hook Safety Net
+## Continuation Hooks (documented, primary safety net)
 
-The stop hook (`scripts/stop_hook.py`, Windows: `scripts/stop_hook.cmd`) fires when your turn ends. If the goal is still active, it returns a `followup_message` that auto-continues you.
+Two Cursor-documented hooks (`https://cursor.com/docs/hooks.md`), both wired to `scripts/stop_hook.py` (Windows: `scripts/stop_hook.cmd`), keep the turn loop going:
 
-**Do not rely on the stop hook as the primary evaluator.** In-turn subagent evaluation is primary. On Windows the installer uses a `.cmd` launcher plus a stdout drain delay to mitigate Cursor’s capture race; if a followup still drops, use the wake watchdog. Every stop emit writes `~/.cursor-goal/data/last-stop-response.json` (`ts`, `pid`, `payload`).
+- **`stop`** fires when your turn ends. If the goal is still `pursuing`, it returns a `followup_message` that auto-continues you.
+- **`subagentStop`** (`matcher: "goal-evaluator"`) fires the instant the evaluator subagent finishes, independent of when your own turn ends. It reminds you to run `eval parse-result` on the verdict — it never calls `manage done` itself.
+
+**Do not rely on either hook as the evaluator itself.** In-turn subagent evaluation decides YES/NO; these hooks only keep turns flowing. On Windows the installer uses a `.cmd` launcher plus a stdout drain delay to mitigate Cursor's capture race; if a followup still drops, the wake watchdog below is a best-effort supplement. Every `stop` emit writes `~/.cursor-goal/data/last-stop-response.json` (`ts`, `pid`, `payload`); every `subagentStop` emit writes `~/.cursor-goal/data/last-subagent-stop-response.json`.
 
 When you see a `[GOAL]` prefix, resume working toward the condition immediately.
 
-## Wake Watchdog (race-immune continuation)
+## Wake Watchdog (best-effort supplement, not a Cursor-documented mechanism)
 
-**Operational prerequisite:** while a goal is `pursuing` and wake is enabled, a live Shell wake loop with `notify_on_output` is required. Cursor may drop stop-hook stdout (see repo `docs/cursor-windows-stop-hook-race.md`); wake is the durable path. Opt out only with `CURSOR_GOAL_WAKE=0`.
+While a goal is `pursuing` and wake is enabled (the default), arming and starting a live Shell wake loop with `notify_on_output` is **recommended** as a supplement to the two hooks above — it does not depend on Cursor capturing hook stdout (see repo `docs/cursor-windows-stop-hook-race.md`). It is **not** a Cursor-documented API (`notify_on_output` on a background Shell is a Cursor IDE convenience, not a hooks contract), so treat it as best-effort: long-idle background shells can be reaped by the platform. `eval validate` / `eval prompt` / `eval spawn-config` warn (not refuse) when pursuing without a verified-alive loop; set `CURSOR_GOAL_REQUIRE_WAKE=1` to restore the old hard-refusal behavior. `manage create`/`resume` and `manage doctor`/`status` are unchanged: arming still gates `pursuing`, and doctor/status still hard-fail while pursuing with `continuation_ready=false`. Opt out of wake entirely with `CURSOR_GOAL_WAKE=0`. For fully unattended runs outside the IDE turn loop, prefer a Cursor Automation or the Cursor CLI/SDK headless agent loop instead of relying on a monitored background shell.
 
 `manage create` / `resume` arms wake state and prints one machine-readable line agents must consume:
 
@@ -211,9 +214,9 @@ GOAL_WAKE_REQUIRED {"command":"<shell command>","pattern":"^AGENT_GOAL_WAKE","no
 
 If arm fails, create/resume **exits 1**, leaves the goal **`paused`**, and does not print `GOAL_WAKE_REQUIRED`.
 
-### Wake handshake (mandatory after every create/resume)
+### Wake handshake (recommended after every create/resume)
 
-Do **not** skip. Until `continuation_ready=true` (implies `pid_alive=true`), refuse other goal work (`eval validate` / `eval prompt` / `eval spawn-config` will refuse unless `CURSOR_GOAL_ALLOW_DEAD_WAKE=1` or wake is disabled).
+Do this before other work when wake is enabled. Until `continuation_ready=true` (implies `pid_alive=true`), `manage status` / `manage doctor` report **ACTION REQUIRED** / **FAIL** and exit non-zero — treat that as blocking for those specific commands. `eval validate` / `eval prompt` / `eval spawn-config` only **warn** (they no longer refuse) while `continuation_ready=false`; set `CURSOR_GOAL_REQUIRE_WAKE=1` if you want them to hard-refuse instead, or `CURSOR_GOAL_ALLOW_DEAD_WAKE=1` to silence the warning.
 
 1. **Parse** the `GOAL_WAKE_REQUIRED` line from create/resume stdout (JSON after the prefix). If missing and wake is enabled, run `wake status` and use its `command` + `notify_pattern` / `pattern` fields (or `manage harness-cmd` → Wake loop line). Prefer the event `command` over hardcoded paths. `pattern` and `notify_pattern` are aliases (same value).
 2. **Background Shell tool call** — immediately start that `command` with `notify_on_output` matching the event `pattern` or `notify_pattern` (always `^AGENT_GOAL_WAKE` unless the event says otherwise). This must be a real Shell tool invocation; the harness cannot attach Cursor notifications for you.
@@ -223,7 +226,7 @@ Do **not** skip. Until `continuation_ready=true` (implies `pid_alive=true`), ref
 
 Manual `wake tick` coalesces when a recent *wake*-sourced nudge falls inside one interval (avoids double ticks). The background `wake loop` emits on its own cadence and does not apply that coalesce window. Stop-hook stamps never suppress wake.
 
-Interval: `CURSOR_GOAL_WAKE_INTERVAL_S` (default 15, min 5, max 600). Each wake emission increments `wake_ticks` against **`wake_budget`** (independent of turn budget). Default `wake_budget = turn_budget * 10` (min 10, max 500). Override with `--wake-budget N`.
+Interval: `CURSOR_GOAL_WAKE_INTERVAL_S` (default 15, min 5, max 600), or pass `--interval N` directly to `wake arm` / `wake loop` (same clamp; the flag takes priority over the env var for that invocation). Each wake emission increments `wake_ticks` against **`wake_budget`** (independent of turn budget). Default `wake_budget = turn_budget * 10` (min 10, max 500). Override with `--wake-budget N`.
 
 ## Turn Budget
 

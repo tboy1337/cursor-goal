@@ -1,9 +1,11 @@
 """Goal lifecycle: create, status, pause, resume, done, clear.
 
 Install / health diagnostics (``manage doctor``) live in
-:mod:`cursor_goal.doctor` and are imported/re-exported here so the CLI
-dispatch table and existing ``from cursor_goal.manage import ...`` call
-sites (including tests) keep working unchanged.
+:mod:`cursor_goal.doctor`; ``cmd_doctor`` (the CLI dispatch target) and the
+two helpers this module actually calls (``_validation_mode``,
+``_wake_loop_shell_hint``) are imported here. Doctor's internal check
+functions are intentionally *not* re-exported — import ``cursor_goal.doctor``
+directly (including in tests) to call them.
 """
 
 from __future__ import annotations
@@ -16,23 +18,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from cursor_goal.doctor import _baked_python_from_cmd  # noqa: F401 — re-export
-from cursor_goal.doctor import _classic_hooks_configured  # noqa: F401
-from cursor_goal.doctor import _cursor_goal_python_is_unsafe  # noqa: F401
-from cursor_goal.doctor import _hooks_look_configured  # noqa: F401
-from cursor_goal.doctor import _hooks_stacking_failure  # noqa: F401
-from cursor_goal.doctor import _hooks_stacking_warning  # noqa: F401
-from cursor_goal.doctor import _install_version_failures  # noqa: F401
-from cursor_goal.doctor import _is_absolute_interpreter_path  # noqa: F401
-from cursor_goal.doctor import _marketplace_hooks_configured  # noqa: F401
-from cursor_goal.doctor import _stale_baked_python_failures  # noqa: F401
 from cursor_goal.doctor import _validation_mode, _wake_loop_shell_hint, cmd_doctor
 from cursor_goal.logging_config import get_logger
-from cursor_goal.paths import skill_root  # noqa: F401 — re-export
-from cursor_goal.paths import (
-    harness_cmd_report,
-    wake_loop_invocation,
-)
+from cursor_goal.paths import harness_cmd_report
 from cursor_goal.state import (
     MAX_FIELD_CHARS,
     MAX_TURN_BUDGET,
@@ -66,6 +54,19 @@ from cursor_goal.wake import status_info as wake_status_info
 from cursor_goal.wake import wake_enabled
 
 logger = get_logger("cursor_goal.manage")
+
+
+def _refuse_if_data_dir_unsafe() -> str | None:
+    """Return an error message if the data dir is insecure or Windows ACL
+    hardening failed, else ``None``. Mirrors the gate every mutating command
+    in ``stop.py``/``evaluate.py``/``wake.py`` already applies so a failed
+    ACL harden cannot be bypassed just by using ``manage pause``/``resume``/
+    ``done``/``clear`` instead of the hook/eval entry points.
+    """
+    insecure = refuse_if_data_dir_insecure()
+    if insecure is not None:
+        return insecure
+    return refuse_if_acl_harden_failed()
 
 
 @dataclass(frozen=True)
@@ -188,16 +189,133 @@ def _validate_create(args: _CreateArgs) -> str | None:
             _normalize_workdir(args.workdir)
         except ValueError as exc:
             return f"[goal] Error: {exc}"
-    insecure = refuse_if_data_dir_insecure()
-    if insecure is not None:
-        return insecure
-    acl_fail = refuse_if_acl_harden_failed()
-    if acl_fail is not None:
-        return acl_fail
+    return _refuse_if_data_dir_unsafe()
+
+
+def _refuse_shell_metachar_validation(args: _CreateArgs) -> str | None:
+    """Refuse a shell-metachar --test command when shell_ok is false (fail closed)."""
+    if not args.test_cmd or args.shell_ok or try_split_argv(args.test_cmd) is not None:
+        return None
+    if deny_shell_enabled():
+        return (
+            "[goal] Error: validation requires shell metacharacters but "
+            "CURSOR_GOAL_DENY_SHELL is set. Use an argv-safe --test."
+        )
+    return (
+        "[goal] Error: validation requires shell metacharacters but "
+        "shell_ok=false. Pass --allow-shell or use an argv-safe --test."
+    )
+
+
+def _create_goal_or_error(
+    state: GoalState, *, force: bool
+) -> tuple[GoalState | None, int | None]:
+    """Create *state* atomically, surfacing corrupt/existing-goal/lock errors.
+
+    Returns ``(created, exit_code)``; when ``exit_code`` is not ``None`` the
+    caller should return it immediately (the error has already been printed).
+    """
+    try:
+        # Surface quarantine before overwrite/create.
+        try:
+            snapshot_goal(raise_corrupt=True)
+        except CorruptGoalError as exc:
+            print(f"[goal] Error: {exc}", file=sys.stderr)
+            print(
+                "[goal] Fix or remove the quarantined goal.json, then retry "
+                "(use --force only after clearing corrupt state).",
+                file=sys.stderr,
+            )
+            return None, 1
+        created, status = create_goal_atomic(state, force=force)
+    except GoalLockTimeoutError as exc:
+        print(f"[goal] Error: {exc}", file=sys.stderr)
+        return None, 1
+    if status == "exists" and created is not None:
+        print(
+            "[goal] Error: a goal already exists. "
+            "Use --force to overwrite, or clear first.",
+            file=sys.stderr,
+        )
+        safe_existing = redact_secrets(created.condition, max_chars=None)
+        print(f"[goal] Existing condition: {safe_existing}", file=sys.stderr)
+        print(f"[goal] Existing status: {created.status}", file=sys.stderr)
+        return None, 1
+    return created, None
+
+
+def _finalize_create_wake_state(*, wake_on: bool) -> int | None:
+    """Arm wake (if enabled) and flip the just-created goal to pursuing.
+
+    Returns an error exit code on failure, or ``None`` on success.
+    """
+    if not wake_on:
+        _maybe_arm_wake()
+        print("  Status: pursuing")
+        return None
+
+    print("  Status: paused (awaiting wake arm)")
+    arm_result = _maybe_arm_wake()
+    if arm_result.status == "failed":
+        return _pause_after_arm_failure(arm_result.detail)
+    # Flip paused → pursuing only after arm (or wake disabled mid-flight).
+    if arm_result.status not in {"ok", "disabled"}:
+        return None
+
+    def activate(goal: GoalState) -> None:
+        goal.status = "pursuing"
+        goal.active = True
+        if goal.last_reason == "awaiting wake arm":
+            goal.last_reason = ""
+
+    try:
+        mutate_goal(activate)
+    except GoalLockTimeoutError as exc:
+        print(
+            f"[goal] Error: wake armed but could not activate goal: {exc}",
+            file=sys.stderr,
+        )
+        return _pause_after_arm_failure(f"activate after arm failed: {exc}")
+    print("  Status: pursuing")
     return None
 
 
-def cmd_create(argv: list[str]) -> int:  # pylint: disable=too-many-branches
+def _resolve_create_workdir(args: _CreateArgs) -> str:
+    """Resolve the workdir for a new goal: explicit --workdir, else cwd."""
+    if args.workdir:
+        return _normalize_workdir(args.workdir)
+    try:
+        return str(Path.cwd().resolve())
+    except OSError as exc:
+        logger.debug("Could not capture create cwd as workdir: %s", exc)
+        return ""
+
+
+def _print_created_goal_summary(
+    args: _CreateArgs, state: GoalState, *, turn_budget: int, wake_budget: int
+) -> None:
+    """Print the ``[goal] Goal created:`` summary block for ``cmd_create``."""
+    safe_condition = redact_secrets(args.condition, max_chars=None)
+    print("[goal] Goal created:")
+    print(f"  Condition: {safe_condition}")
+    if args.test_cmd:
+        print(f"  Validation: {redact_command(args.test_cmd)}")
+        mode = _validation_mode(state)
+        print(f"  Validation mode: {mode}")
+        if mode == "shell":
+            print(
+                "  Warning: shell-mode validation (trusted-user goal.json). "
+                "Prefer argv-safe commands; shell was explicitly enabled "
+                "with --allow-shell."
+            )
+    if state.workdir:
+        print(f"  Workdir: {state.workdir}")
+    print(f"  Budget: {turn_budget} turns")
+    print(f"  Wake budget: {wake_budget} ticks")
+    print(f"  Shell ok: {str(args.shell_ok).lower()}")
+
+
+def cmd_create(argv: list[str]) -> int:
     try:
         args = _parse_create_argv(argv)
     except ValueError as exc:
@@ -209,20 +327,9 @@ def cmd_create(argv: list[str]) -> int:  # pylint: disable=too-many-branches
         print(error, file=sys.stderr)
         return 1
 
-    # Refuse shell-metachar validation when shell_ok is false (fail closed).
-    if args.test_cmd and not args.shell_ok and try_split_argv(args.test_cmd) is None:
-        if deny_shell_enabled():
-            print(
-                "[goal] Error: validation requires shell metacharacters but "
-                "CURSOR_GOAL_DENY_SHELL is set. Use an argv-safe --test.",
-                file=sys.stderr,
-            )
-        else:
-            print(
-                "[goal] Error: validation requires shell metacharacters but "
-                "shell_ok=false. Pass --allow-shell or use an argv-safe --test.",
-                file=sys.stderr,
-            )
+    shell_error = _refuse_shell_metachar_validation(args)
+    if shell_error is not None:
+        print(shell_error, file=sys.stderr)
         return 1
 
     turn_budget = clamp_turn_budget(args.budget)
@@ -231,15 +338,7 @@ def cmd_create(argv: list[str]) -> int:  # pylint: disable=too-many-branches
         if args.wake_budget is not None
         else default_wake_budget(turn_budget)
     )
-    workdir = ""
-    if args.workdir:
-        workdir = _normalize_workdir(args.workdir)
-    else:
-        try:
-            workdir = str(Path.cwd().resolve())
-        except OSError as exc:
-            logger.debug("Could not capture create cwd as workdir: %s", exc)
-            workdir = ""
+    workdir = _resolve_create_workdir(args)
     # When wake is enabled, create paused then arm then flip to pursuing so a
     # crash/lock failure cannot leave an unprotected pursuing goal.
     wake_on = wake_enabled()
@@ -265,34 +364,10 @@ def cmd_create(argv: list[str]) -> int:  # pylint: disable=too-many-branches
             wake_disarm(kill_loop=True)
         except OSError as exc:
             logger.warning("Could not disarm prior wake before force create: %s", exc)
-    try:
-        # Surface quarantine before overwrite/create.
-        try:
-            snapshot_goal(raise_corrupt=True)
-        except CorruptGoalError as exc:
-            print(f"[goal] Error: {exc}", file=sys.stderr)
-            print(
-                "[goal] Fix or remove the quarantined goal.json, then retry "
-                "(use --force only after clearing corrupt state).",
-                file=sys.stderr,
-            )
-            return 1
-        created, status = create_goal_atomic(state, force=args.force)
-    except GoalLockTimeoutError as exc:
-        print(f"[goal] Error: {exc}", file=sys.stderr)
-        return 1
-    if status == "exists" and created is not None:
-        print(
-            "[goal] Error: a goal already exists. "
-            "Use --force to overwrite, or clear first.",
-            file=sys.stderr,
-        )
-        safe_existing = redact_secrets(created.condition, max_chars=None)
-        print(f"[goal] Existing condition: {safe_existing}", file=sys.stderr)
-        print(f"[goal] Existing status: {created.status}", file=sys.stderr)
-        return 1
+    _created, create_exit_code = _create_goal_or_error(state, force=args.force)
+    if create_exit_code is not None:
+        return create_exit_code
 
-    safe_condition = redact_secrets(args.condition, max_chars=None)
     logger.info(
         "Created goal condition=%r budget=%s wake_budget=%s shell_ok=%s "
         "workdir=%r validation=%r",
@@ -303,51 +378,13 @@ def cmd_create(argv: list[str]) -> int:  # pylint: disable=too-many-branches
         workdir,
         redact_command(args.test_cmd) if args.test_cmd else "",
     )
-
-    print("[goal] Goal created:")
-    print(f"  Condition: {safe_condition}")
-    if args.test_cmd:
-        print(f"  Validation: {redact_command(args.test_cmd)}")
-        mode = _validation_mode(state)
-        print(f"  Validation mode: {mode}")
-        if mode == "shell":
-            print(
-                "  Warning: shell-mode validation (trusted-user goal.json). "
-                "Prefer argv-safe commands; shell was explicitly enabled "
-                "with --allow-shell."
-            )
-    if workdir:
-        print(f"  Workdir: {workdir}")
-    print(f"  Budget: {turn_budget} turns")
-    print(f"  Wake budget: {wake_budget} ticks")
-    print(f"  Shell ok: {str(args.shell_ok).lower()}")
+    _print_created_goal_summary(
+        args, state, turn_budget=turn_budget, wake_budget=wake_budget
+    )
     # Status reflects real state: wake-on create stays paused until activate.
-    if wake_on:
-        print("  Status: paused (awaiting wake arm)")
-        arm_result = _maybe_arm_wake()
-        if arm_result.status == "failed":
-            return _pause_after_arm_failure(arm_result.detail)
-        # Flip paused → pursuing only after arm (or wake disabled mid-flight).
-        if arm_result.status in {"ok", "disabled"}:
-
-            def activate(goal: GoalState) -> None:
-                goal.status = "pursuing"
-                goal.active = True
-                if goal.last_reason == "awaiting wake arm":
-                    goal.last_reason = ""
-
-            try:
-                mutate_goal(activate)
-            except GoalLockTimeoutError as exc:
-                print(
-                    f"[goal] Error: wake armed but could not activate goal: {exc}",
-                    file=sys.stderr,
-                )
-                return _pause_after_arm_failure(f"activate after arm failed: {exc}")
-            print("  Status: pursuing")
-    else:
-        _maybe_arm_wake()
-        print("  Status: pursuing")
+    wake_exit_code = _finalize_create_wake_state(wake_on=wake_on)
+    if wake_exit_code is not None:
+        return wake_exit_code
     if not os.environ.get("CURSOR_GOAL_LOG_FILE", "").strip():
         print(
             "[goal] Tip: set CURSOR_GOAL_LOG_FILE=1 for durable diagnostics "
@@ -443,9 +480,9 @@ def cmd_status(_argv: list[str]) -> int:  # pylint: disable=too-many-branches
 
 
 def cmd_pause(_argv: list[str]) -> int:
-    insecure = refuse_if_data_dir_insecure()
-    if insecure is not None:
-        print(insecure, file=sys.stderr)
+    unsafe = _refuse_if_data_dir_unsafe()
+    if unsafe is not None:
+        print(unsafe, file=sys.stderr)
         return 1
 
     try:
@@ -479,22 +516,34 @@ def cmd_pause(_argv: list[str]) -> int:
     return 0
 
 
-def cmd_resume(_argv: list[str]) -> int:
-    insecure = refuse_if_data_dir_insecure()
-    if insecure is not None:
-        print(insecure, file=sys.stderr)
-        return 1
+def _load_resumable_goal() -> GoalState | None:
+    """Load the current goal and confirm it is ``paused``.
 
+    Prints a ``[goal] ...`` diagnostic and returns ``None`` for every
+    failure mode; callers only need to check for ``None``.
+    """
     try:
         current = snapshot_goal(raise_corrupt=True)
     except CorruptGoalError as exc:
         print(f"[goal] Error: {exc}", file=sys.stderr)
-        return 1
+        return None
     if current is None:
         print("[goal] No goal to resume.")
-        return 1
+        return None
     if current.status != "paused":
         print(f"[goal] Cannot resume: goal is '{current.status}', not 'paused'.")
+        return None
+    return current
+
+
+def cmd_resume(_argv: list[str]) -> int:
+    unsafe = _refuse_if_data_dir_unsafe()
+    if unsafe is not None:
+        print(unsafe, file=sys.stderr)
+        return 1
+
+    current = _load_resumable_goal()
+    if current is None:
         return 1
 
     # Arm while still paused, then flip to pursuing — avoids unprotected pursue.
@@ -532,9 +581,9 @@ def cmd_resume(_argv: list[str]) -> int:
 
 
 def cmd_done(argv: list[str]) -> int:
-    insecure = refuse_if_data_dir_insecure()
-    if insecure is not None:
-        print(insecure, file=sys.stderr)
+    unsafe = _refuse_if_data_dir_unsafe()
+    if unsafe is not None:
+        print(unsafe, file=sys.stderr)
         return 1
     force = "--force" in argv
     if force:
@@ -593,9 +642,9 @@ def cmd_done(argv: list[str]) -> int:
 
 
 def cmd_clear(_argv: list[str]) -> int:
-    insecure = refuse_if_data_dir_insecure()
-    if insecure is not None:
-        print(insecure, file=sys.stderr)
+    unsafe = _refuse_if_data_dir_unsafe()
+    if unsafe is not None:
+        print(unsafe, file=sys.stderr)
         return 1
     try:
         existed = clear_goal_files()

@@ -29,6 +29,8 @@ from pathlib import Path
 
 PLUGIN_NAME = "cursor-goal"
 MARKER = "cursor_goal_stop_hook"
+SUBAGENT_STOP_MARKER = "cursor_goal_subagent_stop_hook"
+SUBAGENT_STOP_MATCHER = "goal-evaluator"
 
 
 def repo_root() -> Path:
@@ -95,6 +97,10 @@ def write_plugin(root: Path) -> Path:
     shutil.copy2(agents_src / "goal-evaluator.md", agents_dest / "goal-evaluator.md")
 
     plugin_root_var = "${CURSOR_PLUGIN_ROOT}/skills/goal/scripts"
+    # The same stop_hook.cmd / stop_hook.py launcher handles both event
+    # shapes at runtime (cmd_stop dispatches on the "subagent_type" key), so
+    # subagentStop reuses the identical commands, scoped via "matcher" plus a
+    # defensive subagent_type check inside handle_subagent_stop().
     hooks = {
         "version": 1,
         "hooks": {
@@ -111,7 +117,23 @@ def write_plugin(root: Path) -> Path:
                     "timeout": 30,
                     "_cursor_goal": MARKER,
                 },
-            ]
+            ],
+            "subagentStop": [
+                {
+                    "command": (f'cmd /c "{plugin_root_var}/stop_hook.cmd"'),
+                    "loop_limit": None,
+                    "timeout": 30,
+                    "matcher": SUBAGENT_STOP_MATCHER,
+                    "_cursor_goal": SUBAGENT_STOP_MARKER,
+                },
+                {
+                    "command": (f'python3 -u "{plugin_root_var}/stop_hook.py"'),
+                    "loop_limit": None,
+                    "timeout": 30,
+                    "matcher": SUBAGENT_STOP_MATCHER,
+                    "_cursor_goal": SUBAGENT_STOP_MARKER,
+                },
+            ],
         },
     }
     (hooks_dest / "hooks.json").write_text(
@@ -189,7 +211,23 @@ def write_plugin(root: Path) -> Path:
         "**expected Hooks UI noise**, not necessarily a broken install. A "
         "singleflight lock ensures only one hook mutates turn state and writes "
         "stdout; the loser exits silently (no `{}`, no "
-        "`last-stop-response.json` overwrite).\n\n"
+        "`last-stop-response.json` overwrite). A `generation_id`-keyed dedupe "
+        "stamp additionally guards *sequential* dual-hook invocations (one hook "
+        "fully finishes, then the other starts for the same turn) from "
+        "re-charging `turns_used` or emitting a second followup.\n\n"
+        "The same launcher command is also registered for the "
+        '`subagentStop` event (`matcher: "goal-evaluator"`), giving a second, '
+        "documented, race-free continuation point the instant the evaluator "
+        "subagent finishes — `cmd_stop` dispatches between the two event "
+        "shapes based on whether the JSON payload carries `subagent_type`.\n\n"
+        "`${CURSOR_PLUGIN_ROOT}` is not listed in Cursor's documented hook "
+        "environment variables; these hook commands rely on it being set by "
+        "the plugin host at invocation time. `stop_hook.py`'s "
+        "`_ensure_package_path()` also works if it is unset, by resolving the "
+        "vendored `cursor_goal` package relative to its own file location "
+        "(`scripts/`, its parent skill dir, or the repo's `src/` in a source "
+        "checkout) — the classic `~/.cursor/skills/goal` install path does not "
+        "depend on `CURSOR_PLUGIN_ROOT` at all.\n\n"
         "Set `CURSOR_GOAL_PYTHON` to an **absolute** Python 3.12+ path on "
         "Windows Teams installs — `manage doctor` **FAIL**s when marketplace "
         "hooks are detected without it (PATH fallback is fragile and not "

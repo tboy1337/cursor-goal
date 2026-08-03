@@ -23,6 +23,10 @@ CURSOR_HOOKS_FILE="${HOME}/.cursor/hooks.json"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SKILL_BACKUP=""
+# Empty means the agent file did not exist before this install (rollback
+# should delete it, not "restore" a backup that never existed).
+AGENT_KEEPER_BACKUP=""
+AGENT_EVALUATOR_BACKUP=""
 
 log_info()  { echo -e "${GREEN}[install-goal]${NC} $1"; }
 log_warn()  { echo -e "${YELLOW}[install-goal]${NC} $1"; }
@@ -159,11 +163,13 @@ PY
   local TS
   TS="$(date -u +%Y%m%dT%H%M%SZ)"
   if [ -f "${AGENTS_DIR}/goalKeeper.md" ]; then
-    cp "${AGENTS_DIR}/goalKeeper.md" "${AGENTS_DIR}/goalKeeper.md.bak.${TS}"
+    AGENT_KEEPER_BACKUP="${AGENTS_DIR}/goalKeeper.md.bak.${TS}"
+    cp "${AGENTS_DIR}/goalKeeper.md" "$AGENT_KEEPER_BACKUP"
     log_info "Backed up existing goalKeeper.md"
   fi
   if [ -f "${AGENTS_DIR}/goal-evaluator.md" ]; then
-    cp "${AGENTS_DIR}/goal-evaluator.md" "${AGENTS_DIR}/goal-evaluator.md.bak.${TS}"
+    AGENT_EVALUATOR_BACKUP="${AGENTS_DIR}/goal-evaluator.md.bak.${TS}"
+    cp "${AGENTS_DIR}/goal-evaluator.md" "$AGENT_EVALUATOR_BACKUP"
     log_info "Backed up existing goal-evaluator.md"
   fi
 
@@ -181,7 +187,7 @@ hook_command() {
 }
 
 configure_stop_hook() {
-  log_step "Configuring Cursor stop hook..."
+  log_step "Configuring Cursor stop/subagentStop hooks..."
   mkdir -p "${HOME}/.cursor"
 
   local CMD
@@ -201,11 +207,14 @@ from pathlib import Path
 sys.path.insert(0, sys.argv[1])
 from cursor_goal.hooks_config import merge_hooks_at_path
 
-merge_hooks_at_path(Path(sys.argv[2]), sys.argv[3])
+# Same launcher command for both events: cmd_stop() dispatches on payload
+# shape (subagentStop payloads carry "subagent_type"), scoped further by the
+# installed hooks.json "matcher": "goal-evaluator".
+merge_hooks_at_path(Path(sys.argv[2]), sys.argv[3], subagent_stop_command=sys.argv[3])
 print("merged")
 PY
   then
-    log_error "Failed to merge stop hook into hooks.json."
+    log_error "Failed to merge stop/subagentStop hooks into hooks.json."
     if [ -n "$HOOKS_BACKUP" ] && [ -f "$HOOKS_BACKUP" ]; then
       log_warn "Restoring hooks.json from $HOOKS_BACKUP"
       cp "$HOOKS_BACKUP" "$CURSOR_HOOKS_FILE"
@@ -219,9 +228,23 @@ PY
     else
       log_error "Skill files were installed under $INSTALL_DIR (no prior backup to restore)."
     fi
+    if [ -n "$AGENT_KEEPER_BACKUP" ] && [ -f "$AGENT_KEEPER_BACKUP" ]; then
+      log_warn "Restoring goalKeeper.md from $AGENT_KEEPER_BACKUP"
+      mv "$AGENT_KEEPER_BACKUP" "${AGENTS_DIR}/goalKeeper.md"
+    elif [ -f "${AGENTS_DIR}/goalKeeper.md" ]; then
+      log_warn "Removing goalKeeper.md installed this run (no prior version existed)"
+      rm -f "${AGENTS_DIR}/goalKeeper.md"
+    fi
+    if [ -n "$AGENT_EVALUATOR_BACKUP" ] && [ -f "$AGENT_EVALUATOR_BACKUP" ]; then
+      log_warn "Restoring goal-evaluator.md from $AGENT_EVALUATOR_BACKUP"
+      mv "$AGENT_EVALUATOR_BACKUP" "${AGENTS_DIR}/goal-evaluator.md"
+    elif [ -f "${AGENTS_DIR}/goal-evaluator.md" ]; then
+      log_warn "Removing goal-evaluator.md installed this run (no prior version existed)"
+      rm -f "${AGENTS_DIR}/goal-evaluator.md"
+    fi
     exit 1
   fi
-  log_info "Merged/upgraded stop hook in hooks.json"
+  log_info "Merged/upgraded stop + subagentStop hooks in hooks.json"
 }
 
 print_summary() {

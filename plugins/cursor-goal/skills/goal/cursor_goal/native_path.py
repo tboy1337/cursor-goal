@@ -14,8 +14,13 @@ from __future__ import annotations
 import os
 from pathlib import Path, PosixPath, WindowsPath
 
-# Bound once at import — ignores later monkeypatches of ``os.name``.
-NATIVE_PATH: type[Path] = WindowsPath if os.name == "nt" else PosixPath
+# Bound once at import — ignores later monkeypatches of ``os.name``. UPPER_CASE
+# is correct here: this is a constant selecting *which* class to use, not a
+# class definition, so pylint's PascalCase class-name check is a false
+# positive (no project-wide class-naming regex can distinguish the two).
+NATIVE_PATH: type[Path] = (  # pylint: disable=invalid-name
+    WindowsPath if os.name == "nt" else PosixPath
+)
 
 
 def path_str_is_absolute(value: str) -> bool:
@@ -40,6 +45,9 @@ def path_str_is_absolute(value: str) -> bool:
 
 def native_path(value: str | Path) -> Path:
     """Build a Path using the host OS flavor (safe under ``os.name`` mocks)."""
-    if isinstance(value, Path) and type(value) is NATIVE_PATH:
+    # WindowsPath / PosixPath are sibling leaf classes (neither subclasses the
+    # other), so isinstance() against NATIVE_PATH is exact here — no need for
+    # a stricter type() equality check.
+    if isinstance(value, NATIVE_PATH):
         return value
     return NATIVE_PATH(os.path.expanduser(str(value)))

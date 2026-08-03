@@ -6,6 +6,7 @@ import os
 import re
 import shlex
 import subprocess  # nosec B404
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,16 +18,61 @@ DEFAULT_TIMEOUT_SEC = 25
 
 _SECRETISH = re.compile(
     r"(?i)(?:"
-    r"(password|passwd|secret|token|api[_-]?key|authorization|access[_-]?key|"
-    r"client[_-]?secret|private[_-]?key)=(\S+)"
-    r"|(--(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|"
-    r"client[_-]?secret))\s+(\S+)"
-    r"|(Bearer)\s+(\S+)"
-    r"|((?:AKIA|ASIA)[A-Z0-9]{16})"
-    r"|(Authorization:\s*Basic)\s+(\S+)"
-    r"|(eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})"
+    r"(?P<kv_key>password|passwd|secret|token|api[_-]?key|authorization|access[_-]?key|"
+    r"client[_-]?secret|private[_-]?key)=(?P<kv_val>\S+)"
+    r"|(?P<flag>--(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|"
+    r"client[_-]?secret))\s+(?P<flag_val>\S+)"
+    r"|(?P<bearer>Bearer)\s+(?P<bearer_val>\S+)"
+    r"|(?P<aws_key>(?:AKIA|ASIA)[A-Z0-9]{16})"
+    r"|(?P<basic>Authorization:\s*Basic)\s+(?P<basic_val>\S+)"
+    r"|(?P<jwt>eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})"
+    # GitHub personal-access / fine-grained / OAuth / app tokens.
+    r"|(?P<gh_tok>gh[oprsu]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})"
+    # OpenAI / Anthropic-style secret keys (sk-, sk-proj-, sk-ant-).
+    r"|(?P<sk_tok>sk-(?:proj-|ant-)?[A-Za-z0-9_-]{16,})"
+    # Slack bot/user/app/refresh/legacy tokens.
+    r"|(?P<slack_tok>xox[baprs]-[A-Za-z0-9-]{10,})"
+    # npm and GitLab personal-access tokens.
+    r"|(?P<npm_tok>npm_[A-Za-z0-9]{20,})"
+    r"|(?P<gitlab_tok>glpat-[A-Za-z0-9_-]{16,})"
+    # scheme://user:password@host — connection strings and credentialed URLs
+    # (username may be empty, e.g. redis://:password@host).
+    r"|(?P<url_scheme>[a-z][a-z0-9+.-]{1,15}://)(?P<url_userinfo>[^\s:@/]*:[^\s@/]+)@"
     r")"
 )
+
+_PEM_BLOCK = re.compile(
+    r"-----BEGIN((?:\s+[A-Z0-9]+)*\s+PRIVATE KEY)-----" r".*?" r"-----END\1-----",
+    re.DOTALL,
+)
+
+# One formatter per named alternative in _SECRETISH, keyed by group name and
+# checked in the same priority order the alternatives are written above
+# (dict iteration order is insertion order). A dispatch table keeps this a
+# single-branch lookup instead of a long if/elif chain.
+_SecretGroups = dict[str, "str | None"]
+_SECRETISH_FORMATTERS: dict[str, Callable[[_SecretGroups], str]] = {
+    "kv_key": lambda g: f"{g['kv_key']}=<redacted>",
+    "flag": lambda g: f"{g['flag']} <redacted>",
+    "bearer": lambda g: f"{g['bearer']} <redacted>",
+    "aws_key": lambda _g: "<redacted>",
+    "basic": lambda g: f"{g['basic']} <redacted>",
+    "jwt": lambda _g: "<redacted-jwt>",
+    "gh_tok": lambda _g: "<redacted-github-token>",
+    "sk_tok": lambda _g: "<redacted-api-key>",
+    "slack_tok": lambda _g: "<redacted-slack-token>",
+    "npm_tok": lambda _g: "<redacted-npm-token>",
+    "gitlab_tok": lambda _g: "<redacted-gitlab-token>",
+    "url_scheme": lambda g: f"{g['url_scheme']}<redacted>@",
+}
+
+
+def _redact_secretish_match(match: re.Match[str]) -> str:
+    groups = match.groupdict()
+    for name, formatter in _SECRETISH_FORMATTERS.items():
+        if groups.get(name):
+            return formatter(groups)
+    return "<redacted>"  # pragma: no cover — every alternative has a formatter above
 
 
 @dataclass(frozen=True)
@@ -51,25 +97,12 @@ def redact_secrets(text: str, *, max_chars: int | None = 4000) -> str:
     ``max_chars`` truncates after redaction (``None`` keeps full length).
     """
 
-    def _sub(match: re.Match[str]) -> str:
-        if match.group(1):
-            return f"{match.group(1)}=<redacted>"
-        if match.group(3):
-            return f"{match.group(3)} <redacted>"
-        if match.group(5):
-            return f"{match.group(5)} <redacted>"
-        if match.group(7):
-            return "<redacted>"
-        if match.group(8):
-            return f"{match.group(8)} <redacted>"
-        if match.group(10):
-            return "<redacted-jwt>"
-        return "<redacted>"
-
-    redacted = _SECRETISH.sub(_sub, text)
+    redacted = _PEM_BLOCK.sub("<redacted-private-key-block>", text)
+    redacted = _SECRETISH.sub(_redact_secretish_match, redacted)
     # Also redact common JSON-ish "apiKey":"…" / 'token':'…' forms.
     redacted = re.sub(
-        r"(?i)([\"']?(?:api[_-]?key|token|password|secret)"
+        r"(?i)([\"']?(?:api[_-]?key|token|password|secret|"
+        r"client[_-]?secret|private[_-]?key|access[_-]?key)"
         r"[\"']?\s*[:=]\s*[\"'])([^\"']+)",
         r"\1<redacted>",
         redacted,

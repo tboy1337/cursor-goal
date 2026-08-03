@@ -13,6 +13,11 @@ jobs:
     name: Unix verify and smoke
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - uses: actions/checkout@v7
 
@@ -90,6 +95,11 @@ jobs:
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
+      - name: Generate build provenance attestation
+        uses: actions/attest@v4
+        with:
+          subject-path: "dist/*.whl,dist/*.tar.gz"
+
       - name: Upload dist artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -115,6 +125,18 @@ jobs:
         run: |
           python scripts/check_version_sync.py
           python scripts/sync-plugin-tree.py --check
+
+      - name: pip-audit
+        run: pip-audit
+
+      - name: Bandit
+        run: bandit -r src/cursor_goal -c pyproject.toml -q
+
+      - name: Pytest
+        run: pytest tests -q --tb=short
+
+      - name: Coverage metrics (>=95% statement/branch/function/combined)
+        run: python scripts/check_coverage_metrics.py --threshold 95
 
       - name: Install PSScriptAnalyzer and Pester 5
         shell: pwsh
@@ -154,6 +176,18 @@ jobs:
         run: |
           python scripts/check_version_sync.py
           python scripts/sync-plugin-tree.py --check
+
+      - name: pip-audit
+        run: pip-audit
+
+      - name: Bandit
+        run: bandit -r src/cursor_goal -c pyproject.toml -q
+
+      - name: Pytest
+        run: pytest tests -q --tb=short
+
+      - name: Coverage metrics (>=95% statement/branch/function/combined)
+        run: python scripts/check_coverage_metrics.py --threshold 95
 
       - name: macOS install smoke
         run: bash scripts/install-smoke.sh

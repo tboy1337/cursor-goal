@@ -195,7 +195,7 @@ def test_hooks_look_configured_true(
     from cursor_goal import doctor as doctor_mod
 
     monkeypatch.setattr(doctor_mod, "_user_home", lambda: fake_home)
-    assert manage_mod._hooks_look_configured() is True
+    assert doctor_mod._hooks_look_configured() is True
 
 
 def test_hooks_look_configured_skill_without_hooks(
@@ -210,7 +210,7 @@ def test_hooks_look_configured_skill_without_hooks(
     from cursor_goal import doctor as doctor_mod
 
     monkeypatch.setattr(doctor_mod, "_user_home", lambda: fake_home)
-    assert manage_mod._hooks_look_configured() is False
+    assert doctor_mod._hooks_look_configured() is False
 
 
 def test_hooks_look_configured_none(
@@ -223,7 +223,7 @@ def test_hooks_look_configured_none(
     from cursor_goal import doctor as doctor_mod
 
     monkeypatch.setattr(doctor_mod, "_user_home", lambda: fake_home)
-    assert manage_mod._hooks_look_configured() is None
+    assert doctor_mod._hooks_look_configured() is None
 
 
 def test_marketplace_hooks_skill_only(
@@ -241,7 +241,7 @@ def test_marketplace_hooks_skill_only(
 
     monkeypatch.setattr(doctor_mod, "_user_home", lambda: fake_home)
     monkeypatch.setenv("CURSOR_PLUGIN_ROOT", str(plugin))
-    assert manage_mod._marketplace_hooks_configured() is False
+    assert doctor_mod._marketplace_hooks_configured() is False
 
 
 def test_marketplace_hooks_empty_plugin_root(
@@ -257,7 +257,7 @@ def test_marketplace_hooks_empty_plugin_root(
 
     monkeypatch.setattr(doctor_mod, "_user_home", lambda: fake_home)
     monkeypatch.setenv("CURSOR_PLUGIN_ROOT", str(plugin))
-    assert manage_mod._marketplace_hooks_configured() is False
+    assert doctor_mod._marketplace_hooks_configured() is False
 
 
 def test_marketplace_hooks_under_cursor_plugins(
@@ -277,7 +277,7 @@ def test_marketplace_hooks_under_cursor_plugins(
 
     monkeypatch.setattr(doctor_mod, "_user_home", lambda: fake_home)
     monkeypatch.delenv("CURSOR_PLUGIN_ROOT", raising=False)
-    assert manage_mod._marketplace_hooks_configured() is True
+    assert doctor_mod._marketplace_hooks_configured() is True
 
 
 def test_doctor_fail_open_counter_warning(
@@ -314,7 +314,7 @@ def test_marketplace_hooks_read_oserror(
     from cursor_goal import doctor as doctor_mod
 
     monkeypatch.setattr(doctor_mod, "_user_home", lambda: fake_home)
-    assert manage_mod._marketplace_hooks_configured() is False
+    assert doctor_mod._marketplace_hooks_configured() is False
 
 
 def test_marketplace_hooks_and_stacking(
@@ -341,10 +341,9 @@ def test_marketplace_hooks_and_stacking(
 
     monkeypatch.setattr(doctor_mod, "_user_home", lambda: fake_home)
     monkeypatch.setenv("CURSOR_PLUGIN_ROOT", str(plugin))
-    assert manage_mod._marketplace_hooks_configured() is True
-    assert manage_mod._classic_hooks_configured() is True
-    assert manage_mod._hooks_stacking_failure() is not None
-    assert manage_mod._hooks_stacking_warning() is not None
+    assert doctor_mod._marketplace_hooks_configured() is True
+    assert doctor_mod._classic_hooks_configured() is True
+    assert doctor_mod._hooks_stacking_failure() is not None
 
 
 def test_doctor_marketplace_python_unset_hard_fail(
@@ -597,6 +596,31 @@ def test_manage_mutators_refuse_insecure(
         assert "insecure" in err
 
 
+def test_manage_mutators_refuse_acl_harden_failed(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """pause/resume/done/clear must gate on a failed Windows ACL harden just
+    like create/stop/eval already do — a caller cannot bypass the ACL check
+    simply by calling a different mutating command."""
+    from cursor_goal import manage as manage_mod
+
+    run_cli("manage", "create", "acl gate check")
+    monkeypatch.setattr(
+        manage_mod,
+        "refuse_if_acl_harden_failed",
+        lambda: "[goal] Error: Windows ACL harden failed for /x: grant failed",
+    )
+    for args in (
+        ("manage", "pause"),
+        ("manage", "resume"),
+        ("manage", "done"),
+        ("manage", "clear"),
+    ):
+        code, _out, err = run_cli(*args)
+        assert code == 1
+        assert "ACL harden failed" in err
+
+
 def test_manage_doctor_fail_open_and_acl(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -637,7 +661,7 @@ def test_hooks_look_configured_read_oserror(
 
     monkeypatch.setattr(doctor_mod, "_user_home", lambda: fake_home)
     monkeypatch.setattr(Path, "read_text", boom_read)
-    assert manage_mod._hooks_look_configured() is None
+    assert doctor_mod._hooks_look_configured() is None
 
 
 def test_manage_create_wake_budget_requires_value(goal_home: Path) -> None:
@@ -919,15 +943,15 @@ def test_manage_create_allow_shell_succeeds(goal_home: Path) -> None:
 
 
 def test_baked_python_from_cmd(tmp_path: Path) -> None:
-    from cursor_goal import manage as manage_mod
+    from cursor_goal import doctor as doctor_mod
 
     cmd = tmp_path / "stop_hook.cmd"
     cmd.write_text(
         '@echo off\n"C:\\MissingPython\\python.exe" -u "C:\\x\\stop_hook.py"\n',
         encoding="utf-8",
     )
-    assert manage_mod._baked_python_from_cmd(cmd) == r"C:\MissingPython\python.exe"
-    assert manage_mod._baked_python_from_cmd(tmp_path / "missing.cmd") is None
+    assert doctor_mod._baked_python_from_cmd(cmd) == r"C:\MissingPython\python.exe"
+    assert doctor_mod._baked_python_from_cmd(tmp_path / "missing.cmd") is None
 
 
 def test_stale_baked_python_failures(
@@ -1026,7 +1050,7 @@ def test_normalize_workdir_relative_and_empty(
 
 
 def test_baked_python_skips_rem_and_cgp_lines(tmp_path: Path) -> None:
-    from cursor_goal import manage as manage_mod
+    from cursor_goal import doctor as doctor_mod
 
     cmd = tmp_path / "stop_hook.cmd"
     cmd.write_text(
@@ -1041,7 +1065,7 @@ def test_baked_python_skips_rem_and_cgp_lines(tmp_path: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
-    assert manage_mod._baked_python_from_cmd(cmd) == r"C:\Good\python.exe"
+    assert doctor_mod._baked_python_from_cmd(cmd) == r"C:\Good\python.exe"
 
 
 def test_stale_baked_python_skill_root_error(
@@ -1361,19 +1385,19 @@ def test_validation_mode_shell_branch() -> None:
 
 
 def test_baked_python_edge_lines(tmp_path: Path) -> None:
-    from cursor_goal import manage as manage_mod
+    from cursor_goal import doctor as doctor_mod
 
     bare = tmp_path / "bare.cmd"
     bare.write_text("python.exe -u stop.py\n", encoding="utf-8")
-    assert manage_mod._baked_python_from_cmd(bare) is None
+    assert doctor_mod._baked_python_from_cmd(bare) is None
 
     partial = tmp_path / "partial.cmd"
     partial.write_text('"C:\\OnlyOpenQuote\n', encoding="utf-8")
-    assert manage_mod._baked_python_from_cmd(partial) is None
+    assert doctor_mod._baked_python_from_cmd(partial) is None
 
     relative = tmp_path / "rel.cmd"
     relative.write_text('"python.exe" -u stop.py\n', encoding="utf-8")
-    assert manage_mod._baked_python_from_cmd(relative) is None
+    assert doctor_mod._baked_python_from_cmd(relative) is None
 
 
 def test_stale_skips_when_baked_unparseable(
@@ -1662,9 +1686,7 @@ def test_doctor_data_dir_access_failure(
 
 
 def test_manage_status_redacts_secretish_condition(goal_home: Path) -> None:
-    assert (
-        run_cli("manage", "create", "deploy with api_key=supersecret123")[0] == 0
-    )
+    assert run_cli("manage", "create", "deploy with api_key=supersecret123")[0] == 0
     code, out, _err = run_cli("manage", "status")
     assert code == 0
     assert "supersecret123" not in out

@@ -14,6 +14,11 @@ from pathlib import Path
 
 from cursor_goal import __version__
 from cursor_goal.logging_config import get_logger
+from cursor_goal.models import (
+    EVAL_MODEL_ENV,
+    eval_model_is_known_invalid,
+    resolve_eval_model,
+)
 from cursor_goal.native_path import native_path, path_str_is_absolute
 from cursor_goal.paths import harness_cmd_report, skill_root, wake_loop_invocation
 from cursor_goal.state import (
@@ -125,52 +130,61 @@ def _collect_marketplace_hook_files(base: Path) -> list[Path]:
     return found
 
 
-def _marketplace_hooks_configured() -> bool | None:
-    """Detect Teams marketplace plugin stop hooks when possible."""
+def _marketplace_hook_roots(env_root: str) -> list[Path]:
+    """Candidate marketplace/plugin roots that might contain ``hooks.json``."""
     roots: list[Path] = []
-    hook_files: list[Path] = []
-    env_root = (os.environ.get("CURSOR_PLUGIN_ROOT") or "").strip()
     if env_root:
         roots.append(native_path(env_root))
-    cursor_home = _user_home() / ".cursor"
-    plugins = cursor_home / "plugins"
-    for candidate in (
-        plugins / "cursor-goal",
-        plugins / "cache" / "cursor-goal",
-    ):
+    plugins = _user_home() / ".cursor" / "plugins"
+    for candidate in (plugins / "cursor-goal", plugins / "cache" / "cursor-goal"):
         if candidate.is_dir():  # pragma: no branch — layout optional
             roots.append(candidate)
+    return roots
+
+
+def _hooks_file_has_goal_marker(hooks: Path) -> bool:
+    """Return True if *hooks* (a ``hooks.json``) mentions the goal skill/plugin."""
+    try:
+        text = hooks.read_text(encoding="utf-8")
+    except OSError:  # pragma: no cover — rare IO race
+        return False
+    return _hooks_json_looks_like_goal(text)
+
+
+def _scan_root_for_marketplace_hooks(root: Path) -> tuple[bool, bool]:
+    """Inspect one candidate root's ``hooks.json`` / classic ``stop_hook.py``.
+
+    Returns ``(found, seen)``: ``found`` is True when this root's
+    ``hooks.json`` mentions the goal skill; ``seen`` is True when either a
+    ``hooks.json`` or a classic ``stop_hook.py`` exists under this root.
+    """
+    hooks = root / "hooks" / "hooks.json"
+    if not hooks.is_file():
+        alt = root / "skills" / "goal" / "scripts" / "stop_hook.py"
+        return False, alt.is_file()
+    return _hooks_file_has_goal_marker(hooks), True
+
+
+def _marketplace_hooks_configured() -> bool | None:
+    """Detect Teams marketplace plugin stop hooks when possible."""
+    env_root = (os.environ.get("CURSOR_PLUGIN_ROOT") or "").strip()
+    plugins = _user_home() / ".cursor" / "plugins"
+    hook_files: list[Path] = []
     for base_name in ("cache", "local"):
         hook_files.extend(_collect_marketplace_hook_files(plugins / base_name))
 
     seen_file = False
-    for root in roots:
-        hooks = root / "hooks" / "hooks.json"
-        if not hooks.is_file():
-            alt = root / "skills" / "goal" / "scripts" / "stop_hook.py"
-            if alt.is_file():
-                seen_file = True
-            continue
-        seen_file = True
-        try:
-            text = hooks.read_text(encoding="utf-8")
-        except OSError:  # pragma: no cover — rare IO race
-            continue
-        if _hooks_json_looks_like_goal(text):
+    for root in _marketplace_hook_roots(env_root):
+        found, seen = _scan_root_for_marketplace_hooks(root)
+        seen_file = seen_file or seen
+        if found:
             return True
-
     for hooks in hook_files:
         seen_file = True
-        try:
-            text = hooks.read_text(encoding="utf-8")
-        except OSError:  # pragma: no cover — rare IO race
-            continue
-        if _hooks_json_looks_like_goal(text):
+        if _hooks_file_has_goal_marker(hooks):
             return True
 
-    if seen_file:
-        return False
-    if env_root:
+    if seen_file or env_root:
         return False
     return None
 
@@ -237,19 +251,36 @@ def _hooks_stacking_failure() -> str | None:
     return None
 
 
-def _hooks_stacking_warning() -> str | None:
-    """Alias — stacking is a doctor hard-fail via ``_hooks_stacking_failure``."""
-    return _hooks_stacking_failure()
-
-
 def _is_absolute_interpreter_path(value: str) -> bool:
     """Return True when *value* looks like an absolute filesystem path."""
     return path_str_is_absolute(value)
 
 
-def _baked_python_from_cmd(
-    path: Path,
-) -> str | None:  # pylint: disable=too-many-nested-blocks
+def _leading_quoted_absolute_path(stripped_line: str) -> str | None:
+    """Return the leading ``"..."``-quoted token of *stripped_line* if absolute."""
+    if not stripped_line.startswith('"'):
+        return None
+    end = stripped_line.find('"', 1)
+    if end <= 1:
+        return None
+    candidate = stripped_line[1:end]
+    return candidate if path_str_is_absolute(candidate) else None
+
+
+def _baked_python_from_line(stripped: str) -> str | None:
+    """Extract a baked absolute Python path from one .cmd launcher line, if any."""
+    if not stripped or stripped.startswith("REM") or stripped.startswith("::"):
+        return None
+    lower = stripped.lower()
+    if "cursor_goal_python" in lower:
+        return None
+    # Match: "C:\...\python.exe" ... -u "..."
+    if ".exe" not in lower and "python" not in lower:
+        return None
+    return _leading_quoted_absolute_path(stripped)
+
+
+def _baked_python_from_cmd(path: Path) -> str | None:
     """Extract the absolute Python path baked into a classic .cmd launcher."""
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -257,21 +288,9 @@ def _baked_python_from_cmd(
         return None
     # Prefer CURSOR_GOAL_PYTHON override lines if present in marketplace-style cmds.
     for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("REM") or stripped.startswith("::"):
-            continue
-        lower = stripped.lower()
-        if "cursor_goal_python" in lower:
-            continue
-        # Match: "C:\...\python.exe" ... -u "..."
-        if ".exe" in lower or "python" in lower:
-            # Quoted absolute path as first token
-            if stripped.startswith('"'):
-                end = stripped.find('"', 1)
-                if end > 1:
-                    candidate = stripped[1:end]
-                    if path_str_is_absolute(candidate):
-                        return candidate
+        found = _baked_python_from_line(line.strip())
+        if found is not None:
+            return found
     return None
 
 
@@ -349,6 +368,19 @@ def cmd_doctor(_argv: list[str]) -> int:
     acl_fail = acl_harden_failure_message(ddir) if ddir is not None else None
     if acl_fail is not None:
         hard_fails.append(acl_fail)
+
+    resolved_eval_model = resolve_eval_model()
+    print(f"  Evaluator model: {resolved_eval_model}")
+    raw_eval_model_env = (os.environ.get(EVAL_MODEL_ENV) or "").strip()
+    if raw_eval_model_env and eval_model_is_known_invalid(raw_eval_model_env):
+        hard_fails.append(
+            f"{EVAL_MODEL_ENV}={raw_eval_model_env!r} is not a valid Cursor "
+            'subagent model (only "inherit" or a real model ID is honored; '
+            f"resolved to default {resolved_eval_model} instead, silently "
+            f"using a different model than intended). Unset {EVAL_MODEL_ENV} "
+            "or set a real model ID — see "
+            "https://cursor.com/docs/subagents.md#model-configuration"
+        )
 
     orphan = read_orphan_wake()
     if orphan is not None:
@@ -456,10 +488,7 @@ def cmd_doctor(_argv: list[str]) -> int:
 
     wake_info = wake_status_info()
     if state is not None and state.active and state.status == "pursuing":
-        print(
-            f"  Goal: pursuing "
-            f"({redact_secrets(state.condition, max_chars=60)})"
-        )
+        print(f"  Goal: pursuing " f"({redact_secrets(state.condition, max_chars=60)})")
         print(
             f"  Budgets: turns {state.turns_used}/{state.turn_budget}, "
             f"wake {state.wake_ticks}/{state.wake_budget}"

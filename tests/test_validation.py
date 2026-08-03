@@ -160,6 +160,106 @@ def test_redact_command_hides_secrets() -> None:
     assert redact_command("x" * 250).endswith("…")
 
 
+def test_redact_secrets_github_tokens() -> None:
+    from cursor_goal.validation import redact_secrets
+
+    ghp = "ghp_1234567890abcdefghijklmnopqrstuvwxyz12"
+    out = redact_secrets(f"token: {ghp}")
+    assert ghp not in out
+    assert "<redacted-github-token>" in out
+
+    fine_grained = "github_pat_" + "a" * 30 + "_" + "b" * 40
+    out2 = redact_secrets(f"header: {fine_grained}")
+    assert fine_grained not in out2
+    assert "<redacted-github-token>" in out2
+
+
+def test_redact_secrets_openai_anthropic_keys() -> None:
+    from cursor_goal.validation import redact_secrets
+
+    sk = "sk-" + "a" * 40
+    out = redact_secrets(f"curl -H 'Authorization: Bearer {sk}'")
+    assert sk not in out
+
+    sk_ant = "sk-ant-api03-" + "b" * 30
+    out2 = redact_secrets(f"key is {sk_ant} in the log")
+    assert sk_ant not in out2
+    assert "<redacted-api-key>" in out2
+
+
+def test_redact_secrets_slack_npm_gitlab_tokens() -> None:
+    from cursor_goal.validation import redact_secrets
+
+    slack = "xoxb-" + "1" * 11 + "-" + "2" * 13 + "-" + "a" * 24
+    out = redact_secrets(f"webhook uses {slack}")
+    assert slack not in out
+    assert "<redacted-slack-token>" in out
+
+    npm = "npm_" + "a" * 30
+    out2 = redact_secrets(f"found a bare npm token {npm} in the log")
+    assert npm not in out2
+    assert "<redacted-npm-token>" in out2
+
+    gitlab = "glpat-" + "a" * 20
+    out3 = redact_secrets(f"header value {gitlab}")
+    assert gitlab not in out3
+    assert "<redacted-gitlab-token>" in out3
+
+
+def test_redact_secrets_pem_private_key_block() -> None:
+    from cursor_goal.validation import redact_secrets
+
+    pem = (
+        "-----BEGIN RSA PRIVATE KEY-----\n"
+        "MIIBOgIBAAJBAKexampleexampleexampleexampleexample==\n"
+        "-----END RSA PRIVATE KEY-----"
+    )
+    out = redact_secrets(f"leaked key:\n{pem}\nend")
+    assert "MIIBOgIBAAJBAK" not in out
+    assert "<redacted-private-key-block>" in out
+
+    openssh_pem = (
+        "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+        "b3BlbnNzaC1rZXktdjEAAAAAB\n"
+        "-----END OPENSSH PRIVATE KEY-----"
+    )
+    out2 = redact_secrets(openssh_pem)
+    assert "b3BlbnNzaC1rZXk" not in out2
+    assert "<redacted-private-key-block>" in out2
+
+
+def test_redact_secrets_connection_string_userinfo() -> None:
+    from cursor_goal.validation import redact_secrets
+
+    conn = "postgres://myuser:S3cretPass@db.internal.example.com:5432/mydb"
+    out = redact_secrets(f"DATABASE_URL={conn}")
+    assert "S3cretPass" not in out
+    assert "myuser" not in out
+    assert "db.internal.example.com:5432/mydb" in out
+
+    mongo = "mongodb+srv://admin:hunter2@cluster0.mongodb.net/test"
+    out2 = redact_secrets(mongo)
+    assert "hunter2" not in out2
+    assert "cluster0.mongodb.net/test" in out2
+
+    redis = "redis://:onlypassword@localhost:6379/0"
+    out3 = redact_secrets(redis)
+    assert "onlypassword" not in out3
+    assert "localhost:6379/0" in out3
+
+    plain_url = "no secrets here: https://example.com/path?x=1"
+    assert redact_secrets(plain_url) == plain_url
+
+
+def test_redact_secrets_json_client_secret_and_private_key() -> None:
+    from cursor_goal.validation import redact_secrets
+
+    out = redact_secrets('{"clientSecret": "verybad", "private_key": "leaked"}')
+    assert "verybad" not in out
+    assert "leaked" not in out
+    assert "<redacted>" in out
+
+
 def test_scrubbed_validation_env_drops_secrets() -> None:
     from cursor_goal.validation import scrubbed_validation_env
 

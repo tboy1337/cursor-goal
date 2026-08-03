@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import subprocess
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -222,17 +224,17 @@ def test_wake_tick_without_arm_when_pursuing(wake_on: Path) -> None:
 
 
 def test_pid_helpers(wake_on: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    wake_mod._write_pid(1)
-    assert wake_mod._read_pid() == 1
+    wake_mod._write_pid_record(1, "test-token")
+    assert wake_process_mod._read_pid() == 1
     # pid 1 may or may not be killable; _pid_alive should not raise
     assert isinstance(wake_mod._pid_alive(1), bool)
     assert wake_mod._pid_alive(-1) is False
     wake_mod._clear_pid()
-    assert wake_mod._read_pid() is None
+    assert wake_process_mod._read_pid() is None
 
     # Corrupt pid file
     (wake_on / "wake.pid").write_text("not-a-pid\n", encoding="utf-8")
-    assert wake_mod._read_pid() is None
+    assert wake_process_mod._read_pid() is None
 
 
 def test_resume_rearms_wake(wake_on: Path) -> None:
@@ -265,6 +267,13 @@ def test_read_wake_config_corrupt_and_non_dict(wake_on: Path) -> None:
 def test_pid_alive_exception_paths(
     wake_on: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Exercise the POSIX os.kill(pid, 0) probe regardless of host OS.
+
+    _pid_alive() dispatches on os.name, so force the posix branch here and
+    cover the Windows branch separately (see test_windows_pid_alive_*).
+    """
+    monkeypatch.setattr(wake_process_mod.os, "name", "posix")
+
     def raise_lookup(_pid: int, _sig: int) -> None:
         raise ProcessLookupError()
 
@@ -282,6 +291,123 @@ def test_pid_alive_exception_paths(
 
     monkeypatch.setattr(wake_process_mod.os, "kill", raise_os)
     assert wake_mod._pid_alive(12345) is False
+
+
+class _FakeKernel32:
+    """Stand-in for ctypes.windll.kernel32, portable to non-Windows CI."""
+
+    def __init__(
+        self,
+        *,
+        handle: int = 77,
+        exit_code: int = wake_process_mod._STILL_ACTIVE,
+        get_exit_code_ok: bool = True,
+        raise_on: str | None = None,
+    ) -> None:
+        self._handle = handle
+        self._exit_code = exit_code
+        self._get_exit_code_ok = get_exit_code_ok
+        self._raise_on = raise_on
+        self.closed_handles: list[int] = []
+
+    # Method names mirror the real WinAPI (kernel32.dll) entry points.
+    def OpenProcess(self, _access: int, _inherit: bool, _pid: int) -> int:
+        if self._raise_on == "OpenProcess":
+            raise OSError("access denied")
+        return self._handle
+
+    def GetExitCodeProcess(self, _handle: int, exit_code_ref: Any) -> int:
+        if self._raise_on == "GetExitCodeProcess":
+            raise OSError("bad handle")
+        if self._get_exit_code_ok:
+            exit_code_ref._obj.value = (
+                self._exit_code
+            )  # pylint: disable=protected-access
+        return 1 if self._get_exit_code_ok else 0
+
+    def CloseHandle(self, handle: int) -> int:
+        self.closed_handles.append(handle)
+        return 1
+
+
+class _FakeWindll:
+    def __init__(self, kernel32: _FakeKernel32) -> None:
+        self.kernel32 = kernel32
+
+
+def test_windows_pid_alive_no_win32_apis(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(wake_process_mod.ctypes, "windll", None, raising=False)
+    assert wake_process_mod._windows_pid_alive(123) is False
+
+
+def test_windows_pid_alive_open_process_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeKernel32(handle=0)
+    monkeypatch.setattr(
+        wake_process_mod.ctypes, "windll", _FakeWindll(fake), raising=False
+    )
+    assert wake_process_mod._windows_pid_alive(123) is False
+    assert fake.closed_handles == []
+
+
+def test_windows_pid_alive_get_exit_code_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeKernel32(get_exit_code_ok=False)
+    monkeypatch.setattr(
+        wake_process_mod.ctypes, "windll", _FakeWindll(fake), raising=False
+    )
+    assert wake_process_mod._windows_pid_alive(123) is False
+    assert fake.closed_handles == [77]
+
+
+def test_windows_pid_alive_active_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _FakeKernel32(exit_code=wake_process_mod._STILL_ACTIVE)
+    monkeypatch.setattr(
+        wake_process_mod.ctypes, "windll", _FakeWindll(fake), raising=False
+    )
+    assert wake_process_mod._windows_pid_alive(123) is True
+    assert fake.closed_handles == [77]
+
+
+def test_windows_pid_alive_exited_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _FakeKernel32(exit_code=0)
+    monkeypatch.setattr(
+        wake_process_mod.ctypes, "windll", _FakeWindll(fake), raising=False
+    )
+    assert wake_process_mod._windows_pid_alive(123) is False
+
+
+def test_windows_pid_alive_open_process_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeKernel32(raise_on="OpenProcess")
+    monkeypatch.setattr(
+        wake_process_mod.ctypes, "windll", _FakeWindll(fake), raising=False
+    )
+    assert wake_process_mod._windows_pid_alive(123) is False
+
+
+def test_windows_pid_alive_get_exit_code_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeKernel32(raise_on="GetExitCodeProcess")
+    monkeypatch.setattr(
+        wake_process_mod.ctypes, "windll", _FakeWindll(fake), raising=False
+    )
+    assert wake_process_mod._windows_pid_alive(123) is False
+    # CloseHandle still runs via the finally block even after the raise.
+    assert fake.closed_handles == [77]
+
+
+def test_pid_alive_dispatches_to_windows_probe(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del wake_on
+    monkeypatch.setattr(wake_process_mod.os, "name", "nt")
+    monkeypatch.setattr(wake_process_mod, "_windows_pid_alive", lambda _pid: True)
+    assert wake_mod._pid_alive(123) is True
 
 
 def test_clear_pid_oserror(wake_on: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -412,7 +538,7 @@ def test_disarm_kills_foreign_pid(
     wake_on: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     wake_mod.arm(interval=5)
-    wake_mod._write_pid(999001)
+    wake_mod._write_pid_record(999001, "test-token-999001")
     killed: list[int] = []
 
     def fake_kill(pid: int, *, token: str | None = None) -> None:
@@ -470,9 +596,9 @@ def test_wake_arm_includes_token(wake_on: Path) -> None:
 def test_clear_pid_skips_other_owner(wake_on: Path) -> None:
     wake_mod._write_pid_record(111, "token-a")
     wake_mod._clear_pid(only_if_pid=222, only_if_token="token-a")
-    assert wake_mod._read_pid() == 111
+    assert wake_process_mod._read_pid() == 111
     wake_mod._clear_pid(only_if_pid=111, only_if_token="token-a")
-    assert wake_mod._read_pid() is None
+    assert wake_process_mod._read_pid() is None
 
 
 def test_wake_tick_increments_wake_ticks(wake_on: Path) -> None:
@@ -544,7 +670,7 @@ def test_force_create_disarms_prior_wake(
     wake_on: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     assert run_cli("manage", "create", "first")[0] == 0
-    wake_mod._write_pid(999002)
+    wake_mod._write_pid_record(999002, "test-token-999002")
     killed: list[int] = []
 
     def fake_kill(pid: int, *, token: str | None = None) -> None:
@@ -604,9 +730,7 @@ def test_kill_pid_tokenless_never_kills(
     monkeypatch.setattr(wake_process_mod, "_pid_looks_owned", lambda _pid: True)
     monkeypatch.setattr(wake_process_mod, "_read_pid_record", lambda: None)
     monkeypatch.setattr(wake_process_mod.os, "name", "nt")
-    monkeypatch.setattr(
-        wake_process_mod, "_windows_pid_looks_owned", lambda _pid: True
-    )
+    monkeypatch.setattr(wake_process_mod, "_windows_pid_looks_owned", lambda _pid: True)
     calls: list[object] = []
     monkeypatch.setattr(
         wake_process_mod.subprocess,
@@ -631,8 +755,8 @@ def test_kill_existing_loop_clears_tokenless_without_kill(
     monkeypatch.setattr(wake_process_mod, "_pid_alive", lambda _pid: False)
     wake_mod._kill_existing_loop()
     assert killed == []
-    assert wake_mod._read_pid() is None
-    assert wake_mod.read_orphan_wake() is None
+    assert wake_process_mod._read_pid() is None
+    assert wake_process_mod.read_orphan_wake() is None
 
 
 def test_kill_existing_loop_marks_orphan_when_tokenless_alive(
@@ -649,8 +773,8 @@ def test_kill_existing_loop_marks_orphan_when_tokenless_alive(
     monkeypatch.setattr(wake_process_mod, "_pid_alive", lambda _pid: True)
     wake_mod._kill_existing_loop()
     assert killed == []
-    assert wake_mod._read_pid() is None
-    orphan = wake_mod.read_orphan_wake()
+    assert wake_process_mod._read_pid() is None
+    orphan = wake_process_mod.read_orphan_wake()
     assert orphan is not None
     assert orphan.get("pid") == 424242
 
@@ -670,8 +794,111 @@ def test_kill_existing_loop_never_kills_tokenless_even_if_owned(
     monkeypatch.setattr(wake_process_mod, "_pid_looks_owned", lambda _pid: True)
     wake_mod._kill_existing_loop()
     assert killed == []
-    assert wake_mod._read_pid() is None
-    assert wake_mod.read_orphan_wake() is not None
+    assert wake_process_mod._read_pid() is None
+    assert wake_process_mod.read_orphan_wake() is not None
+
+
+def test_touch_last_emit_oserror_is_swallowed(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wake_mod.arm(interval=5)
+
+    def boom(_config: dict[str, object]) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(wake_mod, "_write_wake_config", boom)
+    # Must not raise: emit_wake_line()'s nudge stamp is best-effort.
+    wake_mod.emit_wake_line("hello")
+
+
+def test_touch_last_emit_missing_config_is_noop(wake_on: Path) -> None:
+    del wake_on
+    # No wake.json present: _touch_last_emit() returns early without writing.
+    wake_mod._touch_last_emit()
+
+
+def test_emit_budget_limited_tick_missing_state(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del wake_on
+    disarmed: list[bool] = []
+    monkeypatch.setattr(wake_mod, "disarm", lambda **kwargs: disarmed.append(True))
+    result = wake_mod.WakeTickResult(status="budget_limited", state=None)
+    assert wake_mod._emit_budget_limited_tick(result) == 1
+    assert disarmed == []
+
+
+def test_emit_budget_limited_loop_step_missing_state(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    del wake_on
+    disarmed: list[bool] = []
+    monkeypatch.setattr(wake_mod, "disarm", lambda **kwargs: disarmed.append(True))
+    result = wake_mod.WakeTickResult(status="budget_limited", state=None)
+    assert wake_mod._emit_budget_limited_loop_step(result) == 1
+    assert disarmed == []
+    assert "budget_limited result missing state" in capsys.readouterr().err
+
+
+def test_wake_loop_tick_outcome_config_cleared(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del wake_on
+    monkeypatch.setattr(wake_mod, "_read_wake_config", lambda: None)
+    assert wake_mod._wake_loop_tick_outcome("tok") == 0
+
+
+def test_wake_loop_tick_outcome_token_mismatch(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del wake_on
+    monkeypatch.setattr(wake_mod, "_read_wake_config", lambda: {"token": "different"})
+    assert wake_mod._wake_loop_tick_outcome("original") == 0
+
+
+def test_run_loop_acl_reharden_oserror_is_swallowed(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert run_cli("manage", "create", "acl reharden fail")[0] == 0
+    monkeypatch.setattr(wake_mod.time, "sleep", lambda _s: None)
+
+    def boom(*_a: object, **_k: object) -> None:
+        raise OSError("acl failed")
+
+    monkeypatch.setattr(wake_mod, "harden_windows_acl", boom)
+    monkeypatch.setattr(
+        wake_mod,
+        "_record_wake_tick",
+        lambda: wake_mod.WakeTickResult(status="inactive"),
+    )
+    # Must not raise: run_loop re-hardens ACLs best-effort at startup.
+    assert wake_mod.run_loop(interval=5) == 0
+
+
+def test_kill_existing_loop_defense_in_depth_tokenless_dead_pid(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Belt-and-suspenders: _read_pid_record never returns an empty token in
+    practice (it clears those itself), but _kill_existing_loop still guards
+    against it. A dead pid must clear quietly without marking orphan."""
+    del wake_on
+    marked: list[int] = []
+    monkeypatch.setattr(
+        wake_mod, "mark_orphan_wake", lambda pid, _reason: marked.append(pid)
+    )
+    monkeypatch.setattr(
+        wake_mod,
+        "_read_pid_record",
+        lambda: {"pid": 424242, "token": "", "started_at": ""},
+    )
+    monkeypatch.setattr(wake_process_mod, "_pid_alive", lambda _pid: False)
+    cleared: list[int] = []
+    monkeypatch.setattr(
+        wake_mod, "_clear_pid", lambda **kwargs: cleared.append(kwargs["only_if_pid"])
+    )
+    wake_mod._kill_existing_loop()
+    assert marked == []
+    assert cleared == [424242]
 
 
 def test_windows_ownership_rejects_bare_wake_marker(
@@ -689,7 +916,7 @@ def test_windows_ownership_rejects_bare_wake_marker(
         "run",
         lambda *_a, **_k: Result(),
     )
-    assert wake_mod._windows_pid_looks_owned(12345) is False
+    assert wake_process_mod._windows_pid_looks_owned(12345) is False
 
     class Owned:
         returncode = 0
@@ -701,7 +928,7 @@ def test_windows_ownership_rejects_bare_wake_marker(
         "run",
         lambda *_a, **_k: Owned(),
     )
-    assert wake_mod._windows_pid_looks_owned(12345) is True
+    assert wake_process_mod._windows_pid_looks_owned(12345) is True
 
     class OwnedPackage:
         returncode = 0
@@ -713,7 +940,7 @@ def test_windows_ownership_rejects_bare_wake_marker(
         "run",
         lambda *_a, **_k: OwnedPackage(),
     )
-    assert wake_mod._windows_pid_looks_owned(12345) is True
+    assert wake_process_mod._windows_pid_looks_owned(12345) is True
 
     class OwnedHyphen:
         returncode = 0
@@ -725,7 +952,7 @@ def test_windows_ownership_rejects_bare_wake_marker(
         "run",
         lambda *_a, **_k: OwnedHyphen(),
     )
-    assert wake_mod._windows_pid_looks_owned(99) is True
+    assert wake_process_mod._windows_pid_looks_owned(99) is True
 
 
 def test_atomic_write_cleans_tmp_on_replace_fail(
@@ -754,7 +981,9 @@ def test_atomic_write_cleans_tmp_on_replace_fail(
     assert not tmp_holder["tmp"].exists()
 
 
-def test_read_pid_record_variants(wake_on: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_read_pid_record_variants(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     (wake_on / "wake.pid").write_text("", encoding="utf-8")
     assert wake_mod._read_pid_record() is None
     # Plain-int is cleared (no longer accepted); dead pid → no orphan.
@@ -778,7 +1007,7 @@ def test_read_pid_record_empty_token_marks_orphan(
     )
     assert wake_mod._read_pid_record() is None
     assert not (wake_on / "wake.pid").is_file()
-    orphan = wake_mod.read_orphan_wake()
+    orphan = wake_process_mod.read_orphan_wake()
     assert orphan is not None
     assert orphan.get("pid") == 999001
 
@@ -789,7 +1018,7 @@ def test_read_pid_record_plain_int_alive_marks_orphan(
     monkeypatch.setattr(wake_process_mod, "_pid_alive", lambda _pid: True)
     (wake_on / "wake.pid").write_text("777001\n", encoding="utf-8")
     assert wake_mod._read_pid_record() is None
-    orphan = wake_mod.read_orphan_wake()
+    orphan = wake_process_mod.read_orphan_wake()
     assert orphan is not None
     assert orphan.get("pid") == 777001
 
@@ -804,7 +1033,7 @@ def test_read_pid_record_empty_token_dead_pid(
     )
     assert wake_mod._read_pid_record() is None
     assert not (wake_on / "wake.pid").is_file()
-    assert wake_mod.read_orphan_wake() is None
+    assert wake_process_mod.read_orphan_wake() is None
 
 
 def test_read_pid_record_empty_token_unlink_oserror(
@@ -841,7 +1070,7 @@ def test_kill_existing_loop_defense_empty_token(
     )
     monkeypatch.setattr(wake_mod, "_pid_alive", lambda _pid: True)
     cleared: list[bool] = []
-    monkeypatch.setattr(wake_mod, "_clear_pid", lambda: cleared.append(True))
+    monkeypatch.setattr(wake_mod, "_clear_pid", lambda **_kwargs: cleared.append(True))
     orphaned: list[int] = []
 
     def mark(pid: int, reason: str) -> None:
@@ -860,32 +1089,40 @@ def test_kill_existing_loop_defense_empty_token(
 
 
 def test_cmdline_looks_owned_helpers() -> None:
-    assert wake_mod._cmdline_looks_owned("python -m cursor_goal wake loop") is True
-    assert wake_mod._cmdline_looks_owned("run_goal.py wake loop") is True
-    assert wake_mod._cmdline_looks_owned("C:\\x\\wake_loop.cmd") is True
-    assert wake_mod._cmdline_looks_owned("other-wake-daemon") is False
-    assert wake_mod._cmdline_looks_owned("") is False
+    assert (
+        wake_process_mod._cmdline_looks_owned("python -m cursor_goal wake loop") is True
+    )
+    assert wake_process_mod._cmdline_looks_owned("run_goal.py wake loop") is True
+    assert wake_process_mod._cmdline_looks_owned("C:\\x\\wake_loop.cmd") is True
+    assert wake_process_mod._cmdline_looks_owned("other-wake-daemon") is False
+    assert wake_process_mod._cmdline_looks_owned("") is False
     # Reject bare repo/package paths (PID-reuse false positives).
     assert (
-        wake_mod._cmdline_looks_owned(
+        wake_process_mod._cmdline_looks_owned(
             r"pytest C:\Users\x\Documents\Git\cursor-goal\tests\test_wake.py"
         )
         is False
     )
     assert (
-        wake_mod._cmdline_looks_owned(
+        wake_process_mod._cmdline_looks_owned(
             r"Code.exe --folder-uri file:///C:/Users/x/cursor-goal"
         )
         is False
     )
-    assert wake_mod._cmdline_looks_owned("python run_goal.py manage status") is False
-    assert wake_mod._cmdline_looks_owned("python -m cursor_goal manage status") is False
+    assert (
+        wake_process_mod._cmdline_looks_owned("python run_goal.py manage status")
+        is False
+    )
+    assert (
+        wake_process_mod._cmdline_looks_owned("python -m cursor_goal manage status")
+        is False
+    )
 
 
 def test_clear_pid_token_mismatch(wake_on: Path) -> None:
     wake_mod._write_pid_record(55, "tok-a")
     wake_mod._clear_pid(only_if_pid=55, only_if_token="tok-b")
-    assert wake_mod._read_pid() == 55
+    assert wake_process_mod._read_pid() == 55
 
 
 def test_windows_ownership_probe(
@@ -897,7 +1134,7 @@ def test_windows_ownership_probe(
         returncode = 0
 
     monkeypatch.setattr(wake_process_mod.subprocess, "run", lambda *_a, **_k: Res())
-    assert wake_mod._windows_pid_looks_owned(123) is True
+    assert wake_process_mod._windows_pid_looks_owned(123) is True
 
     class Empty:
         stdout = ""
@@ -905,13 +1142,13 @@ def test_windows_ownership_probe(
         returncode = 1
 
     monkeypatch.setattr(wake_process_mod.subprocess, "run", lambda *_a, **_k: Empty())
-    assert wake_mod._windows_pid_looks_owned(123) is False
+    assert wake_process_mod._windows_pid_looks_owned(123) is False
 
     def boom(*_a: object, **_k: object) -> None:
         raise OSError("no ps")
 
     monkeypatch.setattr(wake_process_mod.subprocess, "run", boom)
-    assert wake_mod._windows_pid_looks_owned(123) is False
+    assert wake_process_mod._windows_pid_looks_owned(123) is False
 
 
 def test_kill_pid_token_guards(wake_on: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -942,7 +1179,7 @@ def test_unix_pid_owned_none_subprocess(
 
     monkeypatch.setattr(wake_process_mod, "Path", NoProc)
     monkeypatch.setattr(wake_process_mod.subprocess, "run", lambda *_a, **_k: None)
-    assert wake_mod._unix_pid_looks_owned(42) is False
+    assert wake_process_mod._unix_pid_looks_owned(42) is False
 
 
 def test_windows_pid_owned_none_subprocess(
@@ -950,7 +1187,7 @@ def test_windows_pid_owned_none_subprocess(
 ) -> None:
     del wake_on
     monkeypatch.setattr(wake_process_mod.subprocess, "run", lambda *_a, **_k: None)
-    assert wake_mod._windows_pid_looks_owned(42) is False
+    assert wake_process_mod._windows_pid_looks_owned(42) is False
 
 
 def test_record_wake_tick_inactive(wake_on: Path) -> None:
@@ -960,6 +1197,67 @@ def test_record_wake_tick_inactive(wake_on: Path) -> None:
     assert result.status == "inactive"
     assert result.state is not None
     assert result.state.active is False or result.state.status != "pursuing"
+
+
+def test_owning_loop_pid_if_alive_no_record(wake_on: Path) -> None:
+    del wake_on
+    assert wake_mod._owning_loop_pid_if_alive() is None
+
+
+def test_owning_loop_pid_if_alive_dead_pid(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wake_mod._write_pid_record(999321, "tok")
+    monkeypatch.setattr(wake_mod, "_pid_alive", lambda _pid: False)
+    assert wake_mod._owning_loop_pid_if_alive() is None
+
+
+def test_owning_loop_pid_if_alive_unowned_pid(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wake_mod._write_pid_record(999321, "tok")
+    monkeypatch.setattr(wake_mod, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(wake_mod, "_pid_looks_owned", lambda _pid: False)
+    assert wake_mod._owning_loop_pid_if_alive() is None
+
+
+def test_owning_loop_pid_if_alive_verified(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wake_mod._write_pid_record(999321, "tok")
+    monkeypatch.setattr(wake_mod, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(wake_mod, "_pid_looks_owned", lambda _pid: True)
+    assert wake_mod._owning_loop_pid_if_alive() == 999321
+
+
+def test_wake_tick_skips_charge_when_owning_loop_alive(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A live, verified-owned loop already ticks itself; a concurrent manual
+    tick must not double-charge wake_ticks."""
+    assert run_cli("manage", "create", "owned-loop tick")[0] == 0
+    wake_mod.arm(interval=5)
+    other_pid = os.getpid() + 1
+    monkeypatch.setattr(wake_mod, "_owning_loop_pid_if_alive", lambda: other_pid)
+    charged: list[bool] = []
+    monkeypatch.setattr(
+        wake_mod,
+        "_record_wake_tick",
+        lambda: charged.append(True) or wake_mod.WakeTickResult(status="ok"),
+    )
+    out = io.StringIO()
+    with redirect_stdout(out):
+        assert wake_mod.tick() == 0
+    assert charged == []
+    assert "AGENT_GOAL_WAKE" not in out.getvalue()
+
+
+def test_record_wake_tick_no_goal_at_all(wake_on: Path) -> None:
+    """mutate_goal() returns None (not a raise) when goal.json is entirely absent."""
+    del wake_on
+    result = wake_mod._record_wake_tick()
+    assert result.status == "inactive"
+    assert result.state is None
 
 
 def test_kill_existing_loop(wake_on: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -973,7 +1271,7 @@ def test_kill_existing_loop(wake_on: Path, monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(wake_mod, "_kill_pid", fake)
     wake_mod._kill_existing_loop()
     assert killed == [999003]
-    assert wake_mod._read_pid() is None
+    assert wake_process_mod._read_pid() is None
 
     wake_mod._write_pid_record(wake_mod.os.getpid(), "self")
     wake_mod._kill_existing_loop()  # skips self
@@ -1204,7 +1502,7 @@ def test_unix_ownership_via_ps(wake_on: Path, monkeypatch: pytest.MonkeyPatch) -
         stderr = ""
 
     monkeypatch.setattr(wake_process_mod.subprocess, "run", lambda *_a, **_k: Owned())
-    assert wake_mod._unix_pid_looks_owned(88) is True
+    assert wake_process_mod._unix_pid_looks_owned(88) is True
 
     class Bare:
         returncode = 0
@@ -1212,7 +1510,7 @@ def test_unix_ownership_via_ps(wake_on: Path, monkeypatch: pytest.MonkeyPatch) -
         stderr = ""
 
     monkeypatch.setattr(wake_process_mod.subprocess, "run", lambda *_a, **_k: Bare())
-    assert wake_mod._unix_pid_looks_owned(88) is False
+    assert wake_process_mod._unix_pid_looks_owned(88) is False
 
     class Failed:
         returncode = 1
@@ -1220,7 +1518,7 @@ def test_unix_ownership_via_ps(wake_on: Path, monkeypatch: pytest.MonkeyPatch) -
         stderr = "not found"
 
     monkeypatch.setattr(wake_process_mod.subprocess, "run", lambda *_a, **_k: Failed())
-    assert wake_mod._unix_pid_looks_owned(88) is False
+    assert wake_process_mod._unix_pid_looks_owned(88) is False
 
 
 def test_wake_arm_refuses_insecure(
@@ -1276,7 +1574,7 @@ def test_unix_ownership_via_proc_file(
         return real_path(arg)
 
     monkeypatch.setattr(wake_process_mod, "Path", path_factory)
-    assert wake_mod._unix_pid_looks_owned(42) is True
+    assert wake_process_mod._unix_pid_looks_owned(42) is True
 
     bad = tmp_path / "badcmd"
     bad.write_bytes(b"other-wake-daemon\x00")
@@ -1290,7 +1588,7 @@ def test_unix_ownership_via_proc_file(
         "Path",
         lambda arg: BadProc(arg) if str(arg).endswith("/cmdline") else real_path(arg),
     )
-    assert wake_mod._unix_pid_looks_owned(42) is False
+    assert wake_process_mod._unix_pid_looks_owned(42) is False
 
 
 def test_unix_ownership_proc_oserror(
@@ -1306,7 +1604,7 @@ def test_unix_ownership_proc_oserror(
             raise OSError("denied")
 
     monkeypatch.setattr(wake_process_mod, "Path", lambda _arg: BoomPath())
-    assert wake_mod._unix_pid_looks_owned(7) is False
+    assert wake_process_mod._unix_pid_looks_owned(7) is False
 
 
 def test_wake_coalesce_does_not_skip_after_stop_nudge(wake_on: Path) -> None:
@@ -1359,23 +1657,62 @@ def test_wake_coalesce_missing_source_treated_as_wake(wake_on: Path) -> None:
 def test_refuse_if_wake_dead_while_pursuing(
     wake_on: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Default (non-strict): refuse_if_wake_dead is a no-op; warning fires instead."""
     monkeypatch.delenv("CURSOR_GOAL_ALLOW_DEAD_WAKE", raising=False)
+    monkeypatch.delenv("CURSOR_GOAL_REQUIRE_WAKE", raising=False)
     assert run_cli("manage", "create", "need wake", "--test", "echo ok")[0] == 0
+    assert wake_mod.refuse_if_wake_dead() is None
+    warning = wake_mod.wake_dead_warning()
+    assert warning is not None
+    assert "wake" in warning.lower()
+    assert "warning" in warning.lower()
+
+    monkeypatch.setenv("CURSOR_GOAL_REQUIRE_WAKE", "1")
     msg = wake_mod.refuse_if_wake_dead()
     assert msg is not None
     assert "wake" in msg.lower()
     monkeypatch.setenv("CURSOR_GOAL_ALLOW_DEAD_WAKE", "1")
     assert wake_mod.refuse_if_wake_dead() is None
+    assert wake_mod.wake_dead_warning() is None
+
+
+def test_require_wake_strict_env_values(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del wake_on
+    monkeypatch.delenv("CURSOR_GOAL_REQUIRE_WAKE", raising=False)
+    assert wake_mod.require_wake_strict() is False
+    for value in ("1", "true", "YES", "on"):
+        monkeypatch.setenv("CURSOR_GOAL_REQUIRE_WAKE", value)
+        assert wake_mod.require_wake_strict() is True
+    monkeypatch.setenv("CURSOR_GOAL_REQUIRE_WAKE", "0")
+    assert wake_mod.require_wake_strict() is False
 
 
 def test_eval_validate_refuses_dead_wake(
     wake_on: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """CURSOR_GOAL_REQUIRE_WAKE=1 restores the strict hard-refusal behavior."""
     monkeypatch.delenv("CURSOR_GOAL_ALLOW_DEAD_WAKE", raising=False)
+    monkeypatch.setenv("CURSOR_GOAL_REQUIRE_WAKE", "1")
     cmd = f'{__import__("sys").executable} -c "raise SystemExit(0)"'
     assert run_cli("manage", "create", "v", "--test", cmd)[0] == 0
     code, _out, err = run_cli("eval", "validate")
     assert code == 1
+    assert "wake" in err.lower()
+
+
+def test_eval_validate_warns_but_continues_by_default(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Default (non-strict): eval validate warns about dead wake but still runs."""
+    monkeypatch.delenv("CURSOR_GOAL_ALLOW_DEAD_WAKE", raising=False)
+    monkeypatch.delenv("CURSOR_GOAL_REQUIRE_WAKE", raising=False)
+    cmd = f'{__import__("sys").executable} -c "raise SystemExit(0)"'
+    assert run_cli("manage", "create", "v2", "--test", cmd)[0] == 0
+    code, _out, err = run_cli("eval", "validate")
+    assert code == 0
+    assert "warning" in err.lower()
     assert "wake" in err.lower()
 
 
@@ -1407,6 +1744,7 @@ def test_refuse_if_wake_dead_when_armed(
     wake_on: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("CURSOR_GOAL_ALLOW_DEAD_WAKE", raising=False)
+    monkeypatch.setenv("CURSOR_GOAL_REQUIRE_WAKE", "1")
     assert run_cli("manage", "create", "armed dead")[0] == 0
     assert (wake_on / "wake.json").is_file()
     monkeypatch.setattr(
@@ -1423,6 +1761,10 @@ def test_refuse_if_wake_dead_when_armed(
     msg = wake_mod.refuse_if_wake_dead()
     assert msg is not None
     assert "not alive" in msg.lower()
+    monkeypatch.delenv("CURSOR_GOAL_REQUIRE_WAKE", raising=False)
+    warning = wake_mod.wake_dead_warning()
+    assert warning is not None
+    assert "not alive" in warning.lower()
 
 
 def test_assert_workdir_usable_empty() -> None:
@@ -1463,6 +1805,7 @@ def test_refuse_if_wake_dead_when_unarmed(
     wake_on: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("CURSOR_GOAL_ALLOW_DEAD_WAKE", raising=False)
+    monkeypatch.setenv("CURSOR_GOAL_REQUIRE_WAKE", "1")
     assert run_cli("manage", "create", "unarmed")[0] == 0
     monkeypatch.setattr(
         wake_mod,
@@ -1479,6 +1822,10 @@ def test_refuse_if_wake_dead_when_unarmed(
     assert msg is not None
     assert "not armed" in msg.lower()
     assert "continuation_ready=false" in msg
+    monkeypatch.delenv("CURSOR_GOAL_REQUIRE_WAKE", raising=False)
+    warning = wake_mod.wake_dead_warning()
+    assert warning is not None
+    assert "not armed" in warning.lower()
 
 
 def test_continuation_readiness_disabled(
@@ -1489,6 +1836,37 @@ def test_continuation_readiness_disabled(
     ready = wake_mod.continuation_readiness()
     assert ready["continuation_ready"] is True
     assert ready["reason"] == "disabled"
+
+
+def test_continuation_readiness_not_pursuing(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del wake_on
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+    ready = wake_mod.continuation_readiness(goal_pursuing=False)
+    assert ready["continuation_ready"] is True
+    assert ready["reason"] == "not_pursuing"
+
+
+def test_continuation_readiness_uses_config_emit_and_interval_defaults(
+    wake_on: Path,
+) -> None:
+    """When last_emit_at/interval_s are not overridden, they come from wake.json."""
+    assert run_cli("manage", "create", "config defaults")[0] == 0
+    wake_mod.arm(interval=7)
+    ready = wake_mod.continuation_readiness(
+        armed=None,
+        pid_alive=True,
+        goal_pursuing=True,
+    )
+    assert ready["continuation_ready"] is True
+
+
+def test_continuation_readiness_not_armed(wake_on: Path) -> None:
+    assert run_cli("manage", "create", "unarmed readiness")[0] == 0
+    ready = wake_mod.continuation_readiness(armed=False, goal_pursuing=True)
+    assert ready["continuation_ready"] is False
+    assert ready["reason"] == "not_armed"
 
 
 def test_continuation_readiness_heartbeat_stale(
@@ -1600,6 +1978,19 @@ def test_heartbeat_stale_typing_edges() -> None:
     )
 
 
+def test_wake_arm_cli_falls_back_when_loop_path_unresolved(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        wake_mod,
+        "wake_loop_invocation",
+        lambda: (_ for _ in ()).throw(ValueError("no skill")),
+    )
+    code, out, _err = run_cli("wake", "arm")
+    assert code == 0
+    assert "resolve with: manage harness-cmd" in out
+
+
 def test_wake_loop_command_unresolved(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         wake_mod,
@@ -1608,3 +1999,116 @@ def test_wake_loop_command_unresolved(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     hint = wake_mod._wake_loop_command()
     assert "unresolved-skill" in hint
+
+
+def test_pid_alive_true_for_current_process(wake_on: Path) -> None:
+    """os.kill(pid, 0) on a real, currently-running process raises nothing."""
+    del wake_on
+    assert wake_process_mod._pid_alive(os.getpid()) is True
+
+
+def test_mark_orphan_wake_oserror_is_swallowed(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del wake_on
+
+    def boom(*_a: object, **_k: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(wake_process_mod, "atomic_write_text", boom)
+    # Must not raise: mark_orphan_wake() is a best-effort diagnostic write.
+    wake_process_mod.mark_orphan_wake(4242, "test reason")
+    assert wake_process_mod.read_orphan_wake() is None
+
+
+def test_clear_orphan_wake_removes_existing_marker(wake_on: Path) -> None:
+    del wake_on
+    wake_process_mod.mark_orphan_wake(4242, "test reason")
+    assert wake_process_mod.read_orphan_wake() is not None
+    wake_process_mod.clear_orphan_wake()
+    assert wake_process_mod.read_orphan_wake() is None
+
+
+def test_clear_orphan_wake_oserror_is_swallowed(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wake_process_mod.mark_orphan_wake(4242, "test reason")
+
+    real_unlink = Path.unlink
+
+    def boom_unlink(self: Path, *a: object, **k: object) -> None:
+        if self == wake_process_mod.wake_orphan_path():
+            raise OSError("locked")
+        return real_unlink(self, *a, **k)
+
+    monkeypatch.setattr(Path, "unlink", boom_unlink)
+    # Must not raise: clear_orphan_wake() only logs and continues on failure.
+    wake_process_mod.clear_orphan_wake()
+
+
+def test_read_orphan_wake_bad_json_returns_none(
+    wake_on: Path,
+) -> None:
+    wake_process_mod.wake_orphan_path().write_text("not json{{{", encoding="utf-8")
+    assert wake_process_mod.read_orphan_wake() is None
+
+
+def test_read_orphan_wake_non_dict_returns_none(wake_on: Path) -> None:
+    wake_process_mod.wake_orphan_path().write_text("[1, 2, 3]", encoding="utf-8")
+    assert wake_process_mod.read_orphan_wake() is None
+
+
+def test_clear_pid_unconditional_oserror_is_swallowed(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wake_process_mod._write_pid_record(123, "tok")
+    real_unlink = Path.unlink
+
+    def boom_unlink(self: Path, *a: object, **k: object) -> None:
+        if self == wake_process_mod.wake_pid_path():
+            raise OSError("locked")
+        return real_unlink(self, *a, **k)
+
+    monkeypatch.setattr(Path, "unlink", boom_unlink)
+    # Unconditional clear (no only_if_pid/only_if_token): must not raise.
+    wake_process_mod._clear_pid()
+
+
+def test_unix_pid_looks_owned_ps_oserror(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # On Windows /proc never exists, so this always exercises the ps fallback.
+    del wake_on
+
+    def boom(*_a: object, **_k: object) -> None:
+        raise OSError("ps: command not found")
+
+    monkeypatch.setattr(wake_process_mod.subprocess, "run", boom)
+    assert wake_process_mod._unix_pid_looks_owned(88) is False
+
+
+def test_unix_pid_looks_owned_ps_timeout(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del wake_on
+
+    def boom(*_a: object, **_k: object) -> None:
+        raise subprocess.TimeoutExpired(cmd="ps", timeout=5)
+
+    monkeypatch.setattr(wake_process_mod.subprocess, "run", boom)
+    assert wake_process_mod._unix_pid_looks_owned(88) is False
+
+
+def test_pid_looks_owned_rejects_non_positive_pid(wake_on: Path) -> None:
+    del wake_on
+    assert wake_process_mod._pid_looks_owned(0) is False
+    assert wake_process_mod._pid_looks_owned(-1) is False
+
+
+def test_pid_looks_owned_delegates_on_windows(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del wake_on
+    monkeypatch.setattr(wake_process_mod.os, "name", "nt")
+    monkeypatch.setattr(wake_process_mod, "_windows_pid_looks_owned", lambda _pid: True)
+    assert wake_process_mod._pid_looks_owned(123) is True

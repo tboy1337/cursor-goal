@@ -350,18 +350,18 @@ def test_eval_spawn_config_default(
     assert code == 0
     data = json.loads(out.strip())
     assert data["subagent_type"] == "goal-evaluator"
-    assert data["model"] == "fast"
+    assert data["model"] == "composer-2.5"
     assert data["readonly"] is True
 
 
 def test_eval_spawn_config_override(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("CURSOR_GOAL_EVAL_MODEL", "composer-2.5")
+    monkeypatch.setenv("CURSOR_GOAL_EVAL_MODEL", "gpt-5.3-codex")
     code, out, _err = run_cli("eval", "spawn-config")
     assert code == 0
     data = json.loads(out.strip())
-    assert data["model"] == "composer-2.5"
+    assert data["model"] == "gpt-5.3-codex"
     assert data["subagent_type"] == "goal-evaluator"
 
 
@@ -372,7 +372,18 @@ def test_eval_spawn_config_empty_env_falls_back(
     code, out, _err = run_cli("eval", "spawn-config")
     assert code == 0
     data = json.loads(out.strip())
-    assert data["model"] == "fast"
+    assert data["model"] == "composer-2.5"
+
+
+def test_eval_spawn_config_legacy_fast_falls_back(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CURSOR_GOAL_EVAL_MODEL=fast is not a real Cursor model; fall back silently."""
+    monkeypatch.setenv("CURSOR_GOAL_EVAL_MODEL", "fast")
+    code, out, _err = run_cli("eval", "spawn-config")
+    assert code == 0
+    data = json.loads(out.strip())
+    assert data["model"] == "composer-2.5"
 
 
 def test_eval_check_no_signal_and_ok(goal_home: Path) -> None:
@@ -401,7 +412,7 @@ def test_eval_validate_redacts_live_stdout(
     from cursor_goal import evaluate as eval_mod
     from cursor_goal.validation import ValidationResult
 
-    run_cli("manage", "create", "g", "--test", f"{sys.executable} -c \"pass\"")
+    run_cli("manage", "create", "g", "--test", f'{sys.executable} -c "pass"')
 
     def fake_run(
         _cmd: str, *, shell_ok: bool = False, cwd: str | None = None
@@ -424,6 +435,7 @@ def test_eval_prompt_refuses_dead_wake(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+    monkeypatch.setenv("CURSOR_GOAL_REQUIRE_WAKE", "1")
     monkeypatch.delenv("CURSOR_GOAL_ALLOW_DEAD_WAKE", raising=False)
     assert run_cli("manage", "create", "need eval")[0] == 0
     # Create with wake=1 arms wake.json but no live loop PID → not ready.
@@ -436,8 +448,35 @@ def test_eval_spawn_config_refuses_dead_wake(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+    monkeypatch.setenv("CURSOR_GOAL_REQUIRE_WAKE", "1")
     monkeypatch.delenv("CURSOR_GOAL_ALLOW_DEAD_WAKE", raising=False)
     assert run_cli("manage", "create", "need spawn")[0] == 0
     code, _out, err = run_cli("eval", "spawn-config")
     assert code == 1
     assert "wake" in err.lower()
+
+
+def test_eval_prompt_warns_but_continues_by_default(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+    monkeypatch.delenv("CURSOR_GOAL_REQUIRE_WAKE", raising=False)
+    monkeypatch.delenv("CURSOR_GOAL_ALLOW_DEAD_WAKE", raising=False)
+    assert run_cli("manage", "create", "need eval warn")[0] == 0
+    code, _out, err = run_cli("eval", "prompt")
+    assert code == 0
+    assert "wake" in err.lower()
+
+
+def test_eval_spawn_config_warns_but_continues_by_default(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+    monkeypatch.delenv("CURSOR_GOAL_REQUIRE_WAKE", raising=False)
+    monkeypatch.delenv("CURSOR_GOAL_ALLOW_DEAD_WAKE", raising=False)
+    assert run_cli("manage", "create", "need spawn warn")[0] == 0
+    code, out, err = run_cli("eval", "spawn-config")
+    assert code == 0
+    assert "wake" in err.lower()
+    data = json.loads(out.strip())
+    assert data["subagent_type"] == "goal-evaluator"

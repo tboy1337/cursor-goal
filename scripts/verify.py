@@ -88,9 +88,17 @@ def run_step(name: str, command: Sequence[str], *, cwd: Path) -> StepResult:
 
 
 def bash_scripts(root: Path) -> list[Path]:
-    """Return sorted bash scripts under scripts/."""
+    """Return sorted bash scripts under scripts/ plus the skill tree's wake loop.
+
+    The marketplace/plugin skill tree ships its own bash entry point
+    (.cursor/skills/goal/scripts/wake_loop.sh) that CI lints alongside
+    scripts/*.sh; include it here too so `verify.py` matches CI exactly.
+    """
     scripts_dir = root / "scripts"
     found = list(scripts_dir.glob("*.sh")) + list(scripts_dir.glob("*.bash"))
+    wake_loop_sh = root / ".cursor" / "skills" / "goal" / "scripts" / "wake_loop.sh"
+    if wake_loop_sh.is_file():
+        found.append(wake_loop_sh)
     return sorted(path for path in found if path.is_file())
 
 

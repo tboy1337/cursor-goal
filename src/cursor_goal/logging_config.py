@@ -88,9 +88,8 @@ def _open_log_file() -> TextIO | None:
             path = expanded
         path.parent.mkdir(parents=True, exist_ok=True)
         # Keep handle open for the process lifetime (logger owns it).
-        handle = open(
-            path, "a", encoding="utf-8"
-        )  # pylint: disable=consider-using-with
+        # pylint: disable-next=consider-using-with
+        handle = open(path, "a", encoding="utf-8")
         _maybe_chmod_log_file(path)
         return handle
     except OSError as exc:
@@ -99,15 +98,15 @@ def _open_log_file() -> TextIO | None:
         )
         return None
     except ValueError as exc:
-        sys.stderr.write(
-            f"[cursor_goal] CURSOR_GOAL_LOG_FILE disabled: {exc}\n"
-        )
+        sys.stderr.write(f"[cursor_goal] CURSOR_GOAL_LOG_FILE disabled: {exc}\n")
         return None
 
 
 def _configure_root() -> None:
     """Configure the parent ``cursor_goal`` logger once; children propagate."""
-    global _CONFIGURED, _LOG_FILE_HANDLE
+    # Module-level idempotent-init guard + owned file handle; a class
+    # singleton would just move the same mutable state one level up.
+    global _CONFIGURED, _LOG_FILE_HANDLE  # pylint: disable=global-statement
     if _CONFIGURED:
         return
 
@@ -158,7 +157,8 @@ def get_logger(name: str = "cursor_goal") -> logging.Logger:
 
 def _reset_for_tests() -> None:
     """Clear configuration state (test helper only)."""
-    global _CONFIGURED, _LOG_FILE_HANDLE
+    # Mirrors _configure_root's module-level state; test-only reset hook.
+    global _CONFIGURED, _LOG_FILE_HANDLE  # pylint: disable=global-statement
     root = logging.getLogger("cursor_goal")
     for handler in list(root.handlers):
         root.removeHandler(handler)

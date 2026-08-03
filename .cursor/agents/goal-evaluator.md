@@ -1,7 +1,7 @@
 ---
 name: goal-evaluator
-description: Readonly goal completion checker. Use when evaluating whether an active /goal condition is met. Spawn via Task with params from eval spawn-config (default model fast). Prefer this over generalPurpose.
-model: fast
+description: Readonly goal completion checker. Use when evaluating whether an active /goal condition is met. Spawn via Task with params from eval spawn-config (default model composer-2.5). Prefer this over generalPurpose.
+model: composer-2.5
 readonly: true
 is_background: false
 ---
@@ -35,3 +35,16 @@ NO: <one-sentence reason what remains>
 
 The worker feeds your full response into `eval parse-result --stdin` (or `@file`).
 Keep the final line a clean `YES:` / `NO:` verdict so parsing stays reliable.
+
+## Model note
+
+`model: composer-2.5` is a real Cursor model ID (see the [subagents
+docs](https://cursor.com/docs/subagents.md#model-configuration)), so the
+maker!=checker split is honored whenever Cursor can spawn that model for a
+subagent. On legacy request-based plans without Max Mode, Cursor may still
+run subagents on Composer regardless of the requested `model` — in that case
+maker!=checker cannot be *guaranteed* from frontmatter alone; `manage doctor`
+reports the resolved model so this is visible, not silent.
+
+<!-- cursor-goal:managed-agent - installed/uninstalled by scripts/install-goal.*; back up before hand-editing -->
+

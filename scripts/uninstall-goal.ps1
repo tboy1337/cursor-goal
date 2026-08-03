@@ -13,6 +13,26 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $script:HookMarker = "cursor_goal_stop_hook"
+$script:AgentProvenanceMarker = "cursor-goal:managed-agent"
+
+function Test-GoalManagedAgentFile {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+    try {
+        $content = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+    }
+    catch {
+        # Unreadable file: do not claim provenance we cannot verify.
+        return $false
+    }
+    return $content -like "*${script:AgentProvenanceMarker}*"
+}
 
 function Write-UninstallUtf8NoBom {
     [CmdletBinding()]
@@ -87,7 +107,18 @@ print("hooks cleaned")
 '@
                 try {
                     Write-UninstallUtf8NoBom -Path $tmpPy -Content $script
-                    $null = & $py @($pyArgs + @($tmpPy, $installDir, $hooksFile)) 2>&1
+                    # With $ErrorActionPreference = 'Stop' (set at the top of this
+                    # script), merging stderr via 2>&1 throws a terminating
+                    # exception before $LASTEXITCODE can be read below. Locally
+                    # downgrade to 'Continue' so stderr flows through as plain text.
+                    $prevEap = $ErrorActionPreference
+                    $ErrorActionPreference = 'Continue'
+                    try {
+                        $null = & $py @($pyArgs + @($tmpPy, $installDir, $hooksFile)) 2>&1
+                    }
+                    finally {
+                        $ErrorActionPreference = $prevEap
+                    }
                     if ($LASTEXITCODE -eq 0) { $cleaned = $true }
                 }
                 finally {
@@ -119,16 +150,18 @@ from pathlib import Path
 path = Path(sys.argv[1])
 data = json.loads(path.read_text(encoding="utf-8"))
 hooks = data.get("hooks") or {}
-stop = hooks.get("stop") or []
 
-def is_goal_hook(item):
+def is_goal_hook(item, marker):
     if not isinstance(item, dict):
         return False
-    return item.get("_cursor_goal") == "cursor_goal_stop_hook"
+    return item.get("_cursor_goal") == marker
 
-hooks["stop"] = [
-    item for item in stop if not is_goal_hook(item)
-]
+for event, marker in (
+    ("stop", "cursor_goal_stop_hook"),
+    ("subagentStop", "cursor_goal_subagent_stop_hook"),
+):
+    entries = hooks.get(event) or []
+    hooks[event] = [item for item in entries if not is_goal_hook(item, marker)]
 data["hooks"] = hooks
 tmp = path.with_name(f"{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
 tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -137,7 +170,17 @@ print("hooks cleaned")
 '@
                 try {
                     Write-UninstallUtf8NoBom -Path $tmpPy -Content $script
-                    $null = & $py @($pyArgs + @($tmpPy, $hooksFile)) 2>&1
+                    # See the comment on the first 2>&1 block in this function:
+                    # under $ErrorActionPreference = 'Stop' it throws before
+                    # $LASTEXITCODE can be read.
+                    $prevEap = $ErrorActionPreference
+                    $ErrorActionPreference = 'Continue'
+                    try {
+                        $null = & $py @($pyArgs + @($tmpPy, $hooksFile)) 2>&1
+                    }
+                    finally {
+                        $ErrorActionPreference = $prevEap
+                    }
                     if ($LASTEXITCODE -eq 0) { $cleaned = $true }
                 }
                 finally {
@@ -172,7 +215,14 @@ print("hooks cleaned")
         }
         if ($py) {
             try {
-                $null = & $py @($pyArgs + @("-u", $runGoal, "wake", "disarm")) 2>&1
+                $prevEap = $ErrorActionPreference
+                $ErrorActionPreference = 'Continue'
+                try {
+                    $null = & $py @($pyArgs + @("-u", $runGoal, "wake", "disarm")) 2>&1
+                }
+                finally {
+                    $ErrorActionPreference = $prevEap
+                }
                 if ($LASTEXITCODE -eq 0) {
                     Write-Host "[uninstall-goal] Disarmed wake watchdog"
                 }
@@ -189,7 +239,7 @@ print("hooks cleaned")
     Write-Host "[uninstall-goal] Removing skill at $installDir"
     if (Test-Path $installDir) { Remove-Item -Recurse -Force $installDir }
 
-    # Clean installer backup debris next to the skill / agents trees.
+    # Clean installer backup debris next to the skill / agents / hooks files.
     $skillsParent = Join-Path $HomeDir ".cursor\skills"
     if (Test-Path -LiteralPath $skillsParent) {
         Get-ChildItem -LiteralPath $skillsParent -Directory -Filter "goal.bak.*" -ErrorAction SilentlyContinue |
@@ -204,16 +254,38 @@ print("hooks cleaned")
         Get-ChildItem -LiteralPath $agentsDir -File -Filter "goal-evaluator.md.bak.*" -ErrorAction SilentlyContinue |
             ForEach-Object { Remove-Item -Force -LiteralPath $_.FullName -ErrorAction SilentlyContinue }
     }
+    $hooksParent = Split-Path -Parent $hooksFile
+    $hooksName = Split-Path -Leaf $hooksFile
+    if (Test-Path -LiteralPath $hooksParent) {
+        Get-ChildItem -LiteralPath $hooksParent -File -Filter "$hooksName.bak.*" -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                Remove-Item -Force -LiteralPath $_.FullName -ErrorAction SilentlyContinue
+                Write-Host ("[uninstall-goal] Removed backup {0}" -f $_.FullName)
+            }
+    }
 
+    # Only remove agent files this project actually installed (provenance
+    # marker present) — never blow away a hand-authored file with the same
+    # name that the user deliberately created or edited.
     $agent = Join-Path $agentsDir "goalKeeper.md"
-    if (Test-Path $agent) {
-        Remove-Item -Force $agent
-        Write-Host "[uninstall-goal] Removed $agent"
+    if (Test-Path -LiteralPath $agent) {
+        if (Test-GoalManagedAgentFile -Path $agent) {
+            Remove-Item -Force -LiteralPath $agent
+            Write-Host "[uninstall-goal] Removed $agent"
+        }
+        else {
+            Write-Host "[uninstall-goal] Left $agent in place (missing cursor-goal provenance marker; looks hand-edited or foreign)"
+        }
     }
     $evaluator = Join-Path $agentsDir "goal-evaluator.md"
-    if (Test-Path $evaluator) {
-        Remove-Item -Force $evaluator
-        Write-Host "[uninstall-goal] Removed $evaluator"
+    if (Test-Path -LiteralPath $evaluator) {
+        if (Test-GoalManagedAgentFile -Path $evaluator) {
+            Remove-Item -Force -LiteralPath $evaluator
+            Write-Host "[uninstall-goal] Removed $evaluator"
+        }
+        else {
+            Write-Host "[uninstall-goal] Left $evaluator in place (missing cursor-goal provenance marker; looks hand-edited or foreign)"
+        }
     }
 
     if ($PurgeData) {

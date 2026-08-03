@@ -1,9 +1,13 @@
 """Goal state schema, locks, and atomic JSON I/O.
 
 Path-trust / data-dir security helpers (symlink/reparse detection, ACL
-hardening, workdir jail) live in :mod:`cursor_goal.path_trust` and are
-re-exported here so existing ``from cursor_goal.state import ...`` call
-sites keep working unchanged.
+hardening, workdir jail) live in :mod:`cursor_goal.path_trust`; the ones
+this module actually calls are re-exported here (see ``__all__``) so
+existing ``from cursor_goal.state import ...`` call sites keep working.
+Lower-level path_trust internals this module never calls itself (e.g.
+``_absolute_without_resolve``, ``_warn_if_world_writable``,
+``_windows_path_is_reparse_point``) are not re-exported — import
+:mod:`cursor_goal.path_trust` directly for those.
 """
 
 from __future__ import annotations
@@ -24,10 +28,7 @@ from cursor_goal.fs_lock import lock_acquire as _fs_lock_acquire
 from cursor_goal.fs_lock import lock_release as _fs_lock_release
 from cursor_goal.logging_config import get_logger
 from cursor_goal.path_trust import (
-    _absolute_without_resolve,
     _chmod_dir_private,
-    _warn_if_world_writable,
-    _windows_path_is_reparse_point,
     acl_harden_failure_message,
     allow_any_workdir,
     assert_workdir_usable,
@@ -492,7 +493,7 @@ class GoalState:  # pylint: disable=too-many-instance-attributes
                 exit_code = int(exit_raw)
             except (TypeError, ValueError) as exc:
                 raise ValueError(f"invalid last_validation_exit_code: {exc}") from exc
-        active_raw = data.get("active", False)
+        active_raw = data.get("active", True)
         try:
             active = _parse_active(active_raw)
         except ValueError as exc:
@@ -580,7 +581,9 @@ def load_goal(*, raise_corrupt: bool = False) -> GoalState | None:
     if not path.is_file():
         return None
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        # utf-8-sig tolerates a BOM (e.g. from a Windows editor) that would
+        # otherwise make a byte-for-byte valid JSON file fail to parse.
+        raw = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as exc:
         logger.error("Failed to read goal.json: %s", exc)
         quarantine = _quarantine_corrupt_goal(f"unreadable: {exc}")
@@ -755,7 +758,7 @@ def _has_eval_signal_unlocked(state: GoalState) -> bool:
     if not flag.is_file():
         return False
     try:
-        raw = json.loads(flag.read_text(encoding="utf-8"))
+        raw = json.loads(flag.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError):
         # Legacy empty touch-file or corrupt signal — not valid for bound check.
         try:

@@ -71,12 +71,12 @@ Relative or bare `python` values are rejected. Values with cmd metacharacters (`
 
 ## Wrong installer / WSL mix-up
 
-- Native Windows Cursor → `install-goal.ps1` (not Git Bash `install-goal.sh`).
+- Native Windows Cursor → `scripts/install-goal.ps1` (not Git Bash `scripts/install-goal.sh`).
 - WSL Cursor → Unix installer inside WSL `$HOME`, not `/mnt/c/...` mixed with native Windows hooks.
 
 ## Git Bash refused on Windows
 
-`install-goal.sh` refuses when it detects native Windows Cursor paths — use PowerShell `install-goal.ps1` so `stop_hook.cmd` is correct.
+`scripts/install-goal.sh` refuses when it detects native Windows Cursor paths — use PowerShell `scripts/install-goal.ps1` so `stop_hook.cmd` is correct.
 
 ## Shell-mode validation warning
 
@@ -84,15 +84,47 @@ Doctor warns when validation uses shell mode. New goals default to `shell_ok=fal
 
 ## Task / evaluator model errors
 
-Some Cursor plans only accept Task `model: "fast"`. Override only when your plan allows:
+`CURSOR_GOAL_EVAL_MODEL` must be `inherit` or a real Cursor model ID (e.g. `composer-2.5`, `gpt-5.3-codex`) — see the [subagents model reference](https://cursor.com/docs/subagents.md#model-configuration). `fast` is **not** a model ID (it is only a bracket option on a real model, e.g. `composer-2.5[fast=false]`); setting it as the env var value is a known-invalid legacy setting that now logs a warning and silently falls back to the default (`composer-2.5`) rather than being honored:
 
 ```bash
-export CURSOR_GOAL_EVAL_MODEL=fast
+export CURSOR_GOAL_EVAL_MODEL=composer-2.5
 ```
+
+On legacy request-based Cursor plans without Max Mode, Task subagents may still run on a Cursor-selected model regardless of the requested `model` — `eval spawn-config`'s output reflects the *requested* model, not a runtime guarantee. `manage doctor` hard-fails when `CURSOR_GOAL_EVAL_MODEL` is set to a known-invalid legacy value.
 
 ## Corrupt `goal.json`
 
 Corrupt files are renamed to `goal.json.corrupt.<UTC>`. Remove or fix, then `manage create` again. See doctor output for lock timeouts.
+
+## Recovery flags and advanced overrides
+
+These are intentionally undiscoverable from the normal `/goal` flow — agents
+should not need them for a healthy goal. They exist for humans recovering
+from a stuck or corrupted state.
+
+- **`manage done --force`** — marks the goal achieved **without** a YES-bound
+  evaluator signal. This is a protocol bypass (not cryptographic
+  attestation): it logs a warning and prints one to stderr every time it is
+  used. Use it only when you, a human, have manually confirmed the condition
+  is met and the evaluator signal is unavailable (e.g. you cleared it, or
+  the subagent never ran). Agents should prefer `eval parse-result` /
+  `eval signal --force` (recovery-only, requires a prior YES parse) over
+  `manage done --force`.
+- **`eval parse-result ... --allow-cwd`** — when reading a verdict from
+  `@path/to/file`, the path must normally resolve under the goal data
+  directory. `--allow-cwd` also permits paths under the current working
+  directory, for setups where the evaluator's raw output is captured
+  outside `~/.cursor-goal/data` (e.g. a custom CI harness). Without it,
+  `@file` outside the data dir is refused with
+  `@file path must be under the goal data directory`.
+- **`wake arm --interval N` / `wake loop --interval N`** — override the wake
+  tick interval (seconds) for that invocation only, instead of setting
+  `CURSOR_GOAL_WAKE_INTERVAL_S` process-wide. Clamped to `[5, 600]`; an
+  explicit `--interval` always wins over the env var.
+- **`CURSOR_GOAL_HOME`** — override the resolved skill root (where
+  `run_goal.py` is expected), ahead of both the package-parent layout check
+  and `CURSOR_PLUGIN_ROOT`. Must be an absolute path. Use `manage
+  harness-cmd` to see which path actually won.
 
 ## Still stuck?
 

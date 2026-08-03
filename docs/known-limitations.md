@@ -2,19 +2,23 @@
 
 Operational limits of cursor-goal for real-world use. See also [troubleshooting](troubleshooting.md) and [SECURITY.md](../SECURITY.md).
 
-## Continuation depends on more than the stop hook
+## Continuation: documented hooks are primary, wake is a best-effort backup
 
-Cursor can drop stop-hook stdout (`followup_message`) on Windows and Linux (upstream race: process `exit` vs stream `close`). Confirmed still open in Cursor forum reports through mid-2026. See [cursor-windows-stop-hook-race.md](cursor-windows-stop-hook-race.md). Drain delays in the stop hook are mitigations only.
+Cursor documents the [`stop` and `subagentStop` hooks](https://cursor.com/docs/hooks.md) with `followup_message` and `loop_limit: null` as the supported continuation contract. This harness registers **both**:
 
-**Durable continuation requires (operational prerequisite while pursuing):**
+1. **`stop`** — fires when your turn ends; if the goal is still `pursuing`, returns a `followup_message` that auto-continues you. Cursor can drop stop-hook stdout on Windows and Linux (upstream race: process `exit` vs stream `close`; confirmed still open in Cursor forum reports through mid-2026 — see [cursor-windows-stop-hook-race.md](cursor-windows-stop-hook-race.md)). Drain delays in the stop hook are mitigations only. A `generation_id`-keyed dedupe stamp guards the marketplace's two `stop` entries (Windows `.cmd` + Unix `python3`) from double-charging `turns_used` when both run sequentially for the same turn.
+2. **`subagentStop`** (`matcher: "goal-evaluator"`) — fires the instant the evaluator subagent finishes, independent of the worker's own turn ending. This is a second, documented, race-free continuation point that reminds the worker to run `eval parse-result` — it never calls `manage done` itself.
 
-1. In-turn `goal-evaluator` Task evaluation (primary)
-2. Wake watchdog: `manage create`/`resume` prints `GOAL_WAKE_REQUIRED`; agent starts that `command` in a background Shell with `notify_on_output` matching `pattern` or `notify_pattern` (`^AGENT_GOAL_WAKE`), then confirms `wake status` `continuation_ready=true` (race-immune)
-3. Stop `followup_message` (secondary, best-effort)
+In-turn `goal-evaluator` Task evaluation remains the primary driver of *progress* (deciding YES/NO); the two hooks above are what keeps the *turn loop* itself going when the agent would otherwise idle.
 
-If wake is not started while a goal is `pursuing`, goals can stall when Hooks show `{}`. `eval validate` refuses while pursuing without a live wake loop unless `CURSOR_GOAL_ALLOW_DEAD_WAKE=1` (or wake is disabled via `CURSOR_GOAL_WAKE=0`). Doctor skips wake liveness hard-fails when wake is disabled.
+**Wake watchdog (`wake arm`/`loop`/`tick`/`disarm`) is a best-effort, undocumented supplement**, not a Cursor-documented mechanism — it relies on `notify_on_output` matching a background Shell's stdout, which is not listed in Cursor's hook/tooling docs and is subject to the platform reaping idle background shells during long sessions. `manage create`/`resume` still prints `GOAL_WAKE_REQUIRED` and arming still gates `pursuing` status by default; starting the loop and confirming `wake status` `continuation_ready=true` remains recommended for the closest thing to a race-immune path, but it is no longer a hard requirement for evaluation:
 
-Manual `wake tick` **coalesces** (skips emit) when a recent *wake*-sourced nudge falls inside one interval. The background `wake loop` emits on its own cadence and does not use that coalesce window. Stop-hook followup stamps do **not** suppress wake — so a dropped stop stdout cannot delay the race-immune path for a full interval.
+- `eval validate` / `eval prompt` / `eval spawn-config` print a loud warning (not a refusal) when pursuing without a verified-alive wake loop, and continue relying on the `stop`/`subagentStop` hooks alone. Set `CURSOR_GOAL_REQUIRE_WAKE=1` to restore the old hard-refusal behavior, or `CURSOR_GOAL_ALLOW_DEAD_WAKE=1` to silence the warning too. Disable wake entirely with `CURSOR_GOAL_WAKE=0`.
+- `manage doctor` / `manage status` are unchanged: they still **hard-fail** while `pursuing` when wake is enabled and `continuation_ready=false`, since those commands are explicit health checks rather than steps in the per-turn continuation path.
+
+For fully unattended runs where you do not want to depend on any in-IDE background Shell at all, prefer a [Cursor Automation](https://cursor.com/docs/automations.md) or the Cursor CLI/SDK's headless agent loop to drive turns from outside the IDE — both are officially documented long-running mechanisms, unlike the wake watchdog's `notify_on_output` polling.
+
+Manual `wake tick` **coalesces** (skips emit) when a recent *wake*-sourced nudge falls inside one interval. The background `wake loop` emits on its own cadence and does not use that coalesce window. Stop/subagentStop followup stamps do **not** suppress wake — so a dropped stop stdout cannot delay the race-immune path for a full interval.
 
 If wake arm fails during create/resume, the harness leaves the goal **`paused`** (exit 1) rather than pursuing without an armed wake.
 
@@ -45,6 +49,10 @@ No multi-tenant / shared-host isolation. Anyone who can write `~/.cursor-goal/da
 Marketplace `stop_hook.cmd` / `wake_loop.cmd` may fall back to PATH discovery, but **`manage doctor` requires an absolute `CURSOR_GOAL_PYTHON` (Python 3.12+)** for Windows marketplace installs — PATH-only is not treated as success. Classic `install-goal.ps1` bakes an absolute interpreter — preferred for individuals on Windows. Classic and marketplace/template launchers execute quote-stripped `%CGP%` (not the raw env var), reject unsafe cmd metacharacters in `CURSOR_GOAL_PYTHON`, and doctor rejects the same. Classic install also hardens the data-dir ACL at install time and writes helper scripts under the install tree's `scripts\.tmp` (not shared `%TEMP%`). Residual risk: `echo %CGP%| findstr` can expand nested `%VAR%` inside a crafted path — keep `CURSOR_GOAL_PYTHON` free of percent signs.
 
 Teams marketplace installs are **standalone**: resolve the harness with `manage harness-cmd` or `$CURSOR_PLUGIN_ROOT/skills/goal/scripts/run_goal.py`. Do not stack classic `~/.cursor/hooks.json` entries with marketplace plugin hooks — `manage doctor` **FAIL**s when both look configured. See [teams-agpl.md](teams-agpl.md).
+
+`${CURSOR_PLUGIN_ROOT}` (used inside the marketplace `hooks.json` commands) is **not** one of Cursor's documented hook environment variables — it is set by the plugin host at hook-invocation time, on a best-effort basis. `stop_hook.py`'s own path resolution does not depend on it: it locates the vendored `cursor_goal` package relative to its own file location first (`scripts/`, the parent skill directory, or a source checkout's `src/`), so the hook still works if `CURSOR_PLUGIN_ROOT` is ever unset. The classic `~/.cursor/skills/goal` install path never references `CURSOR_PLUGIN_ROOT` at all.
+
+The marketplace `hooks.json` registers **two** unconditional entries per event (`stop` and `subagentStop`): a Windows `cmd /c ...stop_hook.cmd` and a Unix `python3 -u ...stop_hook.py`. Exactly one is expected to fail per platform (missing `cmd` on Unix, missing/renamed `python3` on Windows) — this is expected Hooks UI noise, not a broken install. A singleflight lock plus a `generation_id`-keyed dedupe stamp ensure only one hook instance mutates goal state and emits a `followup_message` per turn even when both entries happen to run.
 
 ## Name collision
 

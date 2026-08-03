@@ -9,6 +9,14 @@ DATA_DIR="${HOME}/.cursor-goal/data"
 CURSOR_HOOKS_FILE="${HOME}/.cursor/hooks.json"
 REMOVE_DATA="${1:-}"
 HOOKS_CLEAN_OK=1
+AGENT_PROVENANCE_MARKER="cursor-goal:managed-agent"
+
+# Only remove agent files this project actually installed — never blow away
+# a hand-authored file with the same name that the user deliberately created
+# or edited (no provenance marker == not ours to delete).
+is_goal_managed_agent_file() {
+  [ -f "$1" ] && grep -q -- "$AGENT_PROVENANCE_MARKER" "$1" 2>/dev/null
+}
 
 detect_python() {
   local cand abs
@@ -54,16 +62,18 @@ from pathlib import Path
 path = Path(sys.argv[1])
 data = json.loads(path.read_text(encoding="utf-8"))
 hooks = data.get("hooks") or {}
-stop = hooks.get("stop") or []
 
-def is_goal_hook(item: object) -> bool:
+def is_goal_hook(item: object, marker: str) -> bool:
     if not isinstance(item, dict):
         return False
-    return item.get("_cursor_goal") == "cursor_goal_stop_hook"
+    return item.get("_cursor_goal") == marker
 
-hooks["stop"] = [
-    item for item in stop if not is_goal_hook(item)
-]
+for event, marker in (
+    ("stop", "cursor_goal_stop_hook"),
+    ("subagentStop", "cursor_goal_subagent_stop_hook"),
+):
+    entries = hooks.get(event) or []
+    hooks[event] = [item for item in entries if not is_goal_hook(item, marker)]
 data["hooks"] = hooks
 tmp = path.with_name(f"{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
 tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -109,10 +119,23 @@ done
 for bak in "${AGENTS_DIR}"/goalKeeper.md.bak.* "${AGENTS_DIR}"/goal-evaluator.md.bak.*; do
   rm -f "$bak"
 done
+for bak in "${CURSOR_HOOKS_FILE}".bak.*; do
+  rm -f "$bak"
+  echo "[uninstall-goal] Removed backup $bak"
+done
 shopt -u nullglob
 
 echo "[uninstall-goal] Removing agent definitions"
-rm -f "${AGENTS_DIR}/goalKeeper.md" "${AGENTS_DIR}/goal-evaluator.md"
+for agent in "${AGENTS_DIR}/goalKeeper.md" "${AGENTS_DIR}/goal-evaluator.md"; do
+  if [ -f "$agent" ]; then
+    if is_goal_managed_agent_file "$agent"; then
+      rm -f "$agent"
+      echo "[uninstall-goal] Removed $agent"
+    else
+      echo "[uninstall-goal] Left $agent in place (missing cursor-goal provenance marker; looks hand-edited or foreign)"
+    fi
+  fi
+done
 
 if [ "$REMOVE_DATA" = "--purge-data" ]; then
   rm -rf "${HOME}/.cursor-goal"

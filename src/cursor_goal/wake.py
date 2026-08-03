@@ -7,9 +7,12 @@ arms a background loop that emits ``AGENT_GOAL_WAKE`` while a goal is
 
 Ownership uses a generation token shared by ``wake.json`` and ``wake.pid`` so
 restarts cannot leave orphan loops or clear a newer loop's PID file. PID-file
-ownership / kill mechanics live in :mod:`cursor_goal.wake_process` and are
-imported/re-exported here so existing ``from cursor_goal.wake import ...``
-call sites (including tests) keep working unchanged.
+ownership / kill mechanics live in :mod:`cursor_goal.wake_process`; the
+handful this module calls directly are re-exported here for existing
+``from cursor_goal.wake import ...`` callers, but process-ownership probes
+this module never calls itself (e.g. ``_read_pid``, ``read_orphan_wake``,
+``_unix_pid_looks_owned``) are not re-exported — import
+:mod:`cursor_goal.wake_process` directly for those.
 """
 
 # pylint: disable=too-many-lines,unused-import
@@ -35,29 +38,23 @@ from cursor_goal.state import (
     data_dir,
     goal_lock,
     mutate_goal,
+)
+from cursor_goal.state import now_iso as _now_iso
+from cursor_goal.state import (
     refuse_if_acl_harden_failed,
     refuse_if_data_dir_insecure,
     snapshot_goal,
 )
 from cursor_goal.validation import redact_secrets
-from cursor_goal.wake_process import (  # noqa: F401 — re-exports for tests/callers
-    WAKE_ORPHAN_NAME,
-    WAKE_PID_NAME,
+from cursor_goal.wake_process import (  # noqa: F401 — re-exports for callers
     _clear_pid,
-    _cmdline_looks_owned,
     _kill_pid,
     _pid_alive,
     _pid_looks_owned,
-    _read_pid,
     _read_pid_record,
-    _unix_pid_looks_owned,
-    _windows_pid_looks_owned,
-    _write_pid,
     _write_pid_record,
     clear_orphan_wake,
     mark_orphan_wake,
-    read_orphan_wake,
-    wake_orphan_path,
     wake_pid_path,
 )
 from cursor_goal.win_acl import harden_windows_acl
@@ -97,6 +94,19 @@ def _interval_from_env_or(default: int) -> int:
     return _clamp_interval(value)
 
 
+def _refuse_if_data_dir_unsafe() -> str | None:
+    """Combined insecure-dir / Windows-ACL-harden-failure gate.
+
+    Every mutating wake entry point (``arm``, ``tick``, ``run_loop``) needs
+    both checks before touching the data dir; keep the two-step preamble in
+    one place instead of repeating it at each call site.
+    """
+    insecure = refuse_if_data_dir_insecure()
+    if insecure is not None:
+        return insecure
+    return refuse_if_acl_harden_failed()
+
+
 def _clamp_interval(value: int) -> int:
     if value < MIN_INTERVAL_S:
         logger.warning(
@@ -119,10 +129,6 @@ def wake_json_path() -> Path:
     return data_dir() / WAKE_JSON_NAME
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
 def _atomic_write_text(path: Path, text: str) -> None:
     """Write text via temp file + replace; apply private mode bits."""
     atomic_write_text(path, text)
@@ -133,7 +139,8 @@ def _read_wake_config() -> dict[str, Any] | None:
     if not path.is_file():
         return None
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        # utf-8-sig tolerates a BOM (e.g. from a Windows editor).
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as exc:
         logger.warning("Could not read %s: %s", path, exc)
         return None
@@ -170,10 +177,12 @@ def _kill_existing_loop() -> None:
                 "tokenless wake.pid while pid still alive; kill refused "
                 "(token required)",
             )
-        _clear_pid()
+        _clear_pid(only_if_pid=pid)
         return
     _kill_pid(pid, token=token)
-    _clear_pid()
+    # Ownership-guarded: a new loop may have already replaced this record
+    # between the read above and this clear (start-of-loop race).
+    _clear_pid(only_if_pid=pid, only_if_token=token)
     clear_orphan_wake()
 
 
@@ -254,18 +263,46 @@ def _record_wake_tick() -> WakeTickResult:
     return WakeTickResult(status="ok", state=updated)
 
 
+def _owning_loop_pid_if_alive() -> int | None:
+    """Return the wake.pid-recorded pid when it is alive and looks owned.
+
+    Used to gate manual ``wake tick`` charging: when a real loop process is
+    verified alive, it already ticks (and charges) itself every interval, so
+    a concurrent manual tick must not charge the budget a second time.
+    """
+    record = _read_pid_record()
+    if record is None:
+        return None
+    pid = int(record["pid"])
+    if not _pid_alive(pid):
+        return None
+    if not _pid_looks_owned(pid):
+        return None
+    return pid
+
+
 def allow_dead_wake() -> bool:
     """Escape hatch for validate when wake loop is intentionally down."""
     raw = os.environ.get("CURSOR_GOAL_ALLOW_DEAD_WAKE", "").strip().lower()
     return raw in {"1", "true", "yes", "on"}
 
 
-def refuse_if_wake_dead() -> str | None:
-    """Return an error when pursuing without a live wake loop.
+def require_wake_strict() -> bool:
+    """CURSOR_GOAL_REQUIRE_WAKE=1 restores the pre-4.0 hard-refusal behavior.
 
-    Stop hook stays fail-open. Escape with ``CURSOR_GOAL_ALLOW_DEAD_WAKE=1`` or
-    disable wake via ``CURSOR_GOAL_WAKE=0``.
+    Cursor documents the ``stop`` (and ``subagentStop``) hooks as the
+    continuation contract; ``wake`` is an undocumented, best-effort
+    background-shell watchdog. Hard-refusing ``eval`` commands whenever the
+    watchdog was not verified alive made the documented path look like a
+    fallback for the undocumented one, and was the single biggest onboarding
+    blocker. Set this to restore the old strict behavior.
     """
+    raw = os.environ.get("CURSOR_GOAL_REQUIRE_WAKE", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _wake_dead_reason() -> tuple[str, str, str] | None:
+    """Return (reason, hint, pattern) when pursuing without a live wake loop."""
     if not wake_enabled() or allow_dead_wake():
         return None
     state = snapshot_goal()
@@ -277,31 +314,77 @@ def refuse_if_wake_dead() -> str | None:
     reason = str(readiness.get("reason") or "pid_dead")
     hint = str(readiness.get("command") or _wake_loop_command())
     pattern = str(readiness.get("pattern") or NOTIFY_PATTERN)
+    return reason, hint, pattern
+
+
+def _wake_dead_detail(reason: str, hint: str, pattern: str) -> str:
     if reason == "not_armed":
         return (
-            "[goal] Error: wake not armed while pursuing "
-            f"(continuation_ready=false reason=not_armed). "
-            f"Arm and start: `{hint}` with notify_on_output matching {pattern}. "
-            "Or set CURSOR_GOAL_ALLOW_DEAD_WAKE=1 to override."
+            "wake not armed while pursuing (continuation_ready=false "
+            f"reason=not_armed). Arm and start: `{hint}` with notify_on_output "
+            f"matching {pattern}."
         )
     return (
-        "[goal] Error: wake loop not alive while pursuing "
-        f"(continuation_ready=false reason={reason}). "
-        f"Start background Shell: `{hint}` with notify_on_output "
-        f"matching {pattern}, then confirm wake status "
-        "continuation_ready=true / pid_alive=true. "
-        "Or set CURSOR_GOAL_ALLOW_DEAD_WAKE=1 to override."
+        "wake loop not alive while pursuing (continuation_ready=false "
+        f"reason={reason}). Start background Shell: `{hint}` with "
+        f"notify_on_output matching {pattern}, then confirm wake status "
+        "continuation_ready=true / pid_alive=true."
     )
+
+
+def refuse_if_wake_dead() -> str | None:
+    """Return a hard-error message, but only when ``CURSOR_GOAL_REQUIRE_WAKE=1``.
+
+    Wake is a best-effort watchdog, not a requirement, so the default is to
+    warn (see :func:`wake_dead_warning`) rather than block. Escape a strict
+    refusal with ``CURSOR_GOAL_ALLOW_DEAD_WAKE=1`` or disable wake entirely
+    via ``CURSOR_GOAL_WAKE=0``.
+    """
+    if not require_wake_strict():
+        return None
+    found = _wake_dead_reason()
+    if found is None:
+        return None
+    reason, hint, pattern = found
+    return (
+        f"[goal] Error: {_wake_dead_detail(reason, hint, pattern)} "
+        "Or set CURSOR_GOAL_ALLOW_DEAD_WAKE=1 to override, or unset "
+        "CURSOR_GOAL_REQUIRE_WAKE for the default (non-blocking) behavior."
+    )
+
+
+def wake_dead_warning() -> str | None:
+    """Loud, non-blocking warning when pursuing without a live wake loop.
+
+    This is the default: callers should print this to stderr and continue.
+    The documented ``stop``/``subagentStop`` hooks remain the primary
+    continuation path even when wake is not verified alive.
+    """
+    found = _wake_dead_reason()
+    if found is None:
+        return None
+    reason, hint, pattern = found
+    return (
+        f"[goal] Warning: {_wake_dead_detail(reason, hint, pattern)} "
+        "Continuing without a verified wake loop relies on the stop hook "
+        "alone for cross-turn continuation; start the loop above if you want "
+        "the race-immune fallback too. Set CURSOR_GOAL_REQUIRE_WAKE=1 to make "
+        "this a hard error instead."
+    )
+
+
+_NUDGE_SOURCES = ("stop", "wake", "subagent_stop")
 
 
 def record_agent_nudge(*, source: str = "wake") -> None:
     """Stamp last_nudge_at / last_nudge_source for wake→wake coalesce.
 
-    Only ``source=\"wake\"`` suppresses a subsequent wake tick. Stop stamps
-    (``source=\"stop\"``) are diagnostics only so a dropped stop followup
-    cannot delay the race-immune wake path for a full interval.
+    Only ``source=\"wake\"`` suppresses a subsequent wake tick. Stop and
+    subagentStop stamps (``source=\"stop\"``/``\"subagent_stop\"``) are
+    diagnostics only so a dropped followup cannot delay the race-immune wake
+    path for a full interval.
     """
-    nudge_source = source if source in ("stop", "wake") else "wake"
+    nudge_source = source if source in _NUDGE_SOURCES else "wake"
     with goal_lock():
         config = _read_wake_config()
         if config is None:
@@ -325,7 +408,7 @@ def _nudge_within_coalesce_window(config: dict[str, Any] | None) -> bool:
     raw_source = config.get("last_nudge_source")
     if raw_source is None:
         nudge_source = "wake"
-    elif isinstance(raw_source, str) and raw_source in ("stop", "wake"):
+    elif isinstance(raw_source, str) and raw_source in _NUDGE_SOURCES:
         nudge_source = raw_source
     else:
         return False
@@ -375,12 +458,9 @@ def arm(*, interval: int | None = None) -> dict[str, Any]:
     if not wake_enabled():
         logger.info("Wake arm skipped (CURSOR_GOAL_WAKE disabled)")
         return {}
-    insecure = refuse_if_data_dir_insecure()
-    if insecure is not None:
-        raise OSError(insecure)
-    acl_fail = refuse_if_acl_harden_failed()
-    if acl_fail is not None:
-        raise OSError(acl_fail)
+    unsafe = _refuse_if_data_dir_unsafe()
+    if unsafe is not None:
+        raise OSError(unsafe)
     if interval is not None:
         seconds = _clamp_interval(interval)
     else:
@@ -408,33 +488,51 @@ def disarm(*, kill_loop: bool = True) -> bool:
             wake_json_path().unlink(missing_ok=True)
         except OSError as exc:
             logger.debug("Could not remove wake.json: %s", exc)
-        record = _read_pid_record() if kill_loop else None
-        if not kill_loop:
-            _clear_pid()
-    if kill_loop:
-        if record is not None:
-            _kill_pid(
-                int(record["pid"]),
-                token=str(record.get("token") or "") or None,
+        # Ownership-guarded: only remove wake.pid if it still names *this*
+        # record. Without the guard, a `wake tick`/disarm from a different
+        # process could delete a still-live loop's PID file and make
+        # continuation_readiness falsely report pid_dead.
+        record = _read_pid_record()
+        if not kill_loop and record is not None:
+            _clear_pid(
+                only_if_pid=int(record["pid"]),
+                only_if_token=str(record.get("token") or "") or None,
             )
+    if kill_loop and record is not None:
+        pid = int(record["pid"])
+        token = str(record.get("token") or "") or None
+        _kill_pid(pid, token=token)
         with goal_lock():
-            _clear_pid()
+            # Re-guard: a new loop may have taken ownership while we killed
+            # the old one (start-of-loop race).
+            _clear_pid(only_if_pid=pid, only_if_token=token)
     if existed:
         logger.info("Wake disarmed")
     return existed
+
+
+def _emit_budget_limited_tick(result: WakeTickResult) -> int:
+    """Emit the wake-budget-exhausted sentinel and disarm. 0 unless state missing."""
+    state = result.state
+    if state is None:
+        logger.error("Wake tick: budget_limited result missing state; refusing emit")
+        return 1
+    safe_condition = redact_secrets(state.condition, max_chars=None)
+    emit_wake_line(
+        f"[GOAL BUDGET] Wake tick limit ({state.wake_budget}) reached. "
+        f"Wrap up current work and summarize progress toward: {safe_condition}"
+    )
+    disarm(kill_loop=True)
+    return 0
 
 
 def tick() -> int:  # pylint: disable=too-many-return-statements
     """Emit a wake sentinel if pursuing; auto-disarm when inactive. Exit 0."""
     if not wake_enabled():
         return 0
-    insecure = refuse_if_data_dir_insecure()
-    if insecure is not None:
-        logger.warning("Wake tick refused: %s", insecure)
-        return 1
-    acl_fail = refuse_if_acl_harden_failed()
-    if acl_fail is not None:
-        logger.warning("Wake tick refused: %s", acl_fail)
+    unsafe = _refuse_if_data_dir_unsafe()
+    if unsafe is not None:
+        logger.warning("Wake tick refused: %s", unsafe)
         return 1
     config = _read_wake_config()
     if config is None:
@@ -456,6 +554,17 @@ def tick() -> int:  # pylint: disable=too-many-return-statements
         )
         return 0
 
+    owner_pid = _owning_loop_pid_if_alive()
+    if owner_pid is not None and owner_pid != os.getpid():
+        # A live, verified-owned loop already ticks itself every interval.
+        # Charging wake_ticks here too would burn the budget at 2x for no
+        # benefit, since the loop's own tick already covers this interval.
+        logger.info(
+            "Wake tick skipped: owning loop pid=%s is alive; it will tick itself",
+            owner_pid,
+        )
+        return 0
+
     result = _record_wake_tick()
     if result.status == "persist_failed":
         logger.error("Wake tick: failed to persist wake_ticks; refusing emit")
@@ -465,15 +574,7 @@ def tick() -> int:  # pylint: disable=too-many-return-statements
         disarm(kill_loop=False)
         return 0
     if result.status == "budget_limited":
-        state = result.state
-        assert state is not None
-        safe_condition = redact_secrets(state.condition, max_chars=None)
-        emit_wake_line(
-            f"[GOAL BUDGET] Wake tick limit ({state.wake_budget}) reached. "
-            f"Wrap up current work and summarize progress toward: {safe_condition}"
-        )
-        disarm(kill_loop=True)
-        return 0
+        return _emit_budget_limited_tick(result)
 
     emit_wake_line()
     return 0
@@ -728,18 +829,71 @@ def _interruptible_sleep(seconds: float, token: str) -> bool:
     return True
 
 
-def run_loop(*, interval: int | None = None) -> int:  # pylint: disable=too-many-branches
+def _emit_budget_limited_loop_step(result: WakeTickResult) -> int:
+    """Emit the wake-budget-exhausted sentinel from ``run_loop``'s tick check.
+
+    Always ends the loop; returns the exit code ``run_loop`` should return.
+    """
+    state = result.state
+    if state is None:
+        logger.error("Wake loop: budget_limited result missing state; exiting")
+        print(
+            "[goal] Wake loop: budget_limited result missing state; exiting.",
+            file=sys.stderr,
+        )
+        return 1
+    safe_condition = redact_secrets(state.condition, max_chars=None)
+    emit_wake_line(
+        f"[GOAL BUDGET] Wake tick limit ({state.wake_budget}) reached. "
+        f"Wrap up current work and summarize progress toward: {safe_condition}"
+    )
+    disarm(kill_loop=False)
+    return 0
+
+
+def _wake_loop_tick_outcome(token: str) -> int | None:
+    """Check config/pursuing state and charge one wake tick for ``run_loop``.
+
+    Returns an exit code when the loop should stop, or ``None`` to continue
+    (the caller still needs to emit the sentinel and sleep).
+    """
+    if _read_wake_config() is None:
+        logger.info("Wake loop: config cleared; exiting")
+        return 0
+    cfg = _read_wake_config()
+    if cfg is None or str(cfg.get("token") or "") != token:
+        logger.info("Wake loop: token/config gone; exiting")
+        return 0
+    if not _goal_is_pursuing():
+        logger.info("Wake loop: goal not pursuing; exiting")
+        disarm(kill_loop=False)
+        return 0
+
+    result = _record_wake_tick()
+    if result.status == "persist_failed":
+        logger.error("Wake loop: failed to persist wake_ticks; exiting without emit")
+        print(
+            "[goal] Wake loop: failed to persist wake_ticks; exiting.",
+            file=sys.stderr,
+        )
+        return 1
+    if result.status == "inactive":
+        logger.info("Wake loop: goal not pursuing after tick; exiting")
+        disarm(kill_loop=False)
+        return 0
+    if result.status == "budget_limited":
+        return _emit_budget_limited_loop_step(result)
+    return None
+
+
+def run_loop(*, interval: int | None = None) -> int:
     """Block: emit immediately, then sleep/tick until disarmed or not pursuing."""
     if not wake_enabled():
         print("[goal] Wake disabled (CURSOR_GOAL_WAKE=0).", file=sys.stderr)
         return 0
-    insecure = refuse_if_data_dir_insecure()
-    if insecure is not None:
-        print(insecure, file=sys.stderr)
-        return 1
-    acl_fail = refuse_if_acl_harden_failed()
-    if acl_fail is not None:
-        print(acl_fail, file=sys.stderr)
+    unsafe = _refuse_if_data_dir_unsafe()
+    if unsafe is not None:
+        print(unsafe, file=sys.stderr)
         return 1
 
     # Re-verify ACL harden at loop start (process-local cache can go stale).
@@ -771,44 +925,9 @@ def run_loop(*, interval: int | None = None) -> int:  # pylint: disable=too-many
 
     try:
         while True:
-            if _read_wake_config() is None:
-                logger.info("Wake loop: config cleared; exiting")
-                break
-            cfg = _read_wake_config()
-            if cfg is None or str(cfg.get("token") or "") != token:
-                logger.info("Wake loop: token/config gone; exiting")
-                break
-            if not _goal_is_pursuing():
-                logger.info("Wake loop: goal not pursuing; exiting")
-                disarm(kill_loop=False)
-                break
-
-            result = _record_wake_tick()
-            if result.status == "persist_failed":
-                logger.error(
-                    "Wake loop: failed to persist wake_ticks; exiting without emit"
-                )
-                print(
-                    "[goal] Wake loop: failed to persist wake_ticks; exiting.",
-                    file=sys.stderr,
-                )
-                return 1
-            if result.status == "inactive":
-                logger.info("Wake loop: goal not pursuing after tick; exiting")
-                disarm(kill_loop=False)
-                break
-            if result.status == "budget_limited":
-                state = result.state
-                assert state is not None
-                safe_condition = redact_secrets(state.condition, max_chars=None)
-                emit_wake_line(
-                    f"[GOAL BUDGET] Wake tick limit ({state.wake_budget}) reached. "
-                    f"Wrap up current work and summarize progress toward: "
-                    f"{safe_condition}"
-                )
-                disarm(kill_loop=False)
-                break
-
+            outcome = _wake_loop_tick_outcome(token)
+            if outcome is not None:
+                return outcome
             emit_wake_line()
             if not _interruptible_sleep(float(seconds), token):
                 break
