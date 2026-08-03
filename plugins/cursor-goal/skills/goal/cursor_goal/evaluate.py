@@ -12,6 +12,7 @@ from cursor_goal.logging_config import get_logger
 from cursor_goal.models import spawn_config_dict
 from cursor_goal.state import (
     GoalLockTimeoutError,
+    assert_workdir_usable,
     data_dir,
     has_eval_signal,
     record_parse_result,
@@ -22,6 +23,7 @@ from cursor_goal.state import (
     update_goal_fields,
 )
 from cursor_goal.validation import redact_command, redact_secrets, run_validation
+from cursor_goal.wake import refuse_if_wake_dead
 
 logger = get_logger("cursor_goal.eval")
 
@@ -129,6 +131,10 @@ def cmd_validate(_argv: list[str]) -> int:
     if acl_fail is not None:
         print(acl_fail.replace("[goal]", "[goal-eval]"), file=sys.stderr)
         return 1
+    wake_dead = refuse_if_wake_dead()
+    if wake_dead is not None:
+        print(wake_dead.replace("[goal]", "[goal-eval]"), file=sys.stderr)
+        return 1
 
     try:
         state = snapshot_goal()
@@ -156,15 +162,12 @@ def cmd_validate(_argv: list[str]) -> int:
     )
     cwd: str | None = None
     if state.workdir.strip():
-        workdir_path = Path(state.workdir.strip())
-        if workdir_path.is_dir():
-            cwd = str(workdir_path)
+        try:
+            cwd = assert_workdir_usable(state.workdir)
             logger.info("eval validate workdir=%s", cwd)
-        else:
-            logger.warning(
-                "Configured workdir missing (%s); using process cwd",
-                state.workdir,
-            )
+        except ValueError as exc:
+            print(f"[goal-eval] Error: {exc}", file=sys.stderr)
+            return 1
     result = run_validation(cmd, shell_ok=bool(state.shell_ok), cwd=cwd)
     output = result.output
     if result.timed_out:

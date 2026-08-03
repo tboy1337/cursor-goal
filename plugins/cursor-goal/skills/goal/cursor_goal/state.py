@@ -86,10 +86,19 @@ class CorruptGoalError(ValueError):
 
 
 def configured_data_dir_path() -> Path:
-    """Return the configured data dir path without resolving symlinks."""
+    """Return the configured data dir path without resolving symlinks.
+
+    ``CURSOR_GOAL_DATA`` must be absolute when set (same policy as
+    ``CURSOR_GOAL_HOME``).
+    """
     override = os.environ.get("CURSOR_GOAL_DATA")
     if override:
-        return Path(override).expanduser()
+        path = Path(override).expanduser()
+        if not path.is_absolute():
+            raise ValueError(
+                f"CURSOR_GOAL_DATA must be an absolute path (got {override!r})"
+            )
+        return path
     return Path.home() / ".cursor-goal" / "data"
 
 
@@ -159,6 +168,67 @@ def path_has_symlink_or_reparse(  # pylint: disable=too-many-nested-blocks
         except OSError as exc:  # pragma: no cover — rare FS races
             logger.debug("Link check failed for %s: %s", candidate, exc)
     return False
+
+
+def allow_any_workdir() -> bool:
+    """Return True when workdir jail is disabled (power-user / tests)."""
+    raw = os.environ.get("CURSOR_GOAL_ALLOW_ANY_WORKDIR", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def normalize_workdir(raw: str, *, jail_root: Path | None = None) -> str:
+    """Expand and validate workdir; return absolute path or raise ValueError.
+
+    Refuses symlink/junction/reparse chains. Unless
+    ``CURSOR_GOAL_ALLOW_ANY_WORKDIR=1``, requires the resolved path under
+    *jail_root* (default: process cwd).
+    """
+    text = raw.strip()
+    if not text:
+        return ""
+    path = Path(text).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    if path_has_symlink_or_reparse(path):
+        raise ValueError(
+            f"workdir must not be a symlink, junction, or reparse point: {path}"
+        )
+    try:
+        resolved = path.resolve()
+    except OSError as exc:
+        raise ValueError(f"workdir could not be resolved: {path} ({exc})") from exc
+    if not resolved.is_dir():
+        raise ValueError(f"workdir is not a directory: {resolved}")
+    if not allow_any_workdir():
+        root = (jail_root if jail_root is not None else Path.cwd()).resolve()
+        if not resolved.is_relative_to(root):
+            raise ValueError(
+                f"workdir must be under {root} "
+                "(set CURSOR_GOAL_ALLOW_ANY_WORKDIR=1 to override)"
+            )
+    return str(resolved)
+
+
+def assert_workdir_usable(workdir: str) -> str:
+    """Re-check a stored workdir at validate time; raise ValueError if unusable.
+
+    Does not re-apply the create-time cwd jail (cwd may change mid-goal); still
+    refuses missing dirs and symlink/reparse chains.
+    """
+    text = workdir.strip()
+    if not text:
+        return ""
+    path = Path(text).expanduser()
+    if path_has_symlink_or_reparse(path):
+        raise ValueError(
+            f"workdir must not be a symlink, junction, or reparse point: {path}"
+        )
+    if not path.is_dir():
+        raise ValueError(f"Configured workdir missing or not a directory: {path}")
+    try:
+        return str(path.resolve())
+    except OSError as exc:
+        raise ValueError(f"workdir could not be resolved: {path} ({exc})") from exc
 
 
 def data_dir(*, check_writable: bool = True) -> Path:
@@ -235,8 +305,12 @@ def data_dir_is_insecure(  # pylint: disable=too-many-return-statements,too-many
             return True
         st = target.lstat()
     except OSError as exc:
-        logger.debug("Could not lstat data dir %s: %s", target, exc)
-        return False
+        logger.warning(
+            "Could not lstat data dir %s (%s); treating as insecure",
+            target,
+            exc,
+        )
+        return True
     try:
         getuid = getattr(os, "getuid", None)
         if getuid is None:  # pragma: no cover — Windows
@@ -285,8 +359,9 @@ def acl_harden_failure_message(path: Path | None = None) -> str | None:
         return None
     return (
         f"Windows ACL harden failed for {target}: {reason}. "
-        "Verify only you can access the data directory, or set "
-        "CURSOR_GOAL_SKIP_ACL=1 after manually locking down the path."
+        "Verify only you can access the data directory. "
+        "CURSOR_GOAL_SKIP_ACL=1 is test/emergency-only after manually locking "
+        "down the path."
     )
 
 
@@ -930,21 +1005,10 @@ def _write_eval_signal_unlocked(state: GoalState, *, reason: str) -> None:
         "verdict": "YES",
         "reason": reason,
     }
-    tmp = flag.with_name(f"{EVAL_FLAG_NAME}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
-    try:
-        tmp.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-        tmp.replace(flag)
-    except Exception:
-        if tmp.exists():
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
-        raise
-    _chmod_private(flag)
+    atomic_write_text(
+        flag,
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+    )
     logger.info("Recorded evaluator signal hash=%s", payload["condition_hash"])
 
 

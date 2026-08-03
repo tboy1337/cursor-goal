@@ -132,6 +132,24 @@ Describe 'Write-GoalWakeLoopCmd' {
             Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
         }
     }
+
+    It 'quotes prefix args that contain spaces' {
+        $dir = Join-Path ([IO.Path]::GetTempPath()) ("cg-wwake-sp-" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        try {
+            $runGoal = Join-Path $dir 'run_goal.py'
+            $cmdFile = Join-Path $dir 'wake_loop.cmd'
+            $python = @{ Exe = 'py.exe'; PrefixArgs = @('-3', 'with space') }
+            Write-GoalWakeLoopCmd -Python $python -RunGoalPy $runGoal -WakeLoopCmd $cmdFile
+            $body = Get-Content -Raw -LiteralPath $cmdFile
+            $body | Should -Match '-3'
+            $body | Should -Match '"with space"'
+            $body | Should -Match 'wake loop'
+        }
+        finally {
+            Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 Describe 'Merge-GoalStopHook' {

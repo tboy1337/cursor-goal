@@ -35,6 +35,7 @@ from cursor_goal.state import (
     refuse_if_data_dir_insecure,
     snapshot_goal,
 )
+from cursor_goal.validation import redact_secrets
 
 logger = get_logger("cursor_goal.wake")
 
@@ -403,11 +404,12 @@ def _followup_prompt() -> str:
     remaining = max(0, state.turn_budget - state.turns_used)
     wake_remaining = max(0, int(state.wake_budget) - int(state.wake_ticks))
     wake_ticks = int(getattr(state, "wake_ticks", 0) or 0)
+    safe_condition = redact_secrets(state.condition, max_chars=None)
     return (
         f"[GOAL] Turn {state.turns_used}/{state.turn_budget} "
         f"({remaining} remaining, wake_ticks={wake_ticks}/"
         f"{state.wake_budget}, wake_remaining={wake_remaining}). "
-        f"Continue working toward: {state.condition}. "
+        f"Continue working toward: {safe_condition}. "
         "Evaluate completion via subagent when ready. "
         "(Wake watchdog — stop-hook followup may have been dropped.)"
     )
@@ -443,6 +445,72 @@ def _record_wake_tick() -> GoalState | None:
     except OSError as exc:
         logger.error("Failed to persist wake_ticks: %s", exc)
         return snapshot_goal()
+
+
+def allow_dead_wake() -> bool:
+    """Escape hatch for validate when wake loop is intentionally down."""
+    raw = os.environ.get("CURSOR_GOAL_ALLOW_DEAD_WAKE", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def refuse_if_wake_dead() -> str | None:
+    """Return an error when pursuing without a live wake loop.
+
+    Stop hook stays fail-open. Escape with ``CURSOR_GOAL_ALLOW_DEAD_WAKE=1`` or
+    disable wake via ``CURSOR_GOAL_WAKE=0``.
+    """
+    if not wake_enabled() or allow_dead_wake():
+        return None
+    state = snapshot_goal()
+    if state is None or not state.active or state.status != "pursuing":
+        return None
+    info = status_info()
+    if info.get("pid_alive"):
+        return None
+    hint = wake_loop_invocation()
+    if info.get("armed"):
+        return (
+            "[goal] Error: wake loop not alive while pursuing. "
+            f"Start background Shell: `{hint}` with notify_on_output "
+            "matching ^AGENT_GOAL_WAKE, then confirm wake status pid_alive=true. "
+            "Or set CURSOR_GOAL_ALLOW_DEAD_WAKE=1 to override."
+        )
+    return (
+        "[goal] Error: wake not armed / loop not alive while pursuing. "
+        f"Arm and start: `{hint}` with notify_on_output matching ^AGENT_GOAL_WAKE. "
+        "Or set CURSOR_GOAL_ALLOW_DEAD_WAKE=1 to override."
+    )
+
+
+def record_agent_nudge() -> None:
+    """Stamp last_nudge_at so stop+wake can coalesce double continuations."""
+    with goal_lock():
+        config = _read_wake_config()
+        if config is None:
+            return
+        config["last_nudge_at"] = _now_iso()
+        try:
+            _write_wake_config(config)
+        except OSError as exc:
+            logger.debug("Could not update last_nudge_at: %s", exc)
+
+
+def _nudge_within_coalesce_window(config: dict[str, Any] | None) -> bool:
+    """Return True when a recent *stop* nudge should suppress this wake emit."""
+    if config is None:
+        return False
+    raw = config.get("last_nudge_at")
+    if not raw or not isinstance(raw, str):
+        return False
+    try:
+        stamped = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    interval = _clamp_interval(int(config.get("interval_s") or DEFAULT_INTERVAL_S))
+    age = (
+        datetime.now(timezone.utc) - stamped.astimezone(timezone.utc)
+    ).total_seconds()
+    return age < float(interval)
 
 
 def emit_wake_line(prompt: str | None = None) -> None:
@@ -545,11 +613,19 @@ def tick() -> int:
         disarm(kill_loop=False)
         return 0
 
+    if _nudge_within_coalesce_window(config):
+        logger.info(
+            "Wake tick coalesced (recent stop/wake nudge within interval_s=%s)",
+            config.get("interval_s"),
+        )
+        return 0
+
     state = _record_wake_tick()
     if state is not None and state.status == "budget-limited":
+        safe_condition = redact_secrets(state.condition, max_chars=None)
         emit_wake_line(
             f"[GOAL BUDGET] Wake tick limit ({state.wake_budget}) reached. "
-            f"Wrap up current work and summarize progress toward: {state.condition}"
+            f"Wrap up current work and summarize progress toward: {safe_condition}"
         )
         disarm(kill_loop=True)
         return 0

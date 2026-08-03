@@ -349,6 +349,7 @@ def test_doctor_marketplace_and_stacking_messages(
             "last_emit_at": "t",
         },
     )
+    monkeypatch.setenv("CURSOR_GOAL_PYTHON", sys.executable)
     code, out, _err = run_cli("manage", "doctor")
     assert code == 0
     assert "marketplace" in out.lower() or "classic" in out.lower()
@@ -743,9 +744,7 @@ def test_manage_clear_when_absent(goal_home: Path) -> None:
 
 def test_manage_create_invalid_workdir(goal_home: Path, tmp_path: Path) -> None:
     missing = tmp_path / "no-such-dir"
-    code, _out, err = run_cli(
-        "manage", "create", "bad wd", "--workdir", str(missing)
-    )
+    code, _out, err = run_cli("manage", "create", "bad wd", "--workdir", str(missing))
     assert code == 1
     assert "workdir" in err.lower()
 
@@ -823,7 +822,9 @@ def test_blocking_checklist_on_create(
     assert "pid_alive" in out
 
 
-def test_normalize_workdir_relative_and_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_normalize_workdir_relative_and_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from cursor_goal import manage as manage_mod
 
     assert manage_mod._normalize_workdir("  ") == ""
@@ -887,9 +888,7 @@ def test_stale_baked_python_env_exists(
     assert manage_mod._stale_baked_python_failures() == []
 
 
-def test_create_cwd_oserror(
-    goal_home: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_create_cwd_oserror(goal_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from cursor_goal import manage as manage_mod
 
     class BoomCwd:
@@ -941,7 +940,9 @@ def test_doctor_missing_workdir_warning(
     # Wake not alive → doctor fails, but warning about workdir should appear
     code, out, err = run_cli("manage", "doctor")
     combined = out + err
-    assert "workdir is missing" in combined.lower() or "Configured workdir" in combined
+    assert "workdir" in combined.lower() and (
+        "missing" in combined.lower() or "not a directory" in combined.lower()
+    )
 
 
 def test_harness_cmd_prints_env(

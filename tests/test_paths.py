@@ -92,7 +92,9 @@ def test_run_goal_invocation_quotes_windows_exe(
     script = tmp_path / "run_goal.py"
     script.write_text("#", encoding="utf-8")
     monkeypatch.setattr(paths_mod.os, "name", "nt")
-    monkeypatch.setattr(paths_mod.sys, "executable", r"C:\Program Files\Python\python.exe")
+    monkeypatch.setattr(
+        paths_mod.sys, "executable", r"C:\Program Files\Python\python.exe"
+    )
     monkeypatch.setattr(paths_mod.sys, "version_info", (3, 14, 0))
     monkeypatch.setattr(paths_mod, "run_goal_script", lambda: script)
     inv = paths_mod.run_goal_invocation("status")
@@ -129,19 +131,25 @@ def test_path_has_symlink_posix_and_oserror(
             raise OSError("boom")
 
     # Force OSError in the link-check loop via monkeypatch on Path.is_symlink
-    monkeypatch.setattr(type(normal), "is_symlink", lambda self: (_ for _ in ()).throw(OSError("x")))
+    monkeypatch.setattr(
+        type(normal), "is_symlink", lambda self: (_ for _ in ()).throw(OSError("x"))
+    )
     assert state_mod.path_has_symlink_or_reparse(normal) is False
 
 
 def test_absolute_without_resolve_oserror(monkeypatch: pytest.MonkeyPatch) -> None:
-    from cursor_goal import state as state_mod
     from pathlib import Path as P
+
+    from cursor_goal import state as state_mod
 
     class BadPath(P):
         def expanduser(self) -> BadPath:  # type: ignore[override]
             raise OSError("expand failed")
 
-    monkeypatch.setattr(state_mod, "_absolute_without_resolve", state_mod._absolute_without_resolve)
+    monkeypatch.setattr(
+        state_mod, "_absolute_without_resolve", state_mod._absolute_without_resolve
+    )
+
     # Call path_has through a path that fails absolutize
     def boom(path: P) -> P:
         raise OSError("nope")

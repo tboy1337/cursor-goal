@@ -376,7 +376,12 @@ def test_from_dict_clamps_oversized_condition(goal_home: Path) -> None:
 
 
 def test_update_rejects_oversized_condition(goal_home: Path) -> None:
-    from cursor_goal.state import MAX_FIELD_CHARS, GoalState, save_goal, update_goal_fields
+    from cursor_goal.state import (
+        MAX_FIELD_CHARS,
+        GoalState,
+        save_goal,
+        update_goal_fields,
+    )
 
     save_goal(GoalState(condition="ok", created_at="t", status="pursuing"))
     with pytest.raises(ValueError, match="condition exceeds"):
@@ -677,7 +682,7 @@ def test_harden_windows_acl_grant_fails_after_strip(
     assert any("/inheritance:e" in c for c in calls)
 
 
-def test_harden_windows_acl_strip_fails_grant_ok(
+def test_harden_windows_acl_strip_fails_records_failure(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from cursor_goal import state as state_mod
@@ -706,7 +711,9 @@ def test_harden_windows_acl_strip_fails_grant_ok(
     state_mod._HARDENED_PATHS.clear()
     state_mod._ACL_HARDEN_FAILURES.clear()
     state_mod._harden_windows_acl(goal_home)
-    assert str(goal_home) in state_mod._HARDENED_PATHS
+    assert str(goal_home) not in state_mod._HARDENED_PATHS
+    assert state_mod.acl_harden_failure_message(goal_home) is not None
+    assert "inheritance strip failed" in state_mod.acl_harden_failure_message(goal_home)
 
 
 def test_default_wake_budget_helpers() -> None:
@@ -919,7 +926,43 @@ def test_data_dir_is_insecure_stat_oserror(
             raise OSError("stat failed")
 
     monkeypatch.setattr(state_mod.os, "name", "posix")
-    assert state_mod.data_dir_is_insecure(Fake()) is False  # type: ignore[arg-type]
+    assert state_mod.data_dir_is_insecure(Fake()) is True  # type: ignore[arg-type]
+
+
+def test_cursor_goal_data_requires_absolute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import state as state_mod
+
+    monkeypatch.setenv("CURSOR_GOAL_DATA", "relative-data-dir")
+    with pytest.raises(ValueError, match="absolute"):
+        state_mod.configured_data_dir_path()
+
+
+def test_normalize_workdir_jail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import state as state_mod
+
+    inside = tmp_path / "proj"
+    inside.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    monkeypatch.chdir(inside)
+    monkeypatch.delenv("CURSOR_GOAL_ALLOW_ANY_WORKDIR", raising=False)
+    assert Path(state_mod.normalize_workdir(".")) == inside.resolve()
+    with pytest.raises(ValueError, match="must be under"):
+        state_mod.normalize_workdir(str(outside))
+    monkeypatch.setenv("CURSOR_GOAL_ALLOW_ANY_WORKDIR", "1")
+    assert Path(state_mod.normalize_workdir(str(outside))) == outside.resolve()
+
+
+def test_assert_workdir_usable_missing(tmp_path: Path) -> None:
+    from cursor_goal import state as state_mod
+
+    missing = tmp_path / "gone"
+    with pytest.raises(ValueError, match="missing"):
+        state_mod.assert_workdir_usable(str(missing))
 
 
 def test_eval_validate_lock_timeout_on_snapshot(
@@ -1296,3 +1339,29 @@ def test_wake_run_loop_refuses_acl(
         lambda: "[goal] Error: Windows ACL harden failed",
     )
     assert wake_mod.run_loop(interval=5) == 1
+
+
+def test_normalize_workdir_resolve_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import state as state_mod
+
+    target = tmp_path / "d"
+    target.mkdir()
+    monkeypatch.setenv("CURSOR_GOAL_ALLOW_ANY_WORKDIR", "1")
+
+    def boom(self: Path) -> Path:
+        del self
+        raise OSError("resolve fail")
+
+    monkeypatch.setattr(type(target), "resolve", boom)
+    with pytest.raises(ValueError, match="could not be resolved"):
+        state_mod.normalize_workdir(str(target))
+
+
+def test_record_agent_nudge_noop_when_unarmed(goal_home: Path) -> None:
+    from cursor_goal import wake as wake_mod
+
+    del goal_home
+    # No wake.json — should no-op without raising.
+    wake_mod.record_agent_nudge()

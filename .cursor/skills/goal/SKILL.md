@@ -9,28 +9,22 @@ Set a persistent objective. Work toward it across turns until it is met.
 
 ## Harness (Python)
 
-Resolve the runner **before** issuing lifecycle commands (works for classic install and Teams marketplace):
+Resolve the runner **before** lifecycle commands (classic install or Teams marketplace).
 
-```bash
-# Prefer absolute path printed by the installed package:
-python3 -u "$(python3 -c 'from cursor_goal.paths import run_goal_script; print(run_goal_script())' 2>/dev/null || true)" manage harness-cmd
-```
+**Resolution order:**
 
-**Preferred:** run `manage harness-cmd` once from any available install and reuse its `Wake loop` / invocation lines for the rest of the session.
-
-**Resolution order for Shell commands:**
-
-1. Absolute path from `manage harness-cmd` / create/resume wake hints (package-local).
+1. Classic: `~/.cursor/skills/goal/scripts/run_goal.py` (Windows: `$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py`).
 2. Marketplace: `"$CURSOR_PLUGIN_ROOT/skills/goal/scripts/run_goal.py"` when `CURSOR_PLUGIN_ROOT` is set.
-3. Classic: `~/.cursor/skills/goal/scripts/run_goal.py` (Windows: `$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py`).
+3. Optional: `manage harness-cmd` once and reuse its printed `Wake loop` / invocation lines.
+4. Last resort (editable install only): `python -c "from cursor_goal.paths import run_goal_script; print(run_goal_script())"` — editable `pip install -e` does **not** register the skill/hooks.
 
-**Unix / macOS / WSL (classic fallback):**
+**Unix / macOS / WSL (classic):**
 
 ```bash
 python3 -u ~/.cursor/skills/goal/scripts/run_goal.py <command> ...
 ```
 
-**Windows (PowerShell / Cursor Shell, classic fallback):**
+**Windows (PowerShell / Cursor Shell, classic):**
 
 ```powershell
 py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" <command> ...
@@ -42,8 +36,6 @@ py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" <command> ..
 python3 -u "$CURSOR_PLUGIN_ROOT/skills/goal/scripts/run_goal.py" <command> ...
 ```
 
-If the package is installed editable (`pip install -e .`), `python -m cursor_goal` and `cursor-goal` also work — but editable install does **not** register the Cursor skill, agents, or stop hook. Use the installer (or Teams marketplace import) for that.
-
 | Command | Purpose |
 |---------|---------|
 | `parse "<input>"` | Parse `/goal` input → JSON |
@@ -52,11 +44,11 @@ If the package is installed editable (`pip install -e .`), `python -m cursor_goa
 | `stop` | Stop hook (stdin JSON → stdout JSON) |
 | `wake arm\|tick\|disarm\|status\|loop` | Wake watchdog (shell notify sentinel) |
 
-State file: `~/.cursor-goal/data/goal.json` (override with `CURSOR_GOAL_DATA`).
+State file: `~/.cursor-goal/data/goal.json` (override with `CURSOR_GOAL_DATA`, must be absolute when set).
 
-`validation_command` is trusted-user local state (executed by `eval validate` / agent Shell). Prefer `--test "..."` for compound commands. New goals default to `shell_ok=false`; pass `--allow-shell` when shell mode is required. Treat `~/.cursor-goal/data` as shell-equivalent trust. Set `CURSOR_GOAL_DENY_SHELL=1` to refuse shell-mode validation globally.
+`validation_command` is trusted-user local state (executed by `eval validate` / agent Shell). Prefer argv-safe `--test` commands. New goals default to `shell_ok=false`; pass `--allow-shell` when the command needs shell metacharacters (`&&`, pipes, redirects). Treat `~/.cursor-goal/data` as shell-equivalent trust. Set `CURSOR_GOAL_DENY_SHELL=1` to refuse shell-mode validation globally.
 
-Do **not** put production secrets in goal conditions — stop followups redact condition text after `Goal:` / `toward:` markers, but redaction is heuristic.
+Do **not** put production secrets in goal conditions — live prompts scrub secret-ish tokens heuristically; disk `last-stop-response.json` also strips condition text after `Goal:` / `toward:` markers.
 
 ## Setting a Goal
 
@@ -191,24 +183,25 @@ When you see a `[GOAL]` prefix, resume working toward the condition immediately.
 
 Cursor may drop stop-hook stdout (see repo `docs/cursor-windows-stop-hook-race.md`). `manage create` / `resume` arms wake state.
 
-**Blocking checklist after every create/resume** (do not skip):
+### Wake checklist (mandatory after every create/resume)
 
-1. Start `wake loop` in a **background** Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE`.
-2. Run `wake status` and confirm `pid_alive` is true (and `armed` is true).
-3. On wake: read the sentinel JSON `prompt`, check `manage status`, continue if still `pursuing`.
-4. `manage done` / `pause` / `clear` disarms automatically. Disable with `CURSOR_GOAL_WAKE=0`.
+Do **not** skip. Until `pid_alive=true`, refuse other goal work (`eval validate` will refuse unless `CURSOR_GOAL_ALLOW_DEAD_WAKE=1`).
 
-**Unix:**
+1. **Background Shell** — start wake loop with `notify_on_output` matching `^AGENT_GOAL_WAKE`:
 
 ```bash
+# Unix / macOS / WSL
 python3 -u ~/.cursor/skills/goal/scripts/run_goal.py wake loop
 ```
 
-**Windows:**
-
 ```powershell
+# Windows
 py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" wake loop
 ```
+
+2. **Verify:** `wake status` → `pid_alive=true` (and `armed=true`).
+3. **On wake:** read sentinel JSON `prompt`, `manage status`, continue if still `pursuing`.
+4. `manage done` / `pause` / `clear` disarms. Disable with `CURSOR_GOAL_WAKE=0`.
 
 Interval: `CURSOR_GOAL_WAKE_INTERVAL_S` (default 15, min 5, max 600). Each wake emission increments `wake_ticks` against **`wake_budget`** (independent of turn budget). Default `wake_budget = turn_budget * 10` (min 10, max 500). Override with `--wake-budget N`.
 

@@ -30,7 +30,7 @@ Three supported paths:
 | Path | Who | How |
 |------|-----|-----|
 | **Clone + installer** | Individuals | Full clone or GitHub Release archive → `install-goal.sh` / `install-goal.ps1` |
-| **Tagged release** | Individuals | `git clone --branch v2.7.0 …` then installer (see [docs/install.md](docs/install.md)) |
+| **Tagged release** | Individuals | `git clone --branch v2.8.0 …` then installer (see [docs/install.md](docs/install.md)) |
 | **Teams marketplace** | Teams/Enterprise | Import this repo in Cursor Dashboard → Plugins (see `.cursor-plugin/marketplace.json`) |
 
 **Agent install (explicit steps):**
@@ -71,11 +71,19 @@ Uninstall: `./scripts/uninstall-goal.sh` or `.\scripts\uninstall-goal.ps1` (add 
 
 `pip install -e ".[dev]"` installs the `cursor-goal` CLI for **development only** — it does **not** register the Cursor skill, agents, or stop hook. Always run the installer (or Teams marketplace import) for Cursor integration.
 
-Security: see [SECURITY.md](SECURITY.md). Platform notes: [docs/platform-compatibility.md](docs/platform-compatibility.md). Known limits: [docs/known-limitations.md](docs/known-limitations.md). Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md).
+## First 5 minutes
+
+1. Install for your OS (classic installer above, or Teams marketplace import).
+2. Run `manage doctor` — fix any FAIL lines before starting a goal.
+3. In Cursor: `/goal "demo done" --test "py -3 -c \"raise SystemExit(0)\""` (Unix: `python3 -c 'raise SystemExit(0)'`).
+4. Start `wake loop` in a background Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE`; confirm `wake status` shows `pid_alive=true`.
+5. On evaluator YES, `manage done`. If Hooks UI shows `{}`, rely on wake — see [known limitations](docs/known-limitations.md).
+
+Security: see [SECURITY.md](SECURITY.md). Platform notes: [docs/platform-compatibility.md](docs/platform-compatibility.md). Known limits: [docs/known-limitations.md](docs/known-limitations.md). Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md). Teams/AGPL: [docs/teams-agpl.md](docs/teams-agpl.md).
 
 Note: an unrelated npm package is also named `cursor-goal`; this project is the Python/AGPL harness at `tboy1337/cursor-goal`.
 
-**Teams / AGPL:** marketplace import redistributes AGPL-3.0 code — review [COPYING](COPYING) and [known limitations](docs/known-limitations.md#license-teams--redistribution) before enterprise use.
+**Teams / AGPL:** marketplace import redistributes AGPL-3.0 code — review [docs/teams-agpl.md](docs/teams-agpl.md) and [COPYING](COPYING) before enterprise use.
 
 Verify:
 
@@ -104,7 +112,7 @@ Flags / natural language:
 /goal fix bugs, verified by pytest, stop after 15 turns
 ```
 
-**2.7.0:** new goals default to `shell_ok=false` (pass `--allow-shell` for shell-mode validation); installers exit non-zero when `manage doctor` hard-fails; validation can bind a `--workdir`.
+**2.8.0:** production hardening (wake liveness gate, stop/wake coalesce, workdir jail, prompt/disk redaction split). New goals still default to `shell_ok=false` (pass `--allow-shell` for shell-mode validation); installers exit non-zero when `manage doctor` hard-fails; validation can bind a `--workdir`.
 
 ## Multi-model (maker ≠ checker)
 

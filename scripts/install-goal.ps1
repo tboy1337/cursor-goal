@@ -1,4 +1,4 @@
-# install-goal.ps1 — Install /goal Python harness for Cursor on Windows
+﻿# install-goal.ps1 ??? Install /goal Python harness for Cursor on Windows
 #
 # Usage (from a full clone or a GitHub source archive for a tagged release):
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-goal.ps1
@@ -430,7 +430,7 @@ print(__version__)
     & $Python.Exe -u (Join-Path $installDir "scripts\run_goal.py") manage doctor 2>&1 |
         ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) {
-        Write-GoalErr "manage doctor FAILED (exit $LASTEXITCODE) — install files were written, but the harness is not healthy."
+        Write-GoalErr "manage doctor FAILED (exit $LASTEXITCODE) - install files were written, but the harness is not healthy."
         Write-Host ("Fix FAIL lines above, then re-run: {0} -u {1} manage doctor" -f $Python.Exe, (Join-Path $installDir "scripts\run_goal.py"))
         return 1
     }

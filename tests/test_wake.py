@@ -1005,3 +1005,149 @@ def test_unix_ownership_proc_oserror(
 
     monkeypatch.setattr(wake_mod, "Path", lambda _arg: BoomPath())
     assert wake_mod._unix_pid_looks_owned(7) is False
+
+
+def test_wake_coalesce_skips_after_stop_nudge(wake_on: Path) -> None:
+    assert run_cli("manage", "create", "coalesce goal")[0] == 0
+    assert (wake_on / "wake.json").is_file()
+    code, out, _err = run_cli("wake", "tick")
+    assert code == 0
+    assert out.startswith("AGENT_GOAL_WAKE ")
+    data = json.loads((wake_on / "goal.json").read_text(encoding="utf-8"))
+    assert data["wake_ticks"] == 1
+    wake_mod.record_agent_nudge()
+    code, out, _err = run_cli("wake", "tick")
+    assert code == 0
+    assert out == ""
+    data = json.loads((wake_on / "goal.json").read_text(encoding="utf-8"))
+    assert data["wake_ticks"] == 1
+
+
+def test_refuse_if_wake_dead_while_pursuing(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CURSOR_GOAL_ALLOW_DEAD_WAKE", raising=False)
+    assert run_cli("manage", "create", "need wake", "--test", "echo ok")[0] == 0
+    msg = wake_mod.refuse_if_wake_dead()
+    assert msg is not None
+    assert "wake" in msg.lower()
+    monkeypatch.setenv("CURSOR_GOAL_ALLOW_DEAD_WAKE", "1")
+    assert wake_mod.refuse_if_wake_dead() is None
+
+
+def test_eval_validate_refuses_dead_wake(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CURSOR_GOAL_ALLOW_DEAD_WAKE", raising=False)
+    cmd = f'{__import__("sys").executable} -c "raise SystemExit(0)"'
+    assert run_cli("manage", "create", "v", "--test", cmd)[0] == 0
+    code, _out, err = run_cli("eval", "validate")
+    assert code == 1
+    assert "wake" in err.lower()
+
+
+def test_nudge_coalesce_invalid_timestamp(wake_on: Path) -> None:
+    wake_mod.arm(interval=5)
+    config = json.loads((wake_on / "wake.json").read_text(encoding="utf-8"))
+    config["last_nudge_at"] = "not-a-timestamp"
+    (wake_on / "wake.json").write_text(json.dumps(config), encoding="utf-8")
+    assert wake_mod._nudge_within_coalesce_window(config) is False
+
+
+def test_refuse_if_wake_dead_when_armed(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CURSOR_GOAL_ALLOW_DEAD_WAKE", raising=False)
+    assert run_cli("manage", "create", "armed dead")[0] == 0
+    assert (wake_on / "wake.json").is_file()
+    monkeypatch.setattr(
+        wake_mod,
+        "status_info",
+        lambda: {
+            "armed": True,
+            "pid_alive": False,
+            "interval_s": 5,
+            "token_prefix": "x",
+            "last_emit_at": None,
+        },
+    )
+    msg = wake_mod.refuse_if_wake_dead()
+    assert msg is not None
+    assert "not alive" in msg.lower()
+
+
+def test_assert_workdir_usable_empty() -> None:
+    from cursor_goal.state import assert_workdir_usable
+
+    assert assert_workdir_usable("  ") == ""
+
+
+def test_refuse_if_wake_dead_not_pursuing(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del wake_on
+    monkeypatch.delenv("CURSOR_GOAL_ALLOW_DEAD_WAKE", raising=False)
+    assert wake_mod.refuse_if_wake_dead() is None
+
+
+def test_refuse_if_wake_dead_when_pid_alive(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CURSOR_GOAL_ALLOW_DEAD_WAKE", raising=False)
+    assert run_cli("manage", "create", "alive ok")[0] == 0
+    assert (wake_on / "wake.json").is_file()
+    monkeypatch.setattr(
+        wake_mod,
+        "status_info",
+        lambda: {
+            "armed": True,
+            "pid_alive": True,
+            "interval_s": 5,
+            "token_prefix": "x",
+            "last_emit_at": None,
+        },
+    )
+    assert wake_mod.refuse_if_wake_dead() is None
+
+
+def test_refuse_if_wake_dead_when_unarmed(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CURSOR_GOAL_ALLOW_DEAD_WAKE", raising=False)
+    assert run_cli("manage", "create", "unarmed")[0] == 0
+    monkeypatch.setattr(
+        wake_mod,
+        "status_info",
+        lambda: {
+            "armed": False,
+            "pid_alive": False,
+            "interval_s": 5,
+            "token_prefix": "x",
+            "last_emit_at": None,
+        },
+    )
+    msg = wake_mod.refuse_if_wake_dead()
+    assert msg is not None
+    assert "not armed" in msg.lower()
+
+
+def test_record_agent_nudge_no_config(wake_on: Path) -> None:
+    del wake_on
+    wake_mod.record_agent_nudge()  # no wake.json yet
+
+
+def test_record_agent_nudge_write_oserror(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wake_mod.arm(interval=5)
+    assert (wake_on / "wake.json").is_file()
+
+    def boom(_cfg: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(wake_mod, "_write_wake_config", boom)
+    wake_mod.record_agent_nudge()  # swallows OSError
+
+
+def test_nudge_within_coalesce_none() -> None:
+    assert wake_mod._nudge_within_coalesce_window(None) is False

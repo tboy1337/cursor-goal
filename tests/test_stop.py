@@ -60,10 +60,16 @@ def test_stop_continues_when_pursuing(goal_home: Path) -> None:
     assert code == 0
     assert "followup_message" in payload
     assert "[GOAL]" in payload["followup_message"]
-    # Condition text is redacted before emit to Cursor.
-    assert "toward: <redacted>" in payload["followup_message"]
-    assert 'fix "quoted" goal' not in payload["followup_message"]
+    # Live followup keeps a usable condition; disk store redacts separately.
+    assert 'fix "quoted" goal' in payload["followup_message"]
+    assert "toward:" in payload["followup_message"]
     assert load_goal_json(goal_home)["turns_used"] == 1
+    disk = json.loads(
+        (goal_home / "last-stop-response.json").read_text(encoding="utf-8")
+    )
+    stored = disk["payload"]["followup_message"]
+    assert "toward: <redacted>" in stored
+    assert 'fix "quoted" goal' not in stored
 
 
 def test_stop_budget_limit(goal_home: Path) -> None:
@@ -71,11 +77,15 @@ def test_stop_budget_limit(goal_home: Path) -> None:
     code, payload = _run_stop({"status": "completed", "loop_count": 0})
     assert code == 0
     assert "BUDGET" in payload["followup_message"]
-    assert "progress toward: <redacted>" in payload["followup_message"]
-    assert "almost done" not in payload["followup_message"]
+    assert "almost done" in payload["followup_message"]
     data = load_goal_json(goal_home)
     assert data["status"] == "budget-limited"
     assert data["active"] is False
+    disk = json.loads(
+        (goal_home / "last-stop-response.json").read_text(encoding="utf-8")
+    )
+    assert "progress toward: <redacted>" in disk["payload"]["followup_message"]
+    assert "almost done" not in disk["payload"]["followup_message"]
 
 
 def test_stop_with_validation_command_reminds_in_turn(goal_home: Path) -> None:
@@ -85,8 +95,7 @@ def test_stop_with_validation_command_reminds_in_turn(goal_home: Path) -> None:
     msg = response["followup_message"]
     assert "Run validation in-turn" in msg
     assert "echo hi" in msg
-    assert "Goal: <redacted>" in msg
-    assert "secret-condition" not in msg
+    assert "Goal: secret-condition" in msg
     assert "PASSED" not in msg
     assert "FAILED" not in msg
 

@@ -293,9 +293,7 @@ def test_eval_validate_uses_workdir(goal_home: Path, tmp_path: Path) -> None:
     assert code == 0
 
 
-def test_eval_validate_missing_workdir_falls_back(
-    goal_home: Path, tmp_path: Path
-) -> None:
+def test_eval_validate_missing_workdir_fails(goal_home: Path, tmp_path: Path) -> None:
     from cursor_goal.state import GoalState, save_goal
 
     missing = tmp_path / "gone-workdir"
@@ -305,8 +303,9 @@ def test_eval_validate_missing_workdir_falls_back(
     assert state is not None
     state.workdir = str(missing)
     save_goal(state)
-    code, _out, _err = run_cli("eval", "validate")
-    assert code == 0
+    code, _out, err = run_cli("eval", "validate")
+    assert code == 1
+    assert "workdir" in err.lower()
 
 
 def test_eval_prompt_failed_exit_note(goal_home: Path) -> None:
