@@ -118,6 +118,11 @@ function Write-GoalStopHookCmd {
 @echo off
 setlocal
 set PYTHONUNBUFFERED=1
+if not "%CURSOR_GOAL_PYTHON%"=="" (
+  set "CGP=%CURSOR_GOAL_PYTHON:"=%"
+  "%CURSOR_GOAL_PYTHON%" -u "$StopScriptPy"
+  exit /b %ERRORLEVEL%
+)
 "$pyExe" $prefixPart-u "$StopScriptPy"
 exit /b %ERRORLEVEL%
 "@
@@ -142,8 +147,13 @@ function Write-GoalWakeLoopCmd {
     $content = @"
 @echo off
 REM Classic Windows install: absolute interpreter baked by install-goal.ps1.
+REM Prefer CURSOR_GOAL_PYTHON when set (absolute), else baked path.
 setlocal
 set PYTHONUNBUFFERED=1
+if not "%CURSOR_GOAL_PYTHON%"=="" (
+  "%CURSOR_GOAL_PYTHON%" -u "$RunGoalPy" wake loop %*
+  exit /b %ERRORLEVEL%
+)
 "$pyExe" $prefixPart-u "$RunGoalPy" wake loop %*
 exit /b %ERRORLEVEL%
 "@
@@ -420,18 +430,22 @@ print(__version__)
     & $Python.Exe -u (Join-Path $installDir "scripts\run_goal.py") manage doctor 2>&1 |
         ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) {
-        Write-GoalWarn "manage doctor exited $LASTEXITCODE (install may still be usable)"
+        Write-GoalErr "manage doctor FAILED (exit $LASTEXITCODE) — install files were written, but the harness is not healthy."
+        Write-Host ("Fix FAIL lines above, then re-run: {0} -u {1} manage doctor" -f $Python.Exe, (Join-Path $installDir "scripts\run_goal.py"))
+        return 1
     }
     Write-Host ""
     Write-Host "Next steps:"
     Write-Host "  1) In Cursor: /goal <verifiable condition>"
     Write-Host "  2) Start wake loop with notify_on_output matching ^AGENT_GOAL_WAKE"
-    Write-Host "  3) If Hooks UI shows {} but last-stop-response.json has followup_message, rely on wake"
+    Write-Host "  3) Confirm wake status shows pid_alive=true before other work"
+    Write-Host "  4) If Hooks UI shows {} but last-stop-response.json has followup_message, rely on wake"
     Write-GoalInfo "Windows stop hook uses stop_hook.cmd + stdout drain delay (Cursor capture race mitigation)."
     Write-GoalInfo "Wake watchdog: after create/resume, start wake loop with notify_on_output on ^AGENT_GOAL_WAKE."
     Write-GoalWarn "If stop followups still drop, wake continues the goal; last-stop-response.json is always written."
     Write-GoalWarn "Re-run the installer after moving/upgrading Python (stop_hook.cmd and wake_loop.cmd bake absolute interpreter paths)."
-    Write-GoalInfo "Shared machine tip: set CURSOR_GOAL_DENY_SHELL=1 (or create with --deny-shell)."
+    Write-GoalInfo "Shell validation is off by default; pass --allow-shell only when needed."
+    Write-GoalInfo "Shared machine tip: keep default deny-shell, or set CURSOR_GOAL_DENY_SHELL=1."
     Write-Host ""
     return 0
 }

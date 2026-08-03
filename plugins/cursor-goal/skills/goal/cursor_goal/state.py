@@ -1,5 +1,9 @@
 """Goal state file paths and atomic JSON I/O."""
 
+# Path-trust helpers (symlink/reparse) live here with GoalState to keep a single
+# trust boundary; module size is expected for the hardening surface.
+# pylint: disable=too-many-lines
+
 from __future__ import annotations
 
 import ctypes
@@ -40,8 +44,8 @@ __all__ = (
 EVAL_FLAG_NAME = "goal-eval-done"
 GOAL_FILE_NAME = "goal.json"
 LOCK_FILE_NAME = "goal.lock"
-SCHEMA_VERSION = 3
-SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3})
+SCHEMA_VERSION = 4
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4})
 MAX_TURN_BUDGET = 500
 MAX_FIELD_CHARS = 4000
 LOCK_TIMEOUT_SEC = 10.0
@@ -66,6 +70,7 @@ _UPDATABLE_FIELDS = frozenset(
         "wake_ticks",
         "wake_budget",
         "shell_ok",
+        "workdir",
         "status",
         "last_reason",
         "last_validation_output",
@@ -80,20 +85,20 @@ class CorruptGoalError(ValueError):
     """Raised when goal.json exists but cannot be loaded as a valid GoalState."""
 
 
-def data_dir(*, check_writable: bool = True) -> Path:
-    """Resolve the goal data directory (CURSOR_GOAL_DATA or ~/.cursor-goal/data)."""
+def configured_data_dir_path() -> Path:
+    """Return the configured data dir path without resolving symlinks."""
     override = os.environ.get("CURSOR_GOAL_DATA")
     if override:
-        path = Path(override).expanduser().resolve()
-        logger.debug("Using CURSOR_GOAL_DATA override path=%s", path)
-    else:
-        path = (Path.home() / ".cursor-goal" / "data").resolve()
-    path.mkdir(parents=True, exist_ok=True, mode=0o700)
-    _chmod_dir_private(path)
-    _harden_windows_acl(path)
-    if check_writable:
-        _warn_if_world_writable(path)
-    return path
+        return Path(override).expanduser()
+    return Path.home() / ".cursor-goal" / "data"
+
+
+def _absolute_without_resolve(path: Path) -> Path:
+    """Make *path* absolute without following symlinks."""
+    expanded = path.expanduser()
+    if expanded.is_absolute():
+        return expanded
+    return Path.cwd() / expanded
 
 
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x400
@@ -123,14 +128,99 @@ def _windows_path_is_reparse_point(path: Path) -> bool:
     return bool(attrs & _FILE_ATTRIBUTE_REPARSE_POINT)
 
 
-def data_dir_is_insecure(path: Path | None = None) -> bool:
+def path_has_symlink_or_reparse(  # pylint: disable=too-many-nested-blocks
+    path: Path,
+) -> bool:
+    """Return True if *path* or any existing ancestor is a symlink/reparse.
+
+    Checks the unresolved path chain so ``Path.resolve()`` cannot bypass the
+    trust boundary by following a leaf symlink/junction to a normal directory.
+    """
+    try:
+        current = _absolute_without_resolve(path)
+    except OSError as exc:
+        logger.debug("Could not absolutize path %s: %s", path, exc)
+        current = path
+    chain: list[Path] = []
+    cursor = current
+    while True:
+        chain.append(cursor)
+        parent = cursor.parent
+        if parent == cursor:
+            break
+        cursor = parent
+    for candidate in chain:
+        try:
+            if os.name == "nt":
+                if _windows_path_is_reparse_point(candidate):
+                    return True
+            elif candidate.is_symlink():
+                return True
+        except OSError as exc:  # pragma: no cover — rare FS races
+            logger.debug("Link check failed for %s: %s", candidate, exc)
+    return False
+
+
+def data_dir(*, check_writable: bool = True) -> Path:
+    """Resolve the goal data directory (CURSOR_GOAL_DATA or ~/.cursor-goal/data).
+
+    Refuses to mkdir through a symlink/reparse configured path: returns the
+    absolute unresolved path so callers can report insecurity without writing
+    into the link target.
+    """
+    raw = configured_data_dir_path()
+    if os.environ.get("CURSOR_GOAL_DATA"):
+        logger.debug("Using CURSOR_GOAL_DATA override path=%s", raw)
+    if path_has_symlink_or_reparse(raw):
+        abs_raw = _absolute_without_resolve(raw)
+        logger.warning(
+            "Configured data dir contains symlink/reparse; refusing mkdir (%s)",
+            abs_raw,
+        )
+        return abs_raw
+    path = raw.resolve()
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    _chmod_dir_private(path)
+    _harden_windows_acl(path)
+    if check_writable:
+        _warn_if_world_writable(path)
+    return path
+
+
+def data_dir_is_insecure(  # pylint: disable=too-many-return-statements,too-many-branches
+    path: Path | None = None,
+) -> bool:
     """Return True when the data dir is unsafe to trust.
 
-    Unix: symlink, not owned by the current user, or group/world-writable.
-    Windows: symlink / junction / reparse point (ACL trust uses
-    ``refuse_if_acl_harden_failed`` separately).
+    Unix: symlink/reparse in the configured path chain, not owned by the
+    current user, or group/world-writable.
+    Windows: symlink / junction / reparse point in the path chain (ACL trust
+    uses ``refuse_if_acl_harden_failed`` separately).
+
+    When *path* is None, checks the **unresolved** configured path first so
+    ``resolve()`` cannot hide a leaf symlink/junction.
     """
-    target = path if path is not None else data_dir(check_writable=False)
+    if path is None:
+        configured = configured_data_dir_path()
+        if path_has_symlink_or_reparse(configured):
+            logger.warning(
+                "Goal data directory path contains symlink/reparse (%s)",
+                configured,
+            )
+            return True
+        target = data_dir(check_writable=False)
+        # data_dir may return unresolved path when links were detected above;
+        # re-check in case of races.
+        if path_has_symlink_or_reparse(configured):
+            return True
+    else:
+        if path_has_symlink_or_reparse(path):
+            logger.warning(
+                "Goal data directory path contains symlink/reparse (%s)",
+                path,
+            )
+            return True
+        target = path
     if os.name == "nt":
         if _windows_path_is_reparse_point(target):
             logger.warning(
@@ -151,10 +241,10 @@ def data_dir_is_insecure(path: Path | None = None) -> bool:
         getuid = getattr(os, "getuid", None)
         if getuid is None:  # pragma: no cover — Windows
             return bool(st.st_mode & (stat.S_IWOTH | stat.S_IWGRP))
-        uid = int(getuid())
+        uid = int(getuid())  # pylint: disable=not-callable
     except OSError:  # pragma: no cover
         return bool(st.st_mode & (stat.S_IWOTH | stat.S_IWGRP))
-    if st.st_uid != uid and uid != 0:
+    if uid not in (st.st_uid, 0):
         logger.warning(
             "Goal data directory not owned by current user (%s uid=%s owner=%s)",
             target,
@@ -169,15 +259,16 @@ def refuse_if_data_dir_insecure() -> str | None:
     """Return an error message if the data dir is insecure, else None."""
     if not data_dir_is_insecure():
         return None
-    path = data_dir(check_writable=False)
+    path = configured_data_dir_path()
+    display = str(_absolute_without_resolve(path))
     if os.name == "nt":
         return (
-            f"[goal] Error: data directory is insecure ({path}). "
+            f"[goal] Error: data directory is insecure ({display}). "
             "It must not be a symlink, junction, or other reparse point. "
             "Set CURSOR_GOAL_DATA to a normal private directory."
         )
     return (
-        f"[goal] Error: data directory is insecure ({path}). "
+        f"[goal] Error: data directory is insecure ({display}). "
         "It must not be a symlink, must be owned by you, and must not be "
         "group/world-writable. Restrict permissions (e.g. chmod 700) or set "
         "CURSOR_GOAL_DATA to a private directory."
@@ -458,6 +549,20 @@ def _set_shell_ok(state: GoalState, value: Any) -> None:
     state.shell_ok = _parse_shell_ok(value)
 
 
+def _parse_workdir(value: Any) -> str:
+    """Parse optional workdir; empty string means unset."""
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    return _require_field_chars("workdir", text)
+
+
+def _set_workdir(state: GoalState, value: Any) -> None:
+    state.workdir = _parse_workdir(value)
+
+
 def _set_status(state: GoalState, value: Any) -> None:
     state.status = _parse_status(value)
 
@@ -495,6 +600,7 @@ _FIELD_SETTERS: dict[str, Callable[[GoalState, Any], None]] = {
     "wake_ticks": _set_wake_ticks,
     "wake_budget": _set_wake_budget,
     "shell_ok": _set_shell_ok,
+    "workdir": _set_workdir,
     "status": _set_status,
     "last_reason": _set_last_reason,
     "last_validation_output": _set_last_validation_output,
@@ -521,7 +627,8 @@ class GoalState:  # pylint: disable=too-many-instance-attributes
     turns_used: int = 0
     wake_ticks: int = 0
     wake_budget: int = 200
-    shell_ok: bool = True
+    shell_ok: bool = False
+    workdir: str = ""
     status: str = "pursuing"
     last_reason: str = ""
     last_validation_output: str = ""
@@ -535,7 +642,7 @@ class GoalState:  # pylint: disable=too-many-instance-attributes
         return data
 
     @classmethod
-    def from_dict(  # pylint: disable=too-many-branches
+    def from_dict(  # pylint: disable=too-many-branches,too-many-statements
         cls, data: dict[str, Any]
     ) -> GoalState:
         try:
@@ -571,6 +678,7 @@ class GoalState:  # pylint: disable=too-many-instance-attributes
             except (TypeError, ValueError) as exc:
                 raise ValueError(f"invalid wake_budget: {exc}") from exc
 
+        # Pre-v4 goals without shell_ok keep historical True; new creates default False.
         if "shell_ok" not in data:
             shell_ok = True
         else:
@@ -578,6 +686,12 @@ class GoalState:  # pylint: disable=too-many-instance-attributes
                 shell_ok = _parse_shell_ok(data.get("shell_ok"))
             except ValueError as exc:
                 raise ValueError(f"invalid shell_ok: {exc}") from exc
+
+        workdir_raw = data.get("workdir", "")
+        try:
+            workdir = _clamp_field_chars("workdir", str(workdir_raw or "").strip())
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid workdir: {exc}") from exc
 
         # Clamp counters that exceed their budgets (corrupt / race).
         if turns_used > turn_budget:
@@ -610,8 +724,10 @@ class GoalState:  # pylint: disable=too-many-instance-attributes
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
         status = _parse_status(data.get("status", "unknown"))
-        condition = _require_field_chars("condition", str(data.get("condition", "")))
-        validation_command = _require_field_chars(
+        # Clamp oversized strings on load so stop fail-open is not tripped by
+        # length alone; updates still reject via _require_field_chars setters.
+        condition = _clamp_field_chars("condition", str(data.get("condition", "")))
+        validation_command = _clamp_field_chars(
             "validation_command", str(data.get("validation_command") or "")
         )
         if (
@@ -635,6 +751,7 @@ class GoalState:  # pylint: disable=too-many-instance-attributes
             wake_ticks=wake_ticks,
             wake_budget=wake_budget,
             shell_ok=shell_ok,
+            workdir=workdir,
             status=status,
             last_reason=_clamp_field_chars(
                 "last_reason", str(data.get("last_reason") or "")

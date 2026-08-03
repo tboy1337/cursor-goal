@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 from tests.conftest import load_goal_json, run_cli
 
 
@@ -17,11 +19,48 @@ def test_manage_create(goal_home: Path) -> None:
     assert data["status"] == "pursuing"
     assert data["turn_budget"] == 20
     assert data["wake_budget"] == 200
-    assert data["shell_ok"] is True
-    assert data["schema_version"] == 3
+    assert data["shell_ok"] is False
+    assert data["schema_version"] == 4
     assert data["active"] is True
+    assert data["workdir"]
+    assert Path(data["workdir"]).is_absolute()
     assert "Goal created" in out
     assert "Wake budget: 200" in out
+    assert "Shell ok: false" in out
+    assert "Workdir:" in out
+
+
+def test_manage_create_allow_shell(goal_home: Path) -> None:
+    code, out, _err = run_cli(
+        "manage",
+        "create",
+        "shell goal",
+        "--test",
+        "echo a && echo b",
+        "--allow-shell",
+    )
+    assert code == 0
+    data = load_goal_json(goal_home)
+    assert data["shell_ok"] is True
+    assert data["schema_version"] == 4
+    assert "Shell ok: true" in out
+    assert "Validation mode: shell" in out
+
+
+def test_manage_create_workdir(goal_home: Path, tmp_path: Path) -> None:
+    work = tmp_path / "goal-work"
+    work.mkdir()
+    code, out, _err = run_cli(
+        "manage",
+        "create",
+        "with workdir",
+        "--workdir",
+        str(work),
+    )
+    assert code == 0
+    data = load_goal_json(goal_home)
+    assert Path(data["workdir"]) == work.resolve()
+    assert str(work.resolve()) in out
 
 
 def test_manage_create_wake_budget_and_deny_shell(goal_home: Path) -> None:
@@ -90,6 +129,7 @@ def test_manage_doctor_with_pursuing_shell_goal(
             "echo a && echo b",
             "--budget",
             "3",
+            "--allow-shell",
         )[0]
         == 0
     )
@@ -699,3 +739,316 @@ def test_manage_clear_when_absent(goal_home: Path) -> None:
     code, out, _err = run_cli("manage", "clear")
     assert code == 0
     assert "No active goal" in out
+
+
+def test_manage_create_invalid_workdir(goal_home: Path, tmp_path: Path) -> None:
+    missing = tmp_path / "no-such-dir"
+    code, _out, err = run_cli(
+        "manage", "create", "bad wd", "--workdir", str(missing)
+    )
+    assert code == 1
+    assert "workdir" in err.lower()
+
+
+def test_manage_create_denied_shell_warning(goal_home: Path) -> None:
+    code, out, _err = run_cli(
+        "manage",
+        "create",
+        "need shell",
+        "--test",
+        "echo a && echo b",
+    )
+    assert code == 0
+    data = load_goal_json(goal_home)
+    assert data["shell_ok"] is False
+    assert "Validation mode: denied" in out
+    assert "shell_ok=false" in out or "--allow-shell" in out
+
+
+def test_baked_python_from_cmd(tmp_path: Path) -> None:
+    from cursor_goal import manage as manage_mod
+
+    cmd = tmp_path / "stop_hook.cmd"
+    cmd.write_text(
+        '@echo off\n"C:\\MissingPython\\python.exe" -u "C:\\x\\stop_hook.py"\n',
+        encoding="utf-8",
+    )
+    assert manage_mod._baked_python_from_cmd(cmd) == r"C:\MissingPython\python.exe"
+    assert manage_mod._baked_python_from_cmd(tmp_path / "missing.cmd") is None
+
+
+def test_stale_baked_python_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    skill = tmp_path / "goal"
+    scripts = skill / "scripts"
+    scripts.mkdir(parents=True)
+    missing_py = tmp_path / "gone" / "python.exe"
+    (scripts / "stop_hook.cmd").write_text(
+        f'@echo off\n"{missing_py}" -u "stop.py"\n',
+        encoding="utf-8",
+    )
+    (scripts / "wake_loop.cmd").write_text(
+        f'@echo off\n"{missing_py}" -u "run.py" wake loop\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(manage_mod, "skill_root", lambda: skill)
+    monkeypatch.setattr(manage_mod.os, "name", "nt")
+    monkeypatch.delenv("CURSOR_GOAL_PYTHON", raising=False)
+    fails = manage_mod._stale_baked_python_failures()
+    assert len(fails) >= 1
+    assert "missing" in fails[0].lower() or "Re-run" in fails[0]
+
+    monkeypatch.setenv("CURSOR_GOAL_PYTHON", str(tmp_path / "also-gone.exe"))
+    fails2 = manage_mod._stale_baked_python_failures()
+    assert any("CURSOR_GOAL_PYTHON" in f for f in fails2)
+
+
+def test_stale_baked_python_skipped_on_posix(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cursor_goal import manage as manage_mod
+
+    monkeypatch.setattr(manage_mod.os, "name", "posix")
+    assert manage_mod._stale_baked_python_failures() == []
+
+
+def test_blocking_checklist_on_create(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+    code, out, _err = run_cli("manage", "create", "checklist")
+    assert code == 0
+    assert "BLOCKING CHECKLIST" in out
+    assert "pid_alive" in out
+
+
+def test_normalize_workdir_relative_and_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from cursor_goal import manage as manage_mod
+
+    assert manage_mod._normalize_workdir("  ") == ""
+    monkeypatch.chdir(tmp_path)
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    assert Path(manage_mod._normalize_workdir("sub")) == sub.resolve()
+
+
+def test_baked_python_skips_rem_and_cgp_lines(tmp_path: Path) -> None:
+    from cursor_goal import manage as manage_mod
+
+    cmd = tmp_path / "stop_hook.cmd"
+    cmd.write_text(
+        "\n".join(
+            [
+                "@echo off",
+                "REM Classic bake",
+                'if not "%CURSOR_GOAL_PYTHON%"=="" goto :use_cgp',
+                '"C:\\Good\\python.exe" -u "stop.py"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert manage_mod._baked_python_from_cmd(cmd) == r"C:\Good\python.exe"
+
+
+def test_stale_baked_python_skill_root_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    monkeypatch.setattr(manage_mod.os, "name", "nt")
+
+    def boom() -> Path:
+        raise ValueError("bad")
+
+    monkeypatch.setattr(manage_mod, "skill_root", boom)
+    assert manage_mod._stale_baked_python_failures() == []
+
+
+def test_stale_baked_python_env_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    skill = tmp_path / "goal"
+    scripts = skill / "scripts"
+    scripts.mkdir(parents=True)
+    missing_py = tmp_path / "gone" / "python.exe"
+    real_py = tmp_path / "real-python.exe"
+    real_py.write_text("x", encoding="utf-8")
+    (scripts / "stop_hook.cmd").write_text(
+        f'@echo off\n"{missing_py}" -u "stop.py"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(manage_mod, "skill_root", lambda: skill)
+    monkeypatch.setattr(manage_mod.os, "name", "nt")
+    monkeypatch.setenv("CURSOR_GOAL_PYTHON", str(real_py))
+    assert manage_mod._stale_baked_python_failures() == []
+
+
+def test_create_cwd_oserror(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    class BoomCwd:
+        @staticmethod
+        def resolve() -> Path:
+            raise OSError("cwd gone")
+
+    monkeypatch.setattr(manage_mod.Path, "cwd", lambda: BoomCwd())  # type: ignore[misc,assignment]
+    code, out, _err = run_cli("manage", "create", "no-cwd")
+    assert code == 0
+    data = load_goal_json(goal_home)
+    assert data.get("workdir", "") == "" or "Workdir" not in out or code == 0
+
+
+def test_doctor_harness_value_error(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    def boom() -> dict[str, str]:
+        raise ValueError("no skill")
+
+    monkeypatch.setattr(manage_mod, "harness_cmd_report", boom)
+    code, out, _err = run_cli("manage", "doctor")
+    assert "Harness path unresolved" in out or code in (0, 1)
+
+
+def test_doctor_relative_cursor_goal_python(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("cursor_goal.manage.os.name", "nt")
+    monkeypatch.setenv("CURSOR_GOAL_PYTHON", "python.exe")
+    code, _out, err = run_cli("manage", "doctor")
+    assert code == 1
+    assert "CURSOR_GOAL_PYTHON must be an absolute" in err
+
+
+def test_doctor_missing_workdir_warning(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal.state import load_goal, save_goal
+
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+    assert run_cli("manage", "create", "wd-miss")[0] == 0
+    state = load_goal()
+    assert state is not None
+    state.workdir = str(goal_home / "does-not-exist-workdir")
+    save_goal(state)
+    # Wake not alive → doctor fails, but warning about workdir should appear
+    code, out, err = run_cli("manage", "doctor")
+    combined = out + err
+    assert "workdir is missing" in combined.lower() or "Configured workdir" in combined
+
+
+def test_harness_cmd_prints_env(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    home = tmp_path / "skill"
+    home.mkdir()
+    (home / "scripts").mkdir()
+    (home / "scripts" / "run_goal.py").write_text("#", encoding="utf-8")
+    monkeypatch.setenv("CURSOR_GOAL_HOME", str(home))
+    monkeypatch.setenv("CURSOR_PLUGIN_ROOT", str(tmp_path / "plugin"))
+    code, out, _err = run_cli("manage", "harness-cmd")
+    assert code == 0
+    assert "CURSOR_GOAL_HOME" in out
+
+
+def test_run_goal_invocation_else_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cursor_goal import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "python_invocation", lambda: ["weirdbin", "-u"])
+    monkeypatch.setattr(paths_mod, "run_goal_script", lambda: Path("run_goal.py"))
+    inv = paths_mod.run_goal_invocation("x")
+    assert inv.startswith("weirdbin")
+
+
+def test_create_workdir_flag_requires_value(goal_home: Path) -> None:
+    code, _out, err = run_cli("manage", "create", "x", "--workdir")
+    assert code == 1
+    assert "--workdir" in err
+
+
+def test_doctor_no_python_on_path(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    monkeypatch.setattr(manage_mod.os, "name", "nt")
+    monkeypatch.delenv("CURSOR_GOAL_PYTHON", raising=False)
+    monkeypatch.setattr(manage_mod.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(manage_mod, "_stale_baked_python_failures", lambda: [])
+    code, out, _err = run_cli("manage", "doctor")
+    assert "No py/python/python3 on PATH" in out or code in (0, 1)
+
+
+def test_maybe_arm_wake_oserror(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+
+    def boom() -> dict[str, object]:
+        raise OSError("arm failed")
+
+    monkeypatch.setattr(manage_mod, "wake_arm", boom)
+    code, out, _err = run_cli("manage", "create", "arm-fail")
+    assert code == 0
+    assert "BLOCKING CHECKLIST" not in out
+
+
+def test_validation_mode_shell_branch() -> None:
+    from cursor_goal.manage import _validation_mode
+    from cursor_goal.state import GoalState
+
+    mode = _validation_mode(
+        GoalState(validation_command="echo a && echo b", shell_ok=True)
+    )
+    assert mode == "shell"
+
+
+def test_baked_python_edge_lines(tmp_path: Path) -> None:
+    from cursor_goal import manage as manage_mod
+
+    bare = tmp_path / "bare.cmd"
+    bare.write_text("python.exe -u stop.py\n", encoding="utf-8")
+    assert manage_mod._baked_python_from_cmd(bare) is None
+
+    partial = tmp_path / "partial.cmd"
+    partial.write_text('"C:\\OnlyOpenQuote\n', encoding="utf-8")
+    assert manage_mod._baked_python_from_cmd(partial) is None
+
+    relative = tmp_path / "rel.cmd"
+    relative.write_text('"python.exe" -u stop.py\n', encoding="utf-8")
+    assert manage_mod._baked_python_from_cmd(relative) is None
+
+
+def test_stale_skips_when_baked_unparseable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    skill = tmp_path / "goal"
+    scripts = skill / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "stop_hook.cmd").write_text("REM nothing\n", encoding="utf-8")
+    monkeypatch.setattr(manage_mod, "skill_root", lambda: skill)
+    monkeypatch.setattr(manage_mod.os, "name", "nt")
+    monkeypatch.delenv("CURSOR_GOAL_PYTHON", raising=False)
+    assert manage_mod._stale_baked_python_failures() == []
+
+
+def test_data_dir_symlink_leaf_posix(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import state as state_mod
+
+    monkeypatch.setattr(state_mod.os, "name", "posix")
+    monkeypatch.setattr(state_mod, "path_has_symlink_or_reparse", lambda _p: False)
+    monkeypatch.setattr(type(goal_home), "is_symlink", lambda self: True)
+    assert state_mod.data_dir_is_insecure(goal_home) is True

@@ -60,7 +60,9 @@ def test_stop_continues_when_pursuing(goal_home: Path) -> None:
     assert code == 0
     assert "followup_message" in payload
     assert "[GOAL]" in payload["followup_message"]
-    assert 'fix "quoted" goal' in payload["followup_message"]
+    # Condition text is redacted before emit to Cursor.
+    assert "toward: <redacted>" in payload["followup_message"]
+    assert 'fix "quoted" goal' not in payload["followup_message"]
     assert load_goal_json(goal_home)["turns_used"] == 1
 
 
@@ -69,6 +71,8 @@ def test_stop_budget_limit(goal_home: Path) -> None:
     code, payload = _run_stop({"status": "completed", "loop_count": 0})
     assert code == 0
     assert "BUDGET" in payload["followup_message"]
+    assert "progress toward: <redacted>" in payload["followup_message"]
+    assert "almost done" not in payload["followup_message"]
     data = load_goal_json(goal_home)
     assert data["status"] == "budget-limited"
     assert data["active"] is False
@@ -76,11 +80,13 @@ def test_stop_budget_limit(goal_home: Path) -> None:
 
 def test_stop_with_validation_command_reminds_in_turn(goal_home: Path) -> None:
     """Stop hook must not run validation; only remind the agent."""
-    run_cli("manage", "create", "ok", "--test", "echo hi")
+    run_cli("manage", "create", "secret-condition", "--test", "echo hi")
     response = handle_stop({"status": "completed", "loop_count": 1})
     msg = response["followup_message"]
     assert "Run validation in-turn" in msg
     assert "echo hi" in msg
+    assert "Goal: <redacted>" in msg
+    assert "secret-condition" not in msg
     assert "PASSED" not in msg
     assert "FAILED" not in msg
 

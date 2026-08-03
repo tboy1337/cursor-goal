@@ -356,20 +356,31 @@ def test_create_rejects_long_validation_command(goal_home: Path) -> None:
     assert "validation command exceeds" in err
 
 
-def test_from_dict_rejects_oversized_condition(goal_home: Path) -> None:
+def test_from_dict_clamps_oversized_condition(goal_home: Path) -> None:
     from cursor_goal.state import MAX_FIELD_CHARS, GoalState
 
+    del goal_home
+    state = GoalState.from_dict(
+        {
+            "active": True,
+            "condition": "c" * (MAX_FIELD_CHARS + 50),
+            "validation_command": "v" * (MAX_FIELD_CHARS + 10),
+            "turn_budget": 5,
+            "turns_used": 0,
+            "status": "pursuing",
+            "schema_version": 2,
+        }
+    )
+    assert len(state.condition) == MAX_FIELD_CHARS
+    assert len(state.validation_command) == MAX_FIELD_CHARS
+
+
+def test_update_rejects_oversized_condition(goal_home: Path) -> None:
+    from cursor_goal.state import MAX_FIELD_CHARS, GoalState, save_goal, update_goal_fields
+
+    save_goal(GoalState(condition="ok", created_at="t", status="pursuing"))
     with pytest.raises(ValueError, match="condition exceeds"):
-        GoalState.from_dict(
-            {
-                "active": True,
-                "condition": "c" * (MAX_FIELD_CHARS + 1),
-                "turn_budget": 5,
-                "turns_used": 0,
-                "status": "pursuing",
-                "schema_version": 2,
-            }
-        )
+        update_goal_fields(condition="c" * (MAX_FIELD_CHARS + 1))
 
 
 def test_from_dict_clamps_turns_over_budget(goal_home: Path) -> None:
@@ -891,6 +902,16 @@ def test_data_dir_is_insecure_stat_oserror(
     from cursor_goal import state as state_mod
 
     class Fake:
+        def expanduser(self) -> Fake:
+            return self
+
+        def is_absolute(self) -> bool:
+            return True
+
+        @property
+        def parent(self) -> Fake:
+            return self
+
         def is_symlink(self) -> bool:
             return False
 
@@ -1115,10 +1136,12 @@ def test_doctor_cursor_goal_python_absolute(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("cursor_goal.manage.os.name", "nt")
-    monkeypatch.setenv("CURSOR_GOAL_PYTHON", r"C:\Python\python.exe")
+    # Must be an existing absolute interpreter (doctor verifies the file exists).
+    monkeypatch.setenv("CURSOR_GOAL_PYTHON", sys.executable)
     code, out, _err = run_cli("manage", "doctor")
     assert code == 0
     assert "CURSOR_GOAL_PYTHON" in out
+    assert sys.executable in out
 
 
 def test_doctor_cursor_goal_python_relative_fails(

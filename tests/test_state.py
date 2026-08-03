@@ -138,9 +138,10 @@ def test_load_goal_corrupt_numeric_fields(goal_home: Path) -> None:
 def test_save_goal_writes_schema_version(goal_home: Path) -> None:
     save_goal(GoalState(condition="c", created_at="t", status="pursuing"))
     raw = json.loads((goal_home / "goal.json").read_text(encoding="utf-8"))
-    assert raw["schema_version"] == 3
+    assert raw["schema_version"] == 4
     assert raw["wake_budget"] == 200
-    assert raw["shell_ok"] is True
+    assert raw["shell_ok"] is False
+    assert raw.get("workdir", "") == ""
 
 
 def test_from_dict_migrates_v2_wake_budget(goal_home: Path) -> None:
@@ -157,9 +158,32 @@ def test_from_dict_migrates_v2_wake_budget(goal_home: Path) -> None:
         }
     )
     assert state.wake_budget == 200
+    # Old goals without shell_ok key still migrate to True.
     assert state.shell_ok is True
     assert state.wake_ticks == 5
     assert state.status == "pursuing"
+    assert state.workdir == ""
+
+
+def test_from_dict_accepts_schema_version_4(goal_home: Path) -> None:
+    del goal_home
+    state = GoalState.from_dict(
+        {
+            "condition": "v4",
+            "turn_budget": 10,
+            "turns_used": 0,
+            "wake_ticks": 0,
+            "wake_budget": 100,
+            "shell_ok": False,
+            "workdir": "/tmp/work",
+            "schema_version": 4,
+            "status": "pursuing",
+            "active": True,
+        }
+    )
+    assert state.schema_version == 4
+    assert state.shell_ok is False
+    assert state.workdir == "/tmp/work"
 
 
 def test_load_goal_rejects_unknown_schema(goal_home: Path) -> None:
@@ -520,6 +544,16 @@ def test_data_dir_is_insecure_symlink_path(
     from cursor_goal import state as state_mod
 
     class Fake:
+        def expanduser(self) -> Fake:
+            return self
+
+        def is_absolute(self) -> bool:
+            return True
+
+        @property
+        def parent(self) -> Fake:
+            return self
+
         def is_symlink(self) -> bool:
             return True
 
@@ -528,6 +562,158 @@ def test_data_dir_is_insecure_symlink_path(
 
     monkeypatch.setattr(state_mod.os, "name", "posix")
     assert state_mod.data_dir_is_insecure(Fake()) is True  # type: ignore[arg-type]
+
+
+def test_real_symlink_data_dir_is_insecure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CURSOR_GOAL_DATA pointing at a symlink must be treated as insecure."""
+    from cursor_goal import state as state_mod
+
+    target = tmp_path / "real-data"
+    target.mkdir()
+    link = tmp_path / "link-data"
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"Cannot create symlinks without elevated privileges: {exc}")
+
+    assert state_mod.path_has_symlink_or_reparse(link) is True
+    monkeypatch.setenv("CURSOR_GOAL_DATA", str(link))
+    assert state_mod.data_dir_is_insecure() is True
+    assert state_mod.path_has_symlink_or_reparse(
+        state_mod.configured_data_dir_path()
+    ) is True
+
+
+def test_path_has_symlink_or_reparse_mocked(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from cursor_goal import state as state_mod
+
+    normal = tmp_path / "normal-data"
+    normal.mkdir()
+    assert state_mod.path_has_symlink_or_reparse(normal) is False
+
+    monkeypatch.setattr(state_mod, "_windows_path_is_reparse_point", lambda _p: True)
+    monkeypatch.setattr(state_mod.os, "name", "nt")
+    assert state_mod.path_has_symlink_or_reparse(normal) is True
+
+
+def test_data_dir_refuses_mkdir_through_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import state as state_mod
+
+    linkish = tmp_path / "linkish"
+    monkeypatch.setenv("CURSOR_GOAL_DATA", str(linkish))
+    monkeypatch.setattr(state_mod, "path_has_symlink_or_reparse", lambda _p: True)
+    result = state_mod.data_dir(check_writable=False)
+    assert not linkish.exists()
+    assert "linkish" in str(result)
+
+
+def test_from_dict_clamps_oversized_condition() -> None:
+    from cursor_goal.state import MAX_FIELD_CHARS, GoalState
+
+    state = GoalState.from_dict(
+        {
+            "active": True,
+            "condition": "c" * (MAX_FIELD_CHARS + 50),
+            "validation_command": "v" * (MAX_FIELD_CHARS + 10),
+            "turn_budget": 5,
+            "turns_used": 0,
+            "status": "pursuing",
+            "schema_version": 4,
+            "workdir": "w" * (MAX_FIELD_CHARS + 5),
+        }
+    )
+    assert len(state.condition) == MAX_FIELD_CHARS
+    assert len(state.validation_command) == MAX_FIELD_CHARS
+    assert len(state.workdir) == MAX_FIELD_CHARS
+
+
+def test_workdir_field_setter() -> None:
+    from cursor_goal.state import GoalState, _apply_field
+
+    state = GoalState()
+    _apply_field(state, "workdir", "/tmp/project")
+    assert state.workdir == "/tmp/project"
+    _apply_field(state, "workdir", None)
+    assert state.workdir == ""
+
+
+def test_data_dir_is_insecure_none_with_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import state as state_mod
+
+    monkeypatch.setenv("CURSOR_GOAL_DATA", str(tmp_path / "cfg"))
+    monkeypatch.setattr(state_mod, "path_has_symlink_or_reparse", lambda _p: True)
+    assert state_mod.data_dir_is_insecure() is True
+    msg = state_mod.refuse_if_data_dir_insecure()
+    assert msg is not None
+    assert "insecure" in msg
+
+
+def test_data_dir_is_insecure_race_recheck(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import state as state_mod
+
+    data = tmp_path / "data"
+    data.mkdir()
+    monkeypatch.setenv("CURSOR_GOAL_DATA", str(data))
+    calls = {"n": 0}
+
+    def flaky(_p: Path) -> bool:
+        calls["n"] += 1
+        return calls["n"] >= 2
+
+    monkeypatch.setattr(state_mod, "path_has_symlink_or_reparse", flaky)
+    assert state_mod.data_dir_is_insecure() is True
+
+
+def test_data_dir_is_insecure_windows_reparse_target(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import state as state_mod
+
+    monkeypatch.setattr(state_mod.os, "name", "nt")
+    monkeypatch.setattr(state_mod, "path_has_symlink_or_reparse", lambda _p: False)
+    monkeypatch.setattr(state_mod, "_windows_path_is_reparse_point", lambda _p: True)
+    assert state_mod.data_dir_is_insecure(goal_home) is True
+
+
+def test_refuse_if_data_dir_insecure_nt_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import state as state_mod
+
+    monkeypatch.setattr(state_mod, "data_dir_is_insecure", lambda: True)
+    monkeypatch.setattr(state_mod.os, "name", "nt")
+    monkeypatch.setenv("CURSOR_GOAL_DATA", str(tmp_path / "d"))
+    msg = state_mod.refuse_if_data_dir_insecure()
+    assert msg is not None
+    assert "junction" in msg or "reparse" in msg
+
+
+def test_refuse_if_data_dir_insecure_posix_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import state as state_mod
+
+    monkeypatch.setattr(state_mod, "data_dir_is_insecure", lambda: True)
+    monkeypatch.setattr(state_mod.os, "name", "posix")
+    monkeypatch.setattr(
+        state_mod, "configured_data_dir_path", lambda: tmp_path / "d"
+    )
+    monkeypatch.setattr(
+        state_mod, "_absolute_without_resolve", lambda p: tmp_path / "d"
+    )
+    msg = state_mod.refuse_if_data_dir_insecure()
+    assert msg is not None
+    assert "chmod" in msg or "world-writable" in msg
 
 
 def test_data_dir_is_insecure_mode_bits(

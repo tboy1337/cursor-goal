@@ -520,7 +520,7 @@ def test_wake_ticks_do_not_consume_turn_budget(wake_on: Path) -> None:
     assert data["status"] == "pursuing"
     assert data["wake_budget"] == 10
     assert data["turn_budget"] == 2
-    assert data["schema_version"] == 3
+    assert data["schema_version"] == 4
 
 
 def test_force_create_disarms_prior_wake(

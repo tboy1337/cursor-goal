@@ -61,7 +61,15 @@ def run_goal_script() -> Path:
 
 
 def python_invocation() -> list[str]:
-    """Preferred interpreter argv prefix for Shell commands."""
+    """Preferred interpreter argv prefix for Shell commands.
+
+    Prefers the running interpreter (``sys.executable -u``) when it reports
+    Python 3.12+, so classic installs match the baked stop/wake launcher.
+    Falls back to ``py -3`` (Windows) or ``python3`` (Unix).
+    """
+    exe = (sys.executable or "").strip()
+    if exe and sys.version_info >= (3, 12):
+        return [exe, "-u"]
     if os.name == "nt":
         return ["py", "-3", "-u"]
     return ["python3", "-u"]
@@ -71,7 +79,7 @@ def quote_for_shell(path: Path) -> str:
     """Quote *path* for the current platform's typical agent shell."""
     text = str(path)
     if os.name == "nt":
-        # PowerShell-friendly double quotes; escape embedded quotes.
+        # PowerShell-friendly single quotes; escape embedded quotes.
         escaped = text.replace("'", "''")
         return f"'{escaped}'"
     return shlex.quote(text)
@@ -82,10 +90,19 @@ def run_goal_invocation(*args: str) -> str:
     script = run_goal_script()
     py = python_invocation()
     quoted_script = quote_for_shell(script)
-    parts = [*py, quoted_script, *args]
-    if os.name == "nt":
-        # py/python tokens stay unquoted; paths quoted above.
-        return " ".join(parts)
+    # Quote absolute interpreter paths; leave bare launcher names unquoted.
+    quoted_py: list[str] = []
+    unbuffered = "-u"  # nosec B105 — Python -u flag, not a password
+    for token in py:
+        if token == unbuffered or token in {"py", "-3", "python3", "python"}:
+            quoted_py.append(token)
+        elif os.name == "nt" and (":" in token or "\\" in token or "/" in token):
+            quoted_py.append(quote_for_shell(Path(token)))
+        elif token.startswith("/") or token.startswith("~"):
+            quoted_py.append(quote_for_shell(Path(token)))
+        else:
+            quoted_py.append(token)
+    parts = [*quoted_py, quoted_script, *args]
     return " ".join(parts)
 
 

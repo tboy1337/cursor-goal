@@ -274,6 +274,41 @@ def test_eval_validate_nonzero(goal_home: Path) -> None:
     assert state.last_validation_exit_code == 3
 
 
+def test_eval_validate_uses_workdir(goal_home: Path, tmp_path: Path) -> None:
+    work = tmp_path / "proj"
+    work.mkdir()
+    marker = work / "marker.txt"
+    # Write a small script that fails unless cwd has marker.txt
+    script = work / "check_cwd.py"
+    script.write_text(
+        "from pathlib import Path\n"
+        "import sys\n"
+        "sys.exit(0 if Path('marker.txt').is_file() else 2)\n",
+        encoding="utf-8",
+    )
+    marker.write_text("ok", encoding="utf-8")
+    cmd = f"{sys.executable} check_cwd.py"
+    run_cli("manage", "create", "wd", "--test", cmd, "--workdir", str(work))
+    code, _out, _err = run_cli("eval", "validate")
+    assert code == 0
+
+
+def test_eval_validate_missing_workdir_falls_back(
+    goal_home: Path, tmp_path: Path
+) -> None:
+    from cursor_goal.state import GoalState, save_goal
+
+    missing = tmp_path / "gone-workdir"
+    cmd = f'{sys.executable} -c "raise SystemExit(0)"'
+    run_cli("manage", "create", "g", "--test", cmd)
+    state = load_goal()
+    assert state is not None
+    state.workdir = str(missing)
+    save_goal(state)
+    code, _out, _err = run_cli("eval", "validate")
+    assert code == 0
+
+
 def test_eval_prompt_failed_exit_note(goal_home: Path) -> None:
     state = GoalState(
         active=True,

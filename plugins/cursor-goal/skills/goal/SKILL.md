@@ -54,7 +54,9 @@ If the package is installed editable (`pip install -e .`), `python -m cursor_goa
 
 State file: `~/.cursor-goal/data/goal.json` (override with `CURSOR_GOAL_DATA`).
 
-`validation_command` is trusted-user local state (executed by `eval validate` / agent Shell). Prefer `--test "..."` for compound commands. Treat `~/.cursor-goal/data` as shell-equivalent trust. Set `CURSOR_GOAL_DENY_SHELL=1` to refuse shell-mode validation.
+`validation_command` is trusted-user local state (executed by `eval validate` / agent Shell). Prefer `--test "..."` for compound commands. New goals default to `shell_ok=false`; pass `--allow-shell` when shell mode is required. Treat `~/.cursor-goal/data` as shell-equivalent trust. Set `CURSOR_GOAL_DENY_SHELL=1` to refuse shell-mode validation globally.
+
+Do **not** put production secrets in goal conditions — stop followups redact condition text after `Goal:` / `toward:` markers, but redaction is heuristic.
 
 ## Setting a Goal
 
@@ -87,9 +89,9 @@ or a subcommand:
 Then:
 
 - If `action` is `status|pause|resume|clear` → `manage <action>`
-- If `action` is `create` → `manage create "<condition>" [--test "<cmd>"] [--budget N]`
+- If `action` is `create` → `manage create "<condition>" [--test "<cmd>"] [--budget N] [--workdir <path>] [--allow-shell]`
 
-After **every** `create` or `resume`, complete the **Wake Watchdog blocking checklist** below (start `wake loop` + verify `pid_alive`) **before** other work. Then start working toward the condition.
+After **every** `create` or `resume`, complete the **Wake Watchdog blocking checklist** below (start `wake loop` + verify `pid_alive`) **before** other work. **Do not skip.** If `wake status` shows `pid_alive=false` while pursuing, refuse further goal work until the loop is alive. Then start working toward the condition.
 
 ## Command Reference
 
@@ -224,9 +226,9 @@ Default turn budget is 20 (max 500). Customize with `--budget N` or natural lang
 | Validation refused (shell) | `--deny-shell` or `CURSOR_GOAL_DENY_SHELL` | Use argv-safe `--test` or allow shell |
 | Doctor FAIL insecure data dir | World-writable `CURSOR_GOAL_DATA` | `chmod 700` / private path |
 
-Prefer argv-safe `--test` commands. Shell mode is allowed by default but reported in `manage status` / `doctor`. Use `--deny-shell` for argv-only goals.
+Prefer argv-safe `--test` commands. New goals default to deny-shell (`shell_ok=false`); use `--allow-shell` only when needed. Shell mode is reported in `manage status` / `doctor`. Use `--deny-shell` or `CURSOR_GOAL_DENY_SHELL=1` to force argv-only.
 
-Run `manage doctor` after install or when diagnosing stalls.
+Run `manage doctor` after install or when diagnosing stalls. Installers exit non-zero when doctor hard-fails.
 ## Writing Good Conditions
 
 ```

@@ -178,6 +178,27 @@ def test_scrubbed_validation_env_drops_secrets() -> None:
     assert "PYTHONHOME" not in scrubbed
 
 
+def test_scrubbed_validation_env_keeps_appdata_and_toolchain() -> None:
+    from cursor_goal.validation import scrubbed_validation_env
+
+    source = {
+        "PATH": "C:\\Windows\\System32",
+        "APPDATA": "C:\\Users\\tboy1337\\AppData\\Roaming",
+        "LOCALAPPDATA": "C:\\Users\\tboy1337\\AppData\\Local",
+        "CARGO_HOME": "C:\\Users\\tboy1337\\.cargo",
+        "RUSTUP_HOME": "C:\\Users\\tboy1337\\.rustup",
+        "GOPATH": "C:\\Users\\tboy1337\\go",
+        "OPENAI_API_KEY": "sk-secret",
+    }
+    scrubbed = scrubbed_validation_env(source)
+    assert scrubbed["APPDATA"] == source["APPDATA"]
+    assert scrubbed["LOCALAPPDATA"] == source["LOCALAPPDATA"]
+    assert scrubbed["CARGO_HOME"] == source["CARGO_HOME"]
+    assert scrubbed["RUSTUP_HOME"] == source["RUSTUP_HOME"]
+    assert scrubbed["GOPATH"] == source["GOPATH"]
+    assert "OPENAI_API_KEY" not in scrubbed
+
+
 def test_redact_secrets_preserves_longer_output() -> None:
     from cursor_goal.validation import redact_secrets
 

@@ -240,12 +240,19 @@ print_summary() {
   echo "  $(shell_quote "$PYTHON_BIN") -u $(shell_quote "$INSTALL_DIR/scripts/run_goal.py") manage status"
   echo ""
   echo "Running manage doctor..."
-  "$PYTHON_BIN" -u "$INSTALL_DIR/scripts/run_goal.py" manage doctor || true
+  if ! "$PYTHON_BIN" -u "$INSTALL_DIR/scripts/run_goal.py" manage doctor; then
+    echo ""
+    echo -e "${RED}manage doctor FAILED — install files were written, but the harness is not healthy.${NC}"
+    echo "Fix the FAIL lines above, then re-run:"
+    echo "  $(shell_quote "$PYTHON_BIN") -u $(shell_quote "$INSTALL_DIR/scripts/run_goal.py") manage doctor"
+    exit 1
+  fi
   echo ""
   echo "Next steps:"
   echo "  1) In Cursor: /goal <verifiable condition>"
   echo "  2) Start wake loop with notify_on_output matching ^AGENT_GOAL_WAKE"
-  echo "  3) If Hooks UI shows {} but last-stop-response.json has followup_message, rely on wake"
+  echo "  3) Confirm wake status shows pid_alive=true before other work"
+  echo "  4) If Hooks UI shows {} but last-stop-response.json has followup_message, rely on wake"
   echo ""
   echo "Usage in Cursor agent:"
   echo "  /goal all tests pass and lint is clean"
@@ -253,7 +260,8 @@ print_summary() {
   echo ""
   echo "Note: Prefer in-turn evaluation; the stop hook is a safety net."
   echo "On Windows, use install-goal.ps1 (stop_hook.cmd + drain delay)."
-  echo "Shared machine tip: set CURSOR_GOAL_DENY_SHELL=1 (or create with --deny-shell)."
+  echo "Shell validation is off by default; pass --allow-shell only when needed."
+  echo "Shared machine tip: keep default deny-shell, or set CURSOR_GOAL_DENY_SHELL=1."
   echo ""
 }
 

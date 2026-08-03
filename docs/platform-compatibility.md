@@ -72,7 +72,7 @@ Some Cursor plans only accept Task `model: "fast"`; specific model IDs work when
 | `…/run_goal.py stop` / `stop_hook.py` | Cursor stop hook stdin/stdout JSON |
 | `…/run_goal.py wake …` | Wake watchdog (`arm`/`tick`/`disarm`/`status`/`loop`) |
 
-State: `~/.cursor-goal/data/goal.json` (or `CURSOR_GOAL_DATA`). Treat that directory as **trusted-user state** — equivalent to shell trust. Create/validate refuse a group/world-writable data dir on Unix. `validation_command` may be executed by `eval validate` (prefers argv; falls back to `shell=True` / `COMSPEC` on Windows for metacharacters unless `CURSOR_GOAL_DENY_SHELL` is set or the goal has `shell_ok=false`). Unix uses `0700` on the data dir and `0600` on state files. Windows best-effort `icacls` strips inheritance then grants the current user full control on the data dir (skip with `CURSOR_GOAL_SKIP_ACL=1`; loud warning if grant fails after strip). Corrupt `goal.json` is quarantined to `goal.json.corrupt.<UTC>`. Exclusive `goal.lock` times out after ~10s on both Unix and Windows. Stop emits always write `last-stop-response.json`.
+State: `~/.cursor-goal/data/goal.json` (or `CURSOR_GOAL_DATA`). Treat that directory as **trusted-user state** — equivalent to shell trust. Create/validate refuse a group/world-writable data dir on Unix. `validation_command` may be executed by `eval validate` (prefers argv; falls back to `shell=True` / `COMSPEC` on Windows for metacharacters only when the goal has `shell_ok=true` via `--allow-shell` and `CURSOR_GOAL_DENY_SHELL` is unset — new goals default to `shell_ok=false`). Optional `workdir` (schema v4) binds validation cwd. Unix uses `0700` on the data dir and `0600` on state files. Windows best-effort `icacls` strips inheritance then grants the current user full control on the data dir (skip with `CURSOR_GOAL_SKIP_ACL=1`; loud warning if grant fails after strip). Corrupt `goal.json` is quarantined to `goal.json.corrupt.<UTC>`. Exclusive `goal.lock` times out after ~10s on both Unix and Windows. Stop emits always write `last-stop-response.json`.
 
 ## Subagent Invocation Pattern
 
@@ -93,7 +93,7 @@ On Windows, pipe the response into `eval parse-result --stdin` (or use `@file`) 
 ## Security notes
 
 - `~/.cursor-goal/data` and `validation_command` are trusted-user local state. If an attacker can write `goal.json`, they can run commands as you.
-- Prefer `--test "..."` / simple argv-safe commands; compound shell snippets force `shell=True` (cmd.exe on Windows via `COMSPEC`, not PowerShell). Set `CURSOR_GOAL_DENY_SHELL=1` or create with `--deny-shell` to refuse shell mode.
+- Prefer `--test "..."` / simple argv-safe commands; compound shell snippets need `--allow-shell` (cmd.exe on Windows via `COMSPEC`, not PowerShell). New goals default to deny-shell; `CURSOR_GOAL_DENY_SHELL=1` / `--deny-shell` still force argv-only.
 - `eval parse-result @file` only accepts paths under the goal data directory or the current working directory.
 - Eval signal is a protocol guard bound to the goal content hash with `verdict: YES` — not cryptographic attestation. `manage done --force` and `eval signal --force` exist for recovery and are logged.
 - Stop hook does **not** run validation (avoids 30s hook timeouts).

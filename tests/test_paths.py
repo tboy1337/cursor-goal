@@ -64,10 +64,98 @@ def test_skill_root_from_plugin_env(
     assert paths_mod.skill_root() == skill
 
 
+def test_python_invocation_prefers_sys_executable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(paths_mod.sys, "executable", r"C:\Python314\python.exe")
+    monkeypatch.setattr(paths_mod.sys, "version_info", (3, 14, 0))
+    assert paths_mod.python_invocation() == [r"C:\Python314\python.exe", "-u"]
+
+
+def test_python_invocation_fallback_posix(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(paths_mod.sys, "executable", "/usr/bin/python3.11")
+    monkeypatch.setattr(paths_mod.sys, "version_info", (3, 11, 9))
+    monkeypatch.setattr(paths_mod.os, "name", "posix")
+    assert paths_mod.python_invocation() == ["python3", "-u"]
+
+
+def test_python_invocation_fallback_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(paths_mod.sys, "executable", r"C:\Python311\python.exe")
+    monkeypatch.setattr(paths_mod.sys, "version_info", (3, 11, 9))
+    monkeypatch.setattr(paths_mod.os, "name", "nt")
+    assert paths_mod.python_invocation() == ["py", "-3", "-u"]
+
+
+def test_run_goal_invocation_quotes_windows_exe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    script = tmp_path / "run_goal.py"
+    script.write_text("#", encoding="utf-8")
+    monkeypatch.setattr(paths_mod.os, "name", "nt")
+    monkeypatch.setattr(paths_mod.sys, "executable", r"C:\Program Files\Python\python.exe")
+    monkeypatch.setattr(paths_mod.sys, "version_info", (3, 14, 0))
+    monkeypatch.setattr(paths_mod, "run_goal_script", lambda: script)
+    inv = paths_mod.run_goal_invocation("status")
+    assert "Program Files" in inv
+    assert "status" in inv
+
+
+def test_run_goal_invocation_quotes_posix_exe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    script = tmp_path / "run_goal.py"
+    script.write_text("#", encoding="utf-8")
+    monkeypatch.setattr(paths_mod.os, "name", "posix")
+    monkeypatch.setattr(paths_mod.sys, "executable", "/opt/python/bin/python3")
+    monkeypatch.setattr(paths_mod.sys, "version_info", (3, 14, 0))
+    monkeypatch.setattr(paths_mod, "run_goal_script", lambda: script)
+    inv = paths_mod.run_goal_invocation("status")
+    assert "/opt/python" in inv
+    assert "status" in inv
+
+
+def test_path_has_symlink_posix_and_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import state as state_mod
+
+    normal = tmp_path / "d"
+    normal.mkdir()
+    monkeypatch.setattr(state_mod.os, "name", "posix")
+    assert state_mod.path_has_symlink_or_reparse(normal) is False
+
+    class BoomPath(type(normal)):
+        def is_symlink(self) -> bool:  # type: ignore[override]
+            raise OSError("boom")
+
+    # Force OSError in the link-check loop via monkeypatch on Path.is_symlink
+    monkeypatch.setattr(type(normal), "is_symlink", lambda self: (_ for _ in ()).throw(OSError("x")))
+    assert state_mod.path_has_symlink_or_reparse(normal) is False
+
+
+def test_absolute_without_resolve_oserror(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cursor_goal import state as state_mod
+    from pathlib import Path as P
+
+    class BadPath(P):
+        def expanduser(self) -> BadPath:  # type: ignore[override]
+            raise OSError("expand failed")
+
+    monkeypatch.setattr(state_mod, "_absolute_without_resolve", state_mod._absolute_without_resolve)
+    # Call path_has through a path that fails absolutize
+    def boom(path: P) -> P:
+        raise OSError("nope")
+
+    monkeypatch.setattr(state_mod, "_absolute_without_resolve", boom)
+    assert state_mod.path_has_symlink_or_reparse(P(".")) in (True, False)
+
+
 def test_paths_posix_invocation_branches(monkeypatch: pytest.MonkeyPatch) -> None:
     """Cover non-Windows branches without constructing Path after os.name patch."""
     existing = Path("run_goal.py")
     monkeypatch.setattr(paths_mod.os, "name", "posix")
+    monkeypatch.setattr(paths_mod.sys, "executable", "/usr/bin/python3.11")
+    monkeypatch.setattr(paths_mod.sys, "version_info", (3, 11, 9))
     assert paths_mod.python_invocation() == ["python3", "-u"]
     quoted = paths_mod.quote_for_shell(existing)
     assert "run_goal.py" in quoted

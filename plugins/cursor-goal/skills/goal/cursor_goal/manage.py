@@ -12,6 +12,7 @@ from pathlib import Path
 from cursor_goal.logging_config import get_logger
 from cursor_goal.paths import (
     harness_cmd_report,
+    skill_root,
     wake_loop_invocation,
 )
 from cursor_goal.state import (
@@ -56,6 +57,7 @@ class _CreateArgs:
     budget: int
     wake_budget: int | None
     shell_ok: bool
+    workdir: str
     force: bool
 
 
@@ -71,6 +73,21 @@ def _parse_budget(raw: str, *, label: str = "Budget") -> int:
     return value
 
 
+def _normalize_workdir(raw: str) -> str:
+    """Expand and validate workdir; return absolute path string or raise ValueError."""
+    text = raw.strip()
+    if not text:
+        return ""
+    path = Path(text).expanduser()
+    if not path.is_absolute():
+        path = (Path.cwd() / path).resolve()
+    else:
+        path = path.resolve()
+    if not path.is_dir():
+        raise ValueError(f"workdir is not a directory: {path}")
+    return str(path)
+
+
 # pylint: disable-next=too-many-branches
 def _parse_create_argv(argv: list[str]) -> _CreateArgs:
     """Parse create CLI flags into a typed args object."""
@@ -78,7 +95,8 @@ def _parse_create_argv(argv: list[str]) -> _CreateArgs:
     test_cmd = ""
     budget = 20
     wake_budget: int | None = None
-    shell_ok = True
+    shell_ok = False
+    workdir = ""
     force = False
 
     args = list(argv)
@@ -103,8 +121,16 @@ def _parse_create_argv(argv: list[str]) -> _CreateArgs:
                 raise ValueError("--wake-budget requires a value")
             wake_budget = _parse_budget(args[i + 1], label="Wake budget")
             i += 2
+        elif arg == "--workdir":
+            if i + 1 >= len(args):
+                raise ValueError("--workdir requires a value")
+            workdir = args[i + 1]
+            i += 2
         elif arg == "--deny-shell":
             shell_ok = False
+            i += 1
+        elif arg == "--allow-shell":
+            shell_ok = True
             i += 1
         elif arg == "--force":
             force = True
@@ -118,6 +144,7 @@ def _parse_create_argv(argv: list[str]) -> _CreateArgs:
         budget=budget,
         wake_budget=wake_budget,
         shell_ok=shell_ok,
+        workdir=workdir,
         force=force,
     )
 
@@ -139,6 +166,11 @@ def _validate_create(args: _CreateArgs) -> str | None:
             f"[goal] Error: validation command exceeds {MAX_FIELD_CHARS} "
             f"character limit ({len(args.test_cmd)} chars)"
         )
+    if args.workdir:
+        try:
+            _normalize_workdir(args.workdir)
+        except ValueError as exc:
+            return f"[goal] Error: {exc}"
     insecure = refuse_if_data_dir_insecure()
     if insecure is not None:
         return insecure
@@ -171,7 +203,7 @@ def _validation_mode(state: GoalState) -> str:
     return "argv"
 
 
-def cmd_create(argv: list[str]) -> int:
+def cmd_create(argv: list[str]) -> int:  # pylint: disable=too-many-branches
     try:
         args = _parse_create_argv(argv)
     except ValueError as exc:
@@ -189,6 +221,15 @@ def cmd_create(argv: list[str]) -> int:
         if args.wake_budget is not None
         else default_wake_budget(turn_budget)
     )
+    workdir = ""
+    if args.workdir:
+        workdir = _normalize_workdir(args.workdir)
+    else:
+        try:
+            workdir = str(Path.cwd().resolve())
+        except OSError as exc:
+            logger.debug("Could not capture create cwd as workdir: %s", exc)
+            workdir = ""
     state = GoalState(
         active=True,
         condition=args.condition,
@@ -199,6 +240,7 @@ def cmd_create(argv: list[str]) -> int:
         wake_ticks=0,
         wake_budget=wake_budget,
         shell_ok=args.shell_ok,
+        workdir=workdir,
         status="pursuing",
         last_reason="",
         last_validation_output="",
@@ -225,11 +267,13 @@ def cmd_create(argv: list[str]) -> int:
         return 1
 
     logger.info(
-        "Created goal condition=%r budget=%s wake_budget=%s shell_ok=%s validation=%r",
+        "Created goal condition=%r budget=%s wake_budget=%s shell_ok=%s "
+        "workdir=%r validation=%r",
         args.condition,
         turn_budget,
         wake_budget,
         args.shell_ok,
+        workdir,
         redact_command(args.test_cmd) if args.test_cmd else "",
     )
 
@@ -242,8 +286,16 @@ def cmd_create(argv: list[str]) -> int:
         if mode == "shell":
             print(
                 "  Warning: shell-mode validation (trusted-user goal.json). "
-                "Prefer argv-safe commands or pass --deny-shell."
+                "Prefer argv-safe commands; shell was explicitly enabled "
+                "with --allow-shell."
             )
+        elif mode == "denied":
+            print(
+                "  Warning: validation requires shell metacharacters but "
+                "shell_ok=false. Pass --allow-shell or use an argv-safe --test."
+            )
+    if workdir:
+        print(f"  Workdir: {workdir}")
     print(f"  Budget: {turn_budget} turns")
     print(f"  Wake budget: {wake_budget} ticks")
     print(f"  Shell ok: {str(args.shell_ok).lower()}")
@@ -285,6 +337,8 @@ def cmd_status(_argv: list[str]) -> int:
     print(f"  Shell ok: {str(state.shell_ok).lower()}")
     mode = _validation_mode(state)
     print(f"  Validation mode: {mode}")
+    if state.workdir:
+        print(f"  Workdir: {state.workdir}")
     if state.validation_command:
         print(f"  Validation: {redact_command(state.validation_command)}")
         if state.last_validation_exit_code is not None:
@@ -625,6 +679,8 @@ def cmd_doctor(_argv: list[str]) -> int:
         else:
             print(f"  PATH Python: {py}")
 
+    hard_fails.extend(_stale_baked_python_failures())
+
     try:
         state = snapshot_goal(raise_corrupt=True)
     except CorruptGoalError as exc:
@@ -646,19 +702,26 @@ def cmd_doctor(_argv: list[str]) -> int:
         if mode == "shell":
             warnings.append(
                 "Shell-mode validation active (trusted-user). "
-                "Prefer argv or CURSOR_GOAL_DENY_SHELL=1 / --deny-shell."
+                "Prefer argv-safe --test; shell requires --allow-shell "
+                "(or unset CURSOR_GOAL_DENY_SHELL)."
             )
+        if state.workdir:
+            print(f"  Workdir: {state.workdir}")
+            workdir_path = Path(state.workdir)
+            if not workdir_path.is_dir():
+                warnings.append(f"Configured workdir is missing: {state.workdir}")
         if not wake_info.get("armed"):
             hard_fails.append(
-                "Wake not armed while pursuing — start background Shell: "
+                "Wake not armed while pursuing — BLOCKING: start background Shell: "
                 f"`{_wake_loop_shell_hint()}` with notify_on_output "
-                "matching ^AGENT_GOAL_WAKE (required for automatic continuation)"
+                "matching ^AGENT_GOAL_WAKE, then confirm wake status pid_alive=true "
+                "before other work"
             )
         elif not wake_info.get("pid_alive"):
             hard_fails.append(
-                "Wake armed but loop not alive — start: "
+                "Wake armed but loop not alive — BLOCKING: start: "
                 f"`{_wake_loop_shell_hint()}` with notify_on_output "
-                "matching ^AGENT_GOAL_WAKE"
+                "matching ^AGENT_GOAL_WAKE, then confirm pid_alive=true"
             )
     elif state is None:
         print("  Goal: none")
@@ -743,6 +806,81 @@ def _maybe_arm_wake() -> None:
         f"notify_on_output matching {config['notify_pattern']}:"
     )
     print(f"  {hint}")
+    print(
+        "[goal] BLOCKING CHECKLIST — do not start other goal work until all pass:"
+    )
+    print(f"  1) Background Shell: {hint}")
+    print(
+        f"     with notify_on_output matching {config['notify_pattern']}"
+    )
+    print(
+        "  2) Run `wake status` and confirm pid_alive=true (and armed=true)"
+    )
+    print("  3) Only then continue working toward the condition")
+
+
+def _baked_python_from_cmd(path: Path) -> str | None:  # pylint: disable=too-many-nested-blocks
+    """Extract the absolute Python path baked into a classic .cmd launcher."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    # Prefer CURSOR_GOAL_PYTHON override lines if present in marketplace-style cmds.
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("REM") or stripped.startswith("::"):
+            continue
+        lower = stripped.lower()
+        if "cursor_goal_python" in lower:
+            continue
+        # Match: "C:\...\python.exe" ... -u "..."
+        if ".exe" in lower or "python" in lower:
+            # Quoted absolute path as first token
+            if stripped.startswith('"'):
+                end = stripped.find('"', 1)
+                if end > 1:
+                    candidate = stripped[1:end]
+                    if Path(candidate).is_absolute() or (
+                        len(candidate) >= 3 and candidate[1] == ":"
+                    ):
+                        return candidate
+    return None
+
+
+def _stale_baked_python_failures() -> list[str]:
+    """Hard-fail when classic stop/wake .cmd bake a missing interpreter."""
+    if os.name != "nt":
+        return []
+    fails: list[str] = []
+    try:
+        root = skill_root()
+    except ValueError:
+        return fails
+    for rel in (
+        Path("scripts") / "stop_hook.cmd",
+        Path("scripts") / "wake_loop.cmd",
+    ):
+        cmd_path = root / rel
+        if not cmd_path.is_file():
+            continue
+        baked = _baked_python_from_cmd(cmd_path)
+        if not baked:
+            continue
+        env_py = (os.environ.get("CURSOR_GOAL_PYTHON") or "").strip()
+        if env_py and _is_absolute_interpreter_path(env_py):
+            # Marketplace/override path takes precedence — verify that instead.
+            if not Path(env_py).is_file():
+                fails.append(
+                    f"CURSOR_GOAL_PYTHON does not exist ({env_py}). "
+                    "Fix the path or re-run the installer."
+                )
+            continue
+        if not Path(baked).is_file():
+            fails.append(
+                f"Baked Python in {cmd_path.name} is missing ({baked}). "
+                "Re-run install-goal.ps1 after upgrading/moving Python."
+            )
+    return fails
 
 
 def cmd_harness_cmd(_argv: list[str]) -> int:
@@ -793,7 +931,8 @@ def _print_help() -> int:
     print("Usage: cursor-goal manage <command> [args...]")
     print(
         '  create "<condition>" [--test "<cmd>"] [--budget <N>] '
-        "[--wake-budget <N>] [--deny-shell] [--force]"
+        "[--wake-budget <N>] [--workdir <path>] [--allow-shell] "
+        "[--deny-shell] [--force]"
     )
     print("  status     Show current goal state")
     print("  doctor     Install / health diagnostics")

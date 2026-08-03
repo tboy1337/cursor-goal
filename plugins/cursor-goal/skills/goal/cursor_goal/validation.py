@@ -68,7 +68,8 @@ def redact_secrets(text: str, *, max_chars: int | None = 4000) -> str:
     redacted = _SECRETISH.sub(_sub, text)
     # Also redact common JSON-ish "apiKey":"…" / 'token':'…' forms.
     redacted = re.sub(
-        r'(?i)(["\']?(?:api[_-]?key|token|password|secret)["\']?\s*[:=]\s*["\'])([^"\']+)',
+        r"(?i)([\"']?(?:api[_-]?key|token|password|secret)"
+        r"[\"']?\s*[:=]\s*[\"'])([^\"']+)",
         r"\1<redacted>",
         redacted,
     )
@@ -118,6 +119,34 @@ _ENV_ALLOWLIST_EXACT = frozenset(
         "PROCESSOR_ARCHITECTURE",
         "OS",
         "HOMEBREW_PREFIX",
+        # Windows profile / Program Files (npm, yarn, and many CLIs need these).
+        "APPDATA",
+        "LOCALAPPDATA",
+        "ProgramData",
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "CommonProgramFiles",
+        "CommonProgramFiles(x86)",
+        # Common toolchain homes (non-secret path hints).
+        "CARGO_HOME",
+        "RUSTUP_HOME",
+        "GOPATH",
+        "GOROOT",
+        "JAVA_HOME",
+        "JDK_HOME",
+        "NODE_PATH",
+        "NPM_CONFIG_USERCONFIG",
+        "NPM_CONFIG_CACHE",
+        "npm_config_cache",
+        "BUN_INSTALL",
+        "PNPM_HOME",
+        "GRADLE_USER_HOME",
+        "MAVEN_OPTS",
+        "SBT_OPTS",
+        "ANDROID_HOME",
+        "ANDROID_SDK_ROOT",
+        "DOTNET_ROOT",
+        "NuGetPackageRoot",
     }
 )
 

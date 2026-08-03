@@ -36,10 +36,26 @@ def test_parse_validation_hint() -> None:
     assert result["test_cmd"] == "npm test"
 
 
-def test_parse_validation_hint_truncates_shell_chains() -> None:
+def test_parse_validation_hint_refuses_shell_chains() -> None:
     result = parse_raw("ship it, verified by npm test && npm run lint")
-    assert result["test_cmd"] == "npm test"
-    assert "&&" not in (result["test_cmd"] or "")
+    assert result["test_cmd"] is None
+    assert "warning" in result
+    assert "shell chain" in result["warning"].lower()
+    assert "truncation" in result["warning"].lower()
+
+
+def test_parse_explicit_test_keeps_shell_chains() -> None:
+    result = parse_raw('ship it --test "npm test && npm run lint"')
+    assert result["test_cmd"] == "npm test && npm run lint"
+    assert "warning" not in result
+
+
+def test_truncate_shell_chain_helper() -> None:
+    from cursor_goal.parse import _truncate_shell_chain
+
+    assert _truncate_shell_chain("npm test && npm run lint") == "npm test"
+    assert _truncate_shell_chain("a | b") == "a"
+    assert _truncate_shell_chain("plain") == "plain"
 
 
 def test_parse_budget_hint() -> None:

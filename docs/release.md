@@ -2,7 +2,17 @@
 
 Checklist for cutting a tagged GitHub Release (`vX.Y.Z`).
 
-Tagging `v2.5.0` is the first public 2.x release (GitHub Latest was previously v1.1.1 while `main` already carried 2.x).
+Tagging `v2.6.0` was the first public 2.x release. Current package version is **2.6.0**.
+
+## Manual Cursor IDE smoke (before tagging)
+
+Harness unit tests do not cover the IDE. After install, smoke in Cursor:
+
+1. `/goal` create with an argv-safe `--test` (e.g. `py -3 -c "raise SystemExit(0)"`)
+2. Start `wake loop` in a background Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE`
+3. Confirm `wake status` shows `pid_alive=true`
+4. Run `eval validate`, spawn `goal-evaluator`, `manage done` on YES
+5. On Windows: if Hooks UI shows `{}` while `last-stop-response.json` has `followup_message`, confirm wake still continues the goal
 
 ## Prerequisites
 

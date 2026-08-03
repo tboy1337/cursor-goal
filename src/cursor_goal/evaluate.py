@@ -154,7 +154,18 @@ def cmd_validate(_argv: list[str]) -> int:
         "Running trusted-user validation_command from goal.json "
         "(~/.cursor-goal/data is shell-equivalent trust)"
     )
-    result = run_validation(cmd, shell_ok=bool(state.shell_ok))
+    cwd: str | None = None
+    if state.workdir.strip():
+        workdir_path = Path(state.workdir.strip())
+        if workdir_path.is_dir():
+            cwd = str(workdir_path)
+            logger.info("eval validate workdir=%s", cwd)
+        else:
+            logger.warning(
+                "Configured workdir missing (%s); using process cwd",
+                state.workdir,
+            )
+    result = run_validation(cmd, shell_ok=bool(state.shell_ok), cwd=cwd)
     output = result.output
     if result.timed_out:
         output = f"[timed out]\n{output}".strip()

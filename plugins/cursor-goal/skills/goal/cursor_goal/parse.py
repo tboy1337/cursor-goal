@@ -93,19 +93,34 @@ def _truncate_shell_chain(candidate: str) -> str:
     return candidate
 
 
-def _extract_validation_hint(condition: str) -> tuple[str, str]:
-    """Pull a known-runner validation hint; return (test_cmd, remaining).
+def _shell_chain_in(candidate: str) -> bool:
+    """Return True when *candidate* contains shell chain operators."""
+    return any(sep in candidate for sep in ("&&", "||", ";", "|"))
 
-    Truncates at shell chain operators so NL hints do not swallow ``&&`` tails.
-    Prefer explicit ``--test "..."`` for compound commands.
+
+def _extract_validation_hint(condition: str) -> tuple[str, str, str | None]:
+    """Pull a known-runner validation hint.
+
+    Returns ``(test_cmd, remaining, warning)``. When the matched hint contains
+    shell chain operators, *test_cmd* is left empty and *warning* explains that
+    an explicit ``--test "..."`` is required (no silent truncation).
     """
     for pattern in _VALIDATION_HINTS:
         match = pattern.search(condition)
         if not match:
             continue
-        candidate = _truncate_shell_chain(match.group(1).strip().strip("`'\""))
-        return candidate, pattern.sub("", condition, count=1)
-    return "", condition
+        raw = match.group(1).strip().strip("`'\"")
+        remaining = pattern.sub("", condition, count=1)
+        if _shell_chain_in(raw):
+            warning = (
+                "NL validation hint contains shell chain operators "
+                "(&&, ||, ;, |); refusing silent truncation — pass "
+                'explicit --test "..." for compound commands'
+            )
+            logger.warning("%s (hint=%r)", warning, raw)
+            return "", remaining, warning
+        return _truncate_shell_chain(raw), remaining, None
+    return "", condition, None
 
 
 def _normalize_condition(condition: str) -> str:
@@ -135,8 +150,9 @@ def parse_raw(raw: str) -> dict[str, Any]:
 
     test_cmd, condition = _extract_test_flag(text)
     budget, condition = _extract_budget(condition)
+    warning: str | None = None
     if not test_cmd:
-        test_cmd, condition = _extract_validation_hint(condition)
+        test_cmd, condition, warning = _extract_validation_hint(condition)
     condition = _normalize_condition(condition)
 
     if not condition:
@@ -154,11 +170,14 @@ def parse_raw(raw: str) -> dict[str, Any]:
         "test_cmd": test_cmd or None,
         "budget": budget,
     }
+    if warning:
+        result["warning"] = warning
     logger.info(
-        "Parsed create condition=%r test=%r budget=%s",
+        "Parsed create condition=%r test=%r budget=%s warning=%s",
         condition,
         redact_command(test_cmd) if test_cmd else "",
         budget,
+        warning or "",
     )
     return result
 

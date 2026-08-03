@@ -204,7 +204,7 @@ def _release_singleflight(handle: IO[bytes] | None) -> None:
 
 def _budget_limited_response(state: GoalState) -> dict[str, Any]:
     return {
-        "followup_message": (
+        "followup_message": _redact_followup_for_disk(
             f"[GOAL BUDGET] Turn limit ({state.turn_budget}) reached. "
             f"Wrap up current work and summarize progress toward: {state.condition}"
         )
@@ -216,21 +216,20 @@ def _continue_followup(state: GoalState, remaining: int) -> dict[str, Any]:
     remaining = max(0, remaining)
     if state.validation_command:
         safe_cmd = redact_command(state.validation_command)
-        return {
-            "followup_message": (
-                f"[GOAL] Turn {state.turns_used}/{state.turn_budget} "
-                f"({remaining} remaining). Run validation in-turn if needed "
-                f"({safe_cmd}), then evaluate completion via "
-                f"subagent. Goal: {state.condition}"
-            )
-        }
-    return {
-        "followup_message": (
+        raw = (
+            f"[GOAL] Turn {state.turns_used}/{state.turn_budget} "
+            f"({remaining} remaining). Run validation in-turn if needed "
+            f"({safe_cmd}), then evaluate completion via "
+            f"subagent. Goal: {state.condition}"
+        )
+    else:
+        raw = (
             f"[GOAL] Turn {state.turns_used}/{state.turn_budget} "
             f"({remaining} remaining). Continue working toward: {state.condition}. "
             "Evaluate completion via subagent when ready."
         )
-    }
+    # Redact condition text before Cursor Hooks UI / transcripts see it.
+    return {"followup_message": _redact_followup_for_disk(raw)}
 
 
 def _fail_open_continue_count_path() -> Path:

@@ -14,9 +14,9 @@ Cursor can drop stop-hook stdout (`followup_message`) on Windows and Linux (upst
 
 If wake is not started while a goal is `pursuing`, goals can stall when Hooks show `{}`.
 
-## Shell validation is allowed by default
+## Shell validation defaults to denied
 
-`--test` commands may run with `shell=True` when argv-splitting fails. This matches the **single-user trusted-local** threat model. Prefer argv-safe commands, or set `CURSOR_GOAL_DENY_SHELL=1` / `--deny-shell`.
+New goals use `shell_ok=false`. `--test` commands that need shell metacharacters require `--allow-shell` (or a global allow — not recommended). Prefer argv-safe commands, or set `CURSOR_GOAL_DENY_SHELL=1` as a hard global refuse. Older goal.json files without `shell_ok` still load as `shell_ok=true` for compatibility.
 
 ## Secret redaction is heuristic
 

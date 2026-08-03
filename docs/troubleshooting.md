@@ -51,7 +51,7 @@ Relative or bare `python` values are rejected. Prefer classic `install-goal.ps1`
 
 ## Shell-mode validation warning
 
-Doctor warns when validation uses shell mode. Prefer argv-safe `--test` commands or `--deny-shell` / `CURSOR_GOAL_DENY_SHELL=1`.
+Doctor warns when validation uses shell mode. New goals default to `shell_ok=false`; prefer argv-safe `--test` or keep deny-shell. Use `--allow-shell` only when compound shell is required.
 
 ## Task / evaluator model errors
 
