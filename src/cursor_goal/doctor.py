@@ -177,9 +177,7 @@ def _baked_python_from_cmd(
                 end = stripped.find('"', 1)
                 if end > 1:
                     candidate = stripped[1:end]
-                    if Path(candidate).is_absolute() or (
-                        len(candidate) >= 3 and candidate[1] == ":"
-                    ):
+                    if path_str_is_absolute(candidate):
                         return candidate
     return None
 

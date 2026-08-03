@@ -30,7 +30,10 @@ def main() -> int:
     os.environ["CURSOR_GOAL_SKIP_ACL"] = "1"
     os.environ["CURSOR_GOAL_ALLOW_ANY_WORKDIR"] = "1"
 
-    with tempfile.TemporaryDirectory(prefix="cursor-goal-wake-smoke-") as tmp:
+    with tempfile.TemporaryDirectory(
+        prefix="cursor-goal-wake-smoke-",
+        ignore_cleanup_errors=True,
+    ) as tmp:
         data = Path(tmp) / "data"
         data.mkdir()
         os.environ["CURSOR_GOAL_DATA"] = str(data)
@@ -62,6 +65,7 @@ def main() -> int:
 
         thread = threading.Thread(target=_loop, name="wake-smoke-loop", daemon=True)
         thread.start()
+        exit_code = 1
         try:
             alive = False
             report: dict[str, object] = {}
@@ -74,13 +78,14 @@ def main() -> int:
             if not alive:
                 print(json.dumps(report, indent=2), file=sys.stderr)
                 print("wake smoke: pid_alive never became true", file=sys.stderr)
-                return 1
-            if "command" not in report or "continuation_reason" not in report:
+                exit_code = 1
+            elif "command" not in report or "continuation_reason" not in report:
                 print(json.dumps(report, indent=2), file=sys.stderr)
                 print("wake smoke: status missing readiness fields", file=sys.stderr)
-                return 1
-            print("wake-smoke: ok")
-            return 0
+                exit_code = 1
+            else:
+                print("wake-smoke: ok")
+                exit_code = 0
         finally:
             try:
                 disarm(kill_loop=True)
@@ -89,6 +94,9 @@ def main() -> int:
             thread.join(timeout=3)
             if loop_error:
                 print(f"wake smoke: loop error: {loop_error[0]!r}", file=sys.stderr)
+                # Do not override a successful readiness check: disarm/kill can
+                # interrupt the loop thread with a benign exception.
+        return exit_code
 
 
 if __name__ == "__main__":
