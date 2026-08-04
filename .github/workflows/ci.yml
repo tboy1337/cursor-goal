@@ -139,6 +139,9 @@ jobs:
         # pwsh, since 5.1 has its own module path and language quirks (e.g.
         # $ErrorActionPreference interacting with 2>&1 native redirection).
         shell: [pwsh, powershell]
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -146,7 +149,6 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install PSScriptAnalyzer and Pester 5
-        shell: ${{ matrix.shell }}
         run: |
           if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {
             Register-PSRepository -Default -ErrorAction Stop
@@ -155,10 +157,8 @@ jobs:
           Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
           Install-Module Pester -MinimumVersion 5.0.0 -Scope CurrentUser -Force -SkipPublisherCheck
       - name: PSScriptAnalyzer + Pester (>=95% coverage)
-        shell: ${{ matrix.shell }}
         run: |
           & .\scripts\run-powershell-tests.ps1
       - name: Windows install smoke
-        shell: ${{ matrix.shell }}
         run: |
           & .\scripts\install-smoke.ps1
