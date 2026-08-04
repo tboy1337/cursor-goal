@@ -9,7 +9,7 @@ continuation, and subagent `Task` behavior cannot be fully exercised by
 
 ## Continuation protocol these tests assume
 
-As of v4.0.1, the continuation story is:
+As of v4.0.2, the continuation story is:
 
 1. **`stop` hook (documented, primary).** Fires at the end of every agent
    turn; `followup_message` re-prompts the worker. Sequential dual hook
