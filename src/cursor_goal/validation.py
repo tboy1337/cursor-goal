@@ -6,9 +6,10 @@ import os
 import re
 import shlex
 import subprocess  # nosec B404
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PosixPath
 
 from cursor_goal.logging_config import get_logger
 
@@ -205,7 +206,12 @@ def _pinned_windows_comspec(env_in: dict[str, str]) -> str | None:
         or ""
     ).strip()
     if system_root:
-        candidate = Path(system_root) / "System32" / "cmd.exe"
+        if sys.platform == "win32":
+            candidate: Path = Path(system_root) / "System32" / "cmd.exe"
+        else:
+            # Tests may patch os.name to "nt" on Unix; plain Path() would pick
+            # WindowsPath and fail to instantiate outside Windows.
+            candidate = PosixPath(system_root) / "System32" / "cmd.exe"
         try:
             if candidate.is_file():
                 return str(candidate)
