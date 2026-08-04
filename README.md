@@ -97,7 +97,7 @@ Uninstall: `./scripts/uninstall-goal.sh` or `.\scripts\uninstall-goal.ps1` (add 
    - Confirm: `wake status` shows `continuation_ready=true` (and usually `pid_alive=true`). `manage status` / `manage doctor` still hard-fail while pursuing without it; `eval validate`/`prompt`/`spawn-config` only warn by default (see [known limitations](docs/known-limitations.md)).
 5. Work toward the condition; on evaluator YES run `manage done`. If Hooks UI shows `{}`, rely on the `subagentStop` hook and wake — see [known limitations](docs/known-limitations.md).
 
-Security: see [SECURITY.md](SECURITY.md). Platform notes: [docs/platform-compatibility.md](docs/platform-compatibility.md). Known limits: [docs/known-limitations.md](docs/known-limitations.md). Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md). Teams/AGPL: [docs/teams-agpl.md](docs/teams-agpl.md). Contributing: [CONTRIBUTING.md](CONTRIBUTING.md) ([Code of Conduct](CODE_OF_CONDUCT.md)). Release notes: [CHANGELOG.md](CHANGELOG.md).
+Security: see [SECURITY.md](SECURITY.md). Platform notes: [docs/platform-compatibility.md](docs/platform-compatibility.md). Known limits: [docs/known-limitations.md](docs/known-limitations.md). Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md). Teams/AGPL: [docs/teams-agpl.md](docs/teams-agpl.md).
 
 Note: an unrelated npm package is also named `cursor-goal`; this project is the Python/AGPL harness at `tboy1337/cursor-goal`.
 
@@ -183,8 +183,6 @@ Flags / natural language:
 /goal "compound check" --test "npm test && npm run lint" --allow-shell
 /goal fix bugs, verified by pytest, stop after 15 turns
 ```
-
-See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ## Multi-model (maker ≠ checker)
 
