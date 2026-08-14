@@ -322,6 +322,12 @@ def test_plugin_manifests_and_hooks_contract() -> None:
     }
     assert (plugin / "skills" / "goal" / "cursor_goal" / "__init__.py").is_file()
     assert (plugin / "agents" / "goalKeeper.md").is_file()
+    keeper = (plugin / "agents" / "goalKeeper.md").read_text(encoding="utf-8")
+    assert "Verify this turn" in keeper
+    skill = (plugin / "skills" / "goal" / "SKILL.md").read_text(encoding="utf-8")
+    assert "Iron law" in skill
+    evaluator = (plugin / "agents" / "goal-evaluator.md").read_text(encoding="utf-8")
+    assert "MISSING EVIDENCE" in evaluator
     assert (plugin / "skills" / "goal" / "scripts" / "stop_hook.cmd").is_file()
     assert (plugin / "skills" / "goal" / "scripts" / "wake_loop.sh").is_file()
     stop_cmd = (plugin / "skills" / "goal" / "scripts" / "stop_hook.cmd").read_text(

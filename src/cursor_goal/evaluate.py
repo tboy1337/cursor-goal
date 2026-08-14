@@ -31,6 +31,11 @@ logger = get_logger("cursor_goal.eval")
 
 _VERDICT_LINE = re.compile(r"^(YES|NO):\s*(.*)$", re.IGNORECASE)
 MAX_PARSE_RESULT_BYTES = 2 * 1024 * 1024
+MISSING_VALIDATION_EVIDENCE = (
+    "MISSING EVIDENCE: a validation command is configured but has not been "
+    "run this cycle. You MUST answer NO. Do not infer success from the work "
+    "summary."
+)
 
 
 def _refuse_if_data_dir_unsafe() -> str | None:
@@ -73,23 +78,45 @@ def _extract_work_summary(argv: list[str]) -> str:
     return ""
 
 
+def validation_evidence_missing(state: GoalState) -> bool:
+    """True when a validation command exists but has never been run.
+
+    ``last_validation_exit_code is None`` is the signal — empty output with
+    a recorded exit code still counts as a run (for example a silent
+    ``exit 0``).
+    """
+    has_command = bool(state.validation_command.strip())
+    return has_command and state.last_validation_exit_code is None
+
+
 def _build_validation_section(state: GoalState) -> str:
     """Render the validation-command evidence block for the eval prompt."""
     safe_cmd = (
         redact_command(state.validation_command) if state.validation_command else ""
     )
-    if state.last_validation_output:
-        exit_note = ""
-        if state.last_validation_exit_code is not None:
-            passed = state.last_validation_exit_code == 0
-            exit_note = (
-                f"\nExit code: {state.last_validation_exit_code} "
-                f"({'passed' if passed else 'failed'})"
-            )
+    if state.last_validation_exit_code is not None:
+        passed = state.last_validation_exit_code == 0
+        exit_note = (
+            f"\nExit code: {state.last_validation_exit_code} "
+            f"({'passed' if passed else 'failed'})"
+        )
         safe_output = redact_secrets(state.last_validation_output, max_chars=4000)
+        logger.info(
+            "eval prompt validation evidence present exit=%s output_len=%s",
+            state.last_validation_exit_code,
+            len(state.last_validation_output or ""),
+        )
         return f"Validation command: {safe_cmd}{exit_note}\n" f"Output:\n{safe_output}"
-    if state.validation_command:
-        return f"Validation command ({safe_cmd}) has not been run yet."
+    if validation_evidence_missing(state):
+        logger.info(
+            "eval prompt missing validation evidence cmd=%s",
+            safe_cmd,
+        )
+        return (
+            f"Validation command ({safe_cmd}) has not been run yet.\n"
+            f"{MISSING_VALIDATION_EVIDENCE}"
+        )
+    logger.debug("eval prompt: no validation command configured")
     return "No validation command configured."
 
 
@@ -139,6 +166,9 @@ def cmd_prompt(argv: list[str]) -> int:
         "4. Keep reason to 1-2 sentences\n"
         "5. For NO, explain what specific work remains\n"
         "6. Prefer the evidence in this prompt; do not invent unstated results\n"
+        "7. If a validation command is configured but has not been run "
+        "(MISSING EVIDENCE / has not been run yet), you MUST answer NO. "
+        "Work summary is not a substitute for a validation run.\n"
     )
     _emit_prompt(prompt)
     return 0
@@ -515,6 +545,7 @@ def _print_help() -> int:
 
 
 __all__ = [
+    "MISSING_VALIDATION_EVIDENCE",
     "cmd_eval",
     "cmd_prompt",
     "cmd_validate",
@@ -523,4 +554,5 @@ __all__ = [
     "cmd_check",
     "cmd_parse_result",
     "parse_result_text",
+    "validation_evidence_missing",
 ]

@@ -26,6 +26,18 @@ Autonomous `/goal` loop for Cursor IDE: persist an objective, work across turns,
 
 Wake is armed by default while pursuing and recommended as a best-effort supplement, but `eval` commands only **warn** (not refuse) when the loop isn't confirmed alive — see [worked example](#worked-example) and [First run](#first-run-wake-handshake).
 
+## How the worker works
+
+Every `/goal` uses the same automatic playbook — nothing extra to set:
+
+1. Do the next concrete change toward the condition.
+2. Run `eval validate` **this turn** (or gather explicit evidence if no `--test` was given). Never evaluate or mark done without that fresh evidence.
+3. If validation fails: investigate the root cause from the failure output, then fix (group compile/type errors, resolve merge conflicts, split independent failures across parallel workers). Re-validate. Do not shotgun-patch.
+4. If validation passed and there is a git diff: once before the first YES attempt, strip AI slop without changing behavior, then re-validate.
+5. Spawn the readonly `goal-evaluator`. YES → `manage done`. NO → keep working.
+
+Plan Mode, `ce-plan`, Bugbot, `/review`, and thermo-nuclear review are **not** part of this loop: they wait on the user or add a second quality bar that can block a simple “tests pass” goal. Use them yourself outside `/goal` if you want.
+
 ## Requirements
 
 - **Python 3.12+** (`python3`, `python`, or Windows `py -3`)

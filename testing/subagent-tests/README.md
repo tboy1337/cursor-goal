@@ -29,6 +29,7 @@ Features requiring Cursor IDE infrastructure (stop hooks, multi-turn interaction
 - F13: Stop hook auto-continuation
 - F14: Pause/resume lifecycle (requires mid-execution user input)
 - F16: Multi-cycle evaluation (depends on F13 for turn chaining)
+- F25: Systematic debug on validation failure (root cause before fix; multi-turn)
 
 ## Running
 

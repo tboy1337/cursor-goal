@@ -65,17 +65,31 @@ py -3 -u "$env:CURSOR_PLUGIN_ROOT\skills\goal\scripts\run_goal.py" <command> ...
    Shell with notify_on_output matching pattern or notify_pattern; wake status →
    continuation_ready=true — do not skip. Exit 1 / paused means arm failed — fix and resume.
    manage status exits 1 while pursuing with continuation_ready=false.
-1. Do focused work
-2. If validation_command set: …/run_goal.py eval validate
+1. Do focused work (next concrete change). Do not ask which playbook to use.
+2. Verify this turn. If validation_command set: …/run_goal.py eval validate.
+   Never spawn the evaluator or manage done without fresh this-turn evidence.
+   No "should pass" / "looks done".
+2a. If validate failed: investigate root cause from the failure output before
+   fixing (do not shotgun-patch or hardcode expected values). If compile/type
+   errors: group by file, fix high-confidence first, re-validate. If conflict
+   markers: resolve then re-validate. If 2+ independent failure domains: parallel
+   Task workers (not goal-evaluator), then re-validate. Then back to step 2.
+2b. If validate passed and git diff is non-empty: once before the first YES
+   attempt, remove AI slop without behavior change; re-validate. Skip on later
+   wakes if already done for this goal.
 3. Capture eval prompt + spawn-config (OS-appropriate Shell; do not rely on bash-only $())
 4. Task(subagent_type, model, readonly from SPAWN JSON, prompt=EVAL_PROMPT)
    Never use generalPurpose for evaluation. Never omit spawn-config.
+   Do not spawn the evaluator if validation_command is set but validate was
+   not run this turn (the prompt will force NO).
 5. Pipe subagent response into: …/run_goal.py eval parse-result --stdin
    → YES: manage done
    → NO:  continue working (back to step 1)
 ```
 
 Do **not** put long evaluator responses on the Windows command line (argv length limits). Use `--stdin` or `@file`.
+
+Do **not** invoke Plan Mode, `/ce-plan`, `/review`, `/review-bugbot`, `/review-security`, or thermo-nuclear review in this loop.
 
 ## Platform Notes (Cursor)
 
@@ -98,6 +112,8 @@ Do **not** put long evaluator responses on the Windows command line (argv length
 - On `AGENT_GOAL_WAKE`, check `manage status` then continue if still pursuing
 - `--force` on `done` / `signal` is recovery only — not cryptographic attestation
 - Never claim wake is running from `pid_alive` alone without having started Shell with `notify_on_output`
+- Never claim done or spawn `goal-evaluator` without fresh this-turn validation (or an explicit no-command evidence note)
+- On validation failure: root-cause first; do not thrash random edits
 
 <!-- cursor-goal:managed-agent - installed/uninstalled by scripts/install-goal.*; back up before hand-editing -->
 

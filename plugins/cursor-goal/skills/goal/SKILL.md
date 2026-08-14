@@ -144,16 +144,29 @@ Never evaluate with `generalPurpose` or the same Task call as the worker. `CURSO
 
 ## Working Toward the Goal
 
-While the goal is active (`status: "pursuing"`), repeat:
+While the goal is active (`status: "pursuing"`), follow this playbook automatically. Do **not** ask the user which path to take. Do **not** wait on Plan Mode, `ce-plan`, Bugbot, or a review skill. No extra flags.
 
-1. **Do focused work** — make code changes, run commands, fix issues
-2. **Run validation** (if configured) — prefer harness `eval validate` so output is persisted for the evaluator
-3. **Evaluate** — spawn a readonly evaluator subagent on the configured model
-4. **Act on result** — YES → `manage done`. NO → continue.
+**Iron law:** no completion claims, no `goal-evaluator` spawn, and no `manage done` without **fresh** evidence from **this turn**. If a `validation_command` is configured, that evidence is `eval validate` run in this turn. Never say "should pass", "looks done", or "probably fixed".
+
+While `status` is `pursuing`, repeat:
+
+1. **Do focused work** — make the next concrete change toward the condition.
+2. **Verify this turn** — if a validation command is configured, run `eval validate` so output is persisted. If none is configured, gather explicit evidence for the condition (command output, file contents) and say so in `--work-summary`. Do not spawn the evaluator yet.
+3. **If validation failed (non-zero) or behavior is unexpected — debug, do not thrash:**
+   1. Investigate root cause from the failure output before proposing a fix (read the failing test/assertion, the implementation it hit, and why that path ran). Do not shotgun-patch or hardcode expected values.
+   2. If failures look like compile or typecheck errors: group by file/category, fix the highest-confidence issues first, re-run.
+   3. If the tree has conflict markers (`<<<<<<<`): resolve them so validation can run, then go back to step 2.
+   4. If **two or more independent** failure domains exist (unrelated packages/suites): spawn parallel `Task` workers (not `goal-evaluator`) for those domains, merge results, then go back to step 2.
+   5. After a targeted fix, go back to step 2 (re-validate this turn). Do not evaluate on a failed validation.
+4. **If validation passed (exit 0) and `git diff` is non-empty:** once before the first YES attempt, remove AI slop introduced in this work (unnecessary comments, `any` casts, extra defensive try/except, deep nesting that an early return would replace). Keep behavior unchanged. Re-run `eval validate`. Skip this pass on later wake ticks if you already did it for this goal.
+5. **Evaluate** — spawn a readonly evaluator subagent on the configured model (see below). Never evaluate after every single file edit or after read-only exploration.
+6. **Act on result** — YES → `manage done`. NO → continue at step 1 with the reason.
+
+Do **not** invoke Plan Mode, `/ce-plan`, `/review`, `/review-bugbot`, `/review-security`, or thermo-nuclear review inside this loop. They stall unattended continuation or replace the condition with a second quality bar.
 
 ### Evaluation via Subagent
 
-When a validation command is configured, run `eval validate` first.
+When a validation command is configured, run `eval validate` **this turn** first. If it has not been run, the evaluator prompt instructs the checker to answer NO — do not skip validate and hope.
 
 Then generate the prompt and spawn config (capture into variables with the OS-appropriate Shell syntax above), and spawn **Task** with `subagent_type`, `model`, and `readonly` from the spawn-config JSON, plus `prompt` set to the eval prompt text.
 

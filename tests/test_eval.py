@@ -10,7 +10,12 @@ from pathlib import Path
 
 import pytest
 
-from cursor_goal.evaluate import _emit_prompt, parse_result_text
+from cursor_goal.evaluate import (
+    MISSING_VALIDATION_EVIDENCE,
+    _emit_prompt,
+    parse_result_text,
+    validation_evidence_missing,
+)
 from cursor_goal.state import GoalState, load_goal, save_goal
 from tests.conftest import run_cli
 
@@ -226,7 +231,10 @@ def test_eval_prompt_validation_not_run(goal_home: Path) -> None:
     run_cli("manage", "create", "g", "--test", "pytest")
     code, out, _err = run_cli("eval", "prompt")
     assert code == 0
-    assert "has not been run yet" in out
+    assert "has not been run yet." in out
+    assert MISSING_VALIDATION_EVIDENCE in out
+    assert "You MUST answer NO" in out
+    assert "Work summary is not a substitute" in out
 
 
 def test_eval_prompt_with_validation_output(goal_home: Path) -> None:
@@ -249,6 +257,53 @@ def test_eval_prompt_with_validation_output(goal_home: Path) -> None:
     assert "Validation command: echo" in out
     assert "Exit code: 0" in out
     assert "passed" in out
+    assert MISSING_VALIDATION_EVIDENCE not in out
+    assert "has not been run yet." not in out
+
+
+def test_eval_prompt_empty_output_with_exit_counts_as_run(goal_home: Path) -> None:
+    run_cli("manage", "create", "g", "--test", "echo")
+    state = GoalState(
+        active=True,
+        condition="g",
+        validation_command="echo",
+        created_at="t",
+        turn_budget=20,
+        turns_used=1,
+        status="pursuing",
+        last_validation_output="",
+        last_validation_exit_code=0,
+    )
+    save_goal(state)
+    code, out, _err = run_cli("eval", "prompt")
+    assert code == 0
+    assert "Exit code: 0" in out
+    assert "passed" in out
+    assert MISSING_VALIDATION_EVIDENCE not in out
+    assert "has not been run yet." not in out
+
+
+def test_eval_prompt_no_validation_command_skips_missing_evidence(
+    goal_home: Path,
+) -> None:
+    run_cli("manage", "create", "g")
+    code, out, _err = run_cli("eval", "prompt")
+    assert code == 0
+    assert "No validation command configured" in out
+    assert MISSING_VALIDATION_EVIDENCE not in out
+
+
+def test_validation_evidence_missing_helper() -> None:
+    unset = GoalState(validation_command="pytest", last_validation_exit_code=None)
+    ran = GoalState(
+        validation_command="pytest",
+        last_validation_output="",
+        last_validation_exit_code=0,
+    )
+    none = GoalState(validation_command="", last_validation_exit_code=None)
+    assert validation_evidence_missing(unset) is True
+    assert validation_evidence_missing(ran) is False
+    assert validation_evidence_missing(none) is False
 
 
 def test_eval_parse_result_without_goal(goal_home: Path) -> None:

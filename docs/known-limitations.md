@@ -44,6 +44,12 @@ No multi-tenant / shared-host isolation. Anyone who can write `~/.cursor-goal/da
 
 `eval signal` / content-hash binding is a protocol guard. `manage done --force` and `eval signal --force` bypass it (logged recovery escapes).
 
+When a `validation_command` is set but has never been run, `eval prompt` tells the checker it **MUST answer NO** (missing evidence). That is a prompt instruction, not a harness refusal — the worker is still expected to run `eval validate` this turn before spawning the evaluator.
+
+## Planning and review skills are outside the loop
+
+`/goal` does not invoke Plan Mode, `ce-plan`, `/review`, `/review-bugbot`, `/review-security`, or thermo-nuclear review. Those skills either wait on the user (which stalls unattended continuation) or add a second checker that can refuse a goal whose condition is already met (for example tests passing). The worker playbook instead verifies every turn, debugs failures systematically, and evaluates with `goal-evaluator` only.
+
 ## Marketplace vs classic Windows install
 
 Marketplace `stop_hook.cmd` / `wake_loop.cmd` may fall back to PATH discovery, but **`manage doctor` requires an absolute `CURSOR_GOAL_PYTHON` (Python 3.12+)** for Windows marketplace installs — PATH-only is not treated as success. Classic `install-goal.ps1` bakes an absolute interpreter — preferred for individuals on Windows. Classic and marketplace/template launchers execute quote-stripped `%CGP%` (not the raw env var), reject unsafe cmd metacharacters in `CURSOR_GOAL_PYTHON`, and doctor rejects the same. Classic install also hardens the data-dir ACL at install time and writes helper scripts under the install tree's `scripts\.tmp` (not shared `%TEMP%`). Residual risk: `echo %CGP%| findstr` can expand nested `%VAR%` inside a crafted path — keep `CURSOR_GOAL_PYTHON` free of percent signs.

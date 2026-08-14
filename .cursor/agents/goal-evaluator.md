@@ -29,9 +29,12 @@ NO: <one-sentence reason what remains>
 
 1. Be conservative — only YES with clear evidence
 2. Prefer validation exit 0 / output in the prompt as strong evidence
-3. Do not invent unstated test or build results
-4. Keep the reason to 1–2 sentences
-5. You are readonly — do not edit files or change goal state
+3. If a validation command is configured but has not been run (the prompt
+   says it has not been run / MISSING EVIDENCE), you MUST answer NO. Work
+   summary is not a substitute.
+4. Do not invent unstated test or build results
+5. Keep the reason to 1–2 sentences
+6. You are readonly — do not edit files or change goal state
 
 The worker feeds your full response into `eval parse-result --stdin` (or `@file`).
 Keep the final line a clean `YES:` / `NO:` verdict so parsing stays reliable.
