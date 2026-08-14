@@ -72,6 +72,7 @@ __all__ = (
 )
 
 EVAL_FLAG_NAME = "goal-eval-done"
+AUDIT_FLAG_NAME = "goal-audit-clear"
 GOAL_FILE_NAME = "goal.json"
 LOCK_FILE_NAME = "goal.lock"
 SCHEMA_VERSION = 1
@@ -106,6 +107,7 @@ _UPDATABLE_FIELDS = frozenset(
         "last_validation_output",
         "last_validation_exit_code",
         "last_eval_verdict",
+        "last_audit_verdict",
     }
 )
 LAST_STOP_RESPONSE_NAME = "last-stop-response.json"
@@ -147,6 +149,10 @@ def goal_path() -> Path:
 
 def eval_flag_path() -> Path:
     return data_dir() / EVAL_FLAG_NAME
+
+
+def audit_flag_path() -> Path:
+    return data_dir() / AUDIT_FLAG_NAME
 
 
 def lock_path() -> Path:
@@ -398,6 +404,12 @@ def _set_last_eval_verdict(state: GoalState, value: Any) -> None:
     )
 
 
+def _set_last_audit_verdict(state: GoalState, value: Any) -> None:
+    state.last_audit_verdict = _require_field_chars(
+        "last_audit_verdict", str(value or "")
+    )
+
+
 _FIELD_SETTERS: dict[str, Callable[[GoalState, Any], None]] = {
     "active": _set_active,
     "condition": _set_condition,
@@ -414,6 +426,7 @@ _FIELD_SETTERS: dict[str, Callable[[GoalState, Any], None]] = {
     "last_validation_output": _set_last_validation_output,
     "last_validation_exit_code": _set_last_validation_exit_code,
     "last_eval_verdict": _set_last_eval_verdict,
+    "last_audit_verdict": _set_last_audit_verdict,
 }
 
 
@@ -442,6 +455,7 @@ class GoalState:  # pylint: disable=too-many-instance-attributes
     last_validation_output: str = ""
     last_validation_exit_code: int | None = None
     last_eval_verdict: str = ""
+    last_audit_verdict: str = ""
     schema_version: int = SCHEMA_VERSION
 
     def to_dict(self) -> dict[str, Any]:
@@ -563,6 +577,9 @@ class GoalState:  # pylint: disable=too-many-instance-attributes
             last_eval_verdict=_clamp_field_chars(
                 "last_eval_verdict", str(data.get("last_eval_verdict") or "")
             ),
+            last_audit_verdict=_clamp_field_chars(
+                "last_audit_verdict", str(data.get("last_audit_verdict") or "")
+            ),
             schema_version=SCHEMA_VERSION,
         )
 
@@ -677,7 +694,7 @@ def clear_last_stop_response() -> None:
 
 
 def clear_goal_files() -> bool:
-    """Remove goal.json and eval signal under lock. Returns True if goal existed."""
+    """Remove goal.json and eval/audit signals under lock. Returns True if goal existed."""
     with goal_lock():
         path = goal_path()
         existed = path.is_file()
@@ -686,11 +703,14 @@ def clear_goal_files() -> bool:
         flag = eval_flag_path()
         if flag.exists():
             flag.unlink()
+        audit_flag = audit_flag_path()
+        if audit_flag.exists():
+            audit_flag.unlink()
         clear_last_stop_response()
         if existed:
-            logger.info("Cleared goal and evaluator signal")
+            logger.info("Cleared goal and evaluator/audit signals")
         else:
-            logger.info("Cleared evaluator signal (no goal file)")
+            logger.info("Cleared evaluator/audit signals (no goal file)")
         return existed
 
 
@@ -710,7 +730,7 @@ def mark_goal_achieved(*, require_signal: bool = True) -> tuple[GoalState | None
     """Mark goal achieved under lock.
 
     Returns ``(state, status)`` where status is ``ok``, ``missing``,
-    ``rejected``, ``not_pursuing``, or ``forced``.
+    ``rejected``, ``rejected_audit``, ``not_pursuing``, or ``forced``.
     """
     with goal_lock():
         state = load_goal()
@@ -725,13 +745,19 @@ def mark_goal_achieved(*, require_signal: bool = True) -> tuple[GoalState | None
                 state.status,
             )
         signaled = _has_eval_signal_unlocked(state)
-        if not signaled:
-            if require_signal:
+        audit_ok = _has_audit_signal_unlocked(state)
+        if require_signal:
+            if not signaled:
                 return state, "rejected"
-            status = "forced"
+            if not audit_ok:
+                return state, "rejected_audit"
+            _clear_eval_signal_unlocked()
+            _clear_audit_signal_unlocked()
+            status = "ok"
         else:
             _clear_eval_signal_unlocked()
-            status = "ok"
+            _clear_audit_signal_unlocked()
+            status = "ok" if signaled and audit_ok else "forced"
         state.status = "achieved"
         state.active = False
         _save_goal_unlocked(state)
@@ -780,16 +806,76 @@ def has_eval_signal() -> bool:
 
 
 def _has_eval_signal_unlocked(state: GoalState) -> bool:
-    flag = eval_flag_path()
+    return _has_bound_signal_unlocked(
+        eval_flag_path(),
+        state,
+        expected_verdict="YES",
+        label="Eval",
+    )
+
+
+def _clear_audit_signal_unlocked() -> None:
+    flag = audit_flag_path()
+    if flag.exists():
+        flag.unlink()
+        logger.info("Cleared remaining-work audit signal")
+
+
+def _write_audit_signal_unlocked(state: GoalState, *, reason: str) -> None:
+    """Atomically write CLEAR-bound audit signal for *state* (caller holds lock)."""
+    data_dir()
+    flag = audit_flag_path()
+    payload = {
+        "condition_hash": state.content_hash(),
+        "created_at": now_iso(),
+        "verdict": "CLEAR",
+        "reason": reason,
+    }
+    atomic_write_text(
+        flag,
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+    )
+    logger.info(
+        "Recorded remaining-work audit signal hash=%s", payload["condition_hash"]
+    )
+
+
+def has_audit_signal() -> bool:
+    """Return True when a CLEAR-bound audit signal matches the current goal."""
+    with goal_lock():
+        state = load_goal()
+        if state is None:
+            return False
+        return _has_audit_signal_unlocked(state)
+
+
+def _has_audit_signal_unlocked(state: GoalState) -> bool:
+    return _has_bound_signal_unlocked(
+        audit_flag_path(),
+        state,
+        expected_verdict="CLEAR",
+        label="Audit",
+    )
+
+
+def _has_bound_signal_unlocked(
+    flag: Path,
+    state: GoalState,
+    *,
+    expected_verdict: str,
+    label: str,
+) -> bool:
+    """True when *flag* is a hash-bound signal with *expected_verdict*."""
     if not flag.is_file():
         return False
     try:
         raw = json.loads(flag.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError):
-        # Legacy empty touch-file or corrupt signal — not valid for bound check.
         try:
             if flag.stat().st_size == 0:
-                logger.warning("Legacy empty eval signal ignored; re-run eval signal")
+                logger.warning(
+                    "Legacy empty %s signal ignored; re-run parse", label.lower()
+                )
         except OSError:
             pass
         return False
@@ -799,14 +885,20 @@ def _has_eval_signal_unlocked(state: GoalState) -> bool:
     actual = str(raw.get("condition_hash", ""))
     if actual != expected:
         logger.warning(
-            "Eval signal hash mismatch (stale/cross-goal); expected=%s got=%s",
+            "%s signal hash mismatch (stale/cross-goal); expected=%s got=%s",
+            label,
             expected,
             actual,
         )
         return False
     verdict = str(raw.get("verdict", "")).upper()
-    if verdict != "YES":
-        logger.warning("Eval signal missing YES verdict (got %r)", verdict)
+    if verdict != expected_verdict:
+        logger.warning(
+            "%s signal missing %s verdict (got %r)",
+            label,
+            expected_verdict,
+            verdict,
+        )
         return False
     return True
 
@@ -830,7 +922,7 @@ def create_goal_atomic(
     *,
     force: bool = False,
 ) -> tuple[GoalState | None, str]:
-    """Create (or overwrite) a goal and clear eval signal under one lock.
+    """Create (or overwrite) a goal and clear eval/audit signals under one lock.
 
     Returns ``(state, status)`` where status is ``ok`` or ``exists``.
     Any existing ``goal.json`` blocks create unless *force* is True.
@@ -840,6 +932,7 @@ def create_goal_atomic(
         if existing is not None and not force:
             return existing, "exists"
         _clear_eval_signal_unlocked()
+        _clear_audit_signal_unlocked()
         _save_goal_unlocked(state)
         return state, "ok"
 
@@ -849,6 +942,7 @@ def record_parse_result(verdict: str, reason: str) -> GoalState | None:
 
     Returns the updated goal, or None if no goal was present.
     Raises ``ValueError`` when a YES verdict is recorded for a non-pursuing goal.
+    A non-YES verdict also clears the remaining-work CLEAR signal.
     """
     with goal_lock():
         state = load_goal()
@@ -866,6 +960,36 @@ def record_parse_result(verdict: str, reason: str) -> GoalState | None:
         if verdict == "YES":
             _write_eval_signal_unlocked(state, reason=reason)
         else:
+            _clear_eval_signal_unlocked()
+            _clear_audit_signal_unlocked()
+        _save_goal_unlocked(state)
+        return state
+
+
+def record_parse_audit(verdict: str, reason: str) -> GoalState | None:
+    """Persist remaining-work audit verdict and CLEAR signal under one lock.
+
+    Returns the updated goal, or None if no goal was present.
+    Raises ``ValueError`` when CLEAR is recorded for a non-pursuing goal.
+    A non-CLEAR verdict also clears the YES evaluator signal.
+    """
+    with goal_lock():
+        state = load_goal()
+        if state is None:
+            return None
+        if verdict == "CLEAR" and state.status != "pursuing":
+            raise ValueError(
+                f"Cannot record CLEAR while goal status is '{state.status}' "
+                "(must be pursuing)"
+            )
+        state.last_reason = _clamp_field_chars("last_reason", str(reason or ""))
+        state.last_audit_verdict = _clamp_field_chars(
+            "last_audit_verdict", str(verdict or "")
+        )
+        if verdict == "CLEAR":
+            _write_audit_signal_unlocked(state, reason=reason)
+        else:
+            _clear_audit_signal_unlocked()
             _clear_eval_signal_unlocked()
         _save_goal_unlocked(state)
         return state

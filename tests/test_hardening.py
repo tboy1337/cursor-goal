@@ -39,6 +39,7 @@ def test_apply_field_variants(goal_home: Path) -> None:
     _apply_field(state, "last_validation_exit_code", "")
     _apply_field(state, "last_validation_exit_code", 3)
     _apply_field(state, "last_eval_verdict", None)
+    _apply_field(state, "last_audit_verdict", None)
     _apply_field(state, "active", False)
     assert state.active is False
     with pytest.raises(ValueError, match="turns_used"):
@@ -1177,6 +1178,7 @@ def test_field_limits_on_set_and_load(goal_home: Path) -> None:
     state.last_reason = huge  # bypass setter for corrupt-on-disk simulation
     state.last_validation_output = huge
     state.last_eval_verdict = huge
+    state.last_audit_verdict = huge
     state.created_at = huge
     save_goal(state)
     loaded = load_goal()
@@ -1184,6 +1186,7 @@ def test_field_limits_on_set_and_load(goal_home: Path) -> None:
     assert len(loaded.last_reason) == MAX_FIELD_CHARS
     assert len(loaded.last_validation_output) == MAX_FIELD_CHARS
     assert len(loaded.last_eval_verdict) == MAX_FIELD_CHARS
+    assert len(loaded.last_audit_verdict) == MAX_FIELD_CHARS
     assert len(loaded.created_at) == MAX_FIELD_CHARS
     assert state_mod._clamp_field_chars("n", "ok") == "ok"
 

@@ -29,6 +29,20 @@
         "timeout": 30,
         "matcher": "goal-evaluator",
         "_cursor_goal": "cursor_goal_subagent_stop_hook"
+      },
+      {
+        "command": "cmd /c \"${CURSOR_PLUGIN_ROOT}/skills/goal/scripts/stop_hook.cmd\"",
+        "loop_limit": null,
+        "timeout": 30,
+        "matcher": "goal-auditor",
+        "_cursor_goal": "cursor_goal_subagent_audit_stop_hook"
+      },
+      {
+        "command": "python3 -u \"${CURSOR_PLUGIN_ROOT}/skills/goal/scripts/stop_hook.py\"",
+        "loop_limit": null,
+        "timeout": 30,
+        "matcher": "goal-auditor",
+        "_cursor_goal": "cursor_goal_subagent_audit_stop_hook"
       }
     ]
   }

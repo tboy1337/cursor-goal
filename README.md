@@ -22,7 +22,7 @@ Autonomous `/goal` loop for Cursor IDE: persist an objective, work across turns,
 2. `manage doctor` — fix any FAIL lines.
 3. Create a demo goal (argv-safe `--test`).
 4. Start the `GOAL_WAKE_REQUIRED` command in a background Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE`.
-5. Confirm `wake status` → `continuation_ready=true`, then work until evaluator YES → `manage done`.
+5. Confirm `wake status` → `continuation_ready=true`, then work until remaining-work audit CLEAR and evaluator YES → `manage done`.
 
 Wake is armed by default while pursuing and recommended as a best-effort supplement, but `eval` commands only **warn** (not refuse) when the loop isn't confirmed alive — see [worked example](#worked-example) and [First run](#first-run-wake-handshake).
 
@@ -31,12 +31,12 @@ Wake is armed by default while pursuing and recommended as a best-effort supplem
 Every `/goal` uses the same automatic playbook — nothing extra to set:
 
 1. Do the next concrete change toward the condition.
-2. Run `eval validate` **this turn** (or gather explicit evidence if no `--test` was given). Never evaluate or mark done without that fresh evidence.
+2. Run `eval validate` **this turn** (or gather explicit evidence if no `--test` was given). Never evaluate or mark done without that fresh evidence. Never invent or weaken `--test` to fit a timeout.
 3. If validation fails: investigate the root cause from the failure output, then fix (group compile/type errors, resolve merge conflicts, split independent failures across parallel workers). Re-validate. Do not shotgun-patch.
 4. If validation passed and there is a git diff: once before the first YES attempt, strip AI slop without changing behavior, then re-validate.
-5. Spawn the readonly `goal-evaluator`. YES → `manage done`. NO → keep working.
+5. Spawn the readonly `goal-auditor` (original condition, no work summary). REMAINING → implement that list and return to step 2. CLEAR → spawn `goal-evaluator`. YES → `manage done`. NO → keep working.
 
-Plan Mode, `ce-plan`, Bugbot, `/review`, and thermo-nuclear review are **not** part of this loop: they wait on the user or add a second quality bar that can block a simple “tests pass” goal. Use them yourself outside `/goal` if you want.
+Do **not** invoke Plan Mode, `ce-plan`, Bugbot, `/review`, or thermo-nuclear review inside `/goal` (they wait on the user). The remaining-work auditor is the unattended equivalent of a fresh plan-mode chat, scoped to the original condition. Never claim complete in chat while `manage status` is `pursuing`.
 
 ## Requirements
 
@@ -52,7 +52,7 @@ Three supported paths:
 | Path | Who | How |
 |------|-----|-----|
 | **Clone + installer** | Individuals | Clone `main` (or a GitHub Release source archive) → `scripts/install-goal.sh` / `scripts/install-goal.ps1` |
-| **Tagged release** | Individuals | `git clone --branch v4.1.3 …` then installer (see [docs/install.md](docs/install.md)). |
+| **Tagged release** | Individuals | `git clone --branch v4.2.0 …` then installer (see [docs/install.md](docs/install.md)). |
 | **Teams marketplace** | Teams/Enterprise | Import this repo in Cursor Dashboard → Plugins (see `.cursor-plugin/marketplace.json`) |
 
 **Agent install (explicit steps):**
@@ -107,7 +107,7 @@ Uninstall: `./scripts/uninstall-goal.sh` or `.\scripts\uninstall-goal.ps1` (add 
    - Parse the JSON after that prefix; copy the `command` field.
    - Start that command in a **background** Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE` (same as the JSON `pattern` / `notify_pattern`).
    - Confirm: `wake status` shows `continuation_ready=true` (and usually `pid_alive=true`). `manage status` / `manage doctor` still hard-fail while pursuing without it; `eval validate`/`prompt`/`spawn-config` only warn by default (see [known limitations](docs/known-limitations.md)).
-5. Work toward the condition; on evaluator YES run `manage done`. If Hooks UI shows `{}`, rely on the `subagentStop` hook and wake — see [known limitations](docs/known-limitations.md).
+5. Work toward the condition; on remaining-work audit CLEAR and evaluator YES run `manage done`. If Hooks UI shows `{}`, rely on the `subagentStop` hook and wake — see [known limitations](docs/known-limitations.md).
 
 Security: see [SECURITY.md](SECURITY.md). Platform notes: [docs/platform-compatibility.md](docs/platform-compatibility.md). Known limits: [docs/known-limitations.md](docs/known-limitations.md). Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md). Teams/AGPL: [docs/teams-agpl.md](docs/teams-agpl.md).
 
@@ -142,23 +142,30 @@ touch ok.txt
 $RUN eval validate
 # → [goal] PASSED (exit 0) ...
 
-# 5. Generate the evaluator prompt and Task spawn config, then run the
+# 5. Remaining-work audit (fresh chat, no work summary), then evaluator.
+$RUN eval audit-prompt > /tmp/audit-prompt.txt
+$RUN eval audit-spawn-config
+# → {"subagent_type": "goal-auditor", "model": "inherit", "readonly": true}
+echo "CLEAR: ok.txt exists; nothing in-scope remains" | $RUN eval parse-audit --stdin
+# → [goal-eval] CLEAR remaining-work audit signal recorded automatically. (exit 0)
+
+# 6. Generate the evaluator prompt and Task spawn config, then run the
 #    goal-evaluator subagent yourself (this is what the /goal skill's Task
 #    call automates) and capture its raw text response.
 $RUN eval prompt > /tmp/prompt.txt
 $RUN eval spawn-config
 # → {"subagent_type": "goal-evaluator", "model": "composer-2.5", "readonly": true}
 
-# 6. Feed the subagent's verdict text back in (here simulated directly):
+# 7. Feed the subagent's verdict text back in (here simulated directly):
 echo "YES: ok.txt exists and validation passed" | $RUN eval parse-result --stdin
 # → [goal-eval] YES signal recorded automatically. (exit 0)
 
-# 7. Mark the goal done.
+# 8. Mark the goal done (requires CLEAR + YES unless --force).
 $RUN manage done
 # → [goal] Goal achieved in N turns: a file named ok.txt exists
 ```
 
-If the evaluator instead returns NO, `eval parse-result` exits 1 with the reason on stderr — keep working and evaluate again; do not call `manage done`.
+If the auditor returns REMAINING, `eval parse-audit` exits 1 — implement that list and audit again; do not spawn the evaluator yet. If the evaluator returns NO, `eval parse-result` exits 1 with the reason on stderr — keep working and evaluate again; do not call `manage done`.
 
 Verify (Unix / macOS / WSL):
 
@@ -201,6 +208,7 @@ Flags / natural language:
 | Role | Model | Agent |
 |------|--------|-------|
 | Worker | Session model | `goalKeeper` (`inherit`) |
+| Remaining-work auditor | Session model (`inherit`) | `goal-auditor` via `Task` |
 | Evaluator | `composer-2.5` by default | `goal-evaluator` via `Task` |
 
 Override the evaluator model:
@@ -227,18 +235,19 @@ reports the resolved evaluator model so you can confirm what actually ran.
 | `parse` | NL `/goal` input → JSON |
 | `manage` | Persist lifecycle in `~/.cursor-goal/data/goal.json` |
 | `eval validate` | Run `validation_command`; persist output for prompts |
+| `eval audit-spawn-config` | JSON Task params for the remaining-work auditor (`goal-auditor` + inherit) |
 | `eval spawn-config` | JSON Task params for the evaluator (model + subagent) |
-| `eval` | Evaluator prompt, YES-bound signal, YES/NO parse |
+| `eval` | Auditor/evaluator prompts, CLEAR/YES-bound signals, parse |
 | `stop` | Cursor stop hook: turn++, budget, `followup_message` (no validation subprocess) |
 | `wake` | Race-immune wake watchdog (`arm`/`loop`/`tick`/`disarm`) via shell notify |
-| `SKILL.md` / `goalKeeper.md` / `goal-evaluator.md` | Agent protocol |
+| `SKILL.md` / `goalKeeper.md` / `goal-auditor.md` / `goal-evaluator.md` | Agent protocol |
 
 CLI (after install):
 
 ```bash
 python -u ~/.cursor/skills/goal/scripts/run_goal.py parse "..."
 python -u ~/.cursor/skills/goal/scripts/run_goal.py manage create "..." [--test "..."] [--budget N]
-python -u ~/.cursor/skills/goal/scripts/run_goal.py eval validate|spawn-config|prompt|parse-result|signal|check
+python -u ~/.cursor/skills/goal/scripts/run_goal.py eval validate|audit-spawn-config|audit-prompt|parse-audit|spawn-config|prompt|parse-result|signal|check
 ```
 
 Developers can also `pip install -e ".[dev]"` and use `cursor-goal` / `python -m cursor_goal`.

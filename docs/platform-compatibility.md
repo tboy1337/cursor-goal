@@ -10,7 +10,7 @@ Also: [known-limitations.md](known-limitations.md) · [troubleshooting.md](troub
 
 | Platform | Agent Defs | Subagent Tool | Stop / subagentStop Hooks | Tested |
 |----------|------------|---------------|---------------------------|--------|
-| Cursor IDE (Unix) | `goalKeeper.md` + `goal-evaluator.md` | `Task` | `hooks.json` → `stop_hook.py` (both events) | **Harness YES**; hook followups documented and primary; occasional stdout-capture race — arm wake as a best-effort supplement |
+| Cursor IDE (Unix) | `goalKeeper.md` + `goal-evaluator.md` + `goal-auditor.md` | `Task` | `hooks.json` → `stop_hook.py` (both events) | **Harness YES**; hook followups documented and primary; occasional stdout-capture race — arm wake as a best-effort supplement |
 | Cursor IDE (Windows) | same | `Task` | `stop_hook.cmd` (+ drain), both events | Harness YES; race mitigated; wake is a recommended best-effort supplement ([research](cursor-windows-stop-hook-race.md)) |
 | Teams marketplace plugin | same | `Task` | Dual `stop_hook.cmd` + `python3` + singleflight/dedupe, both events | Harness YES; set absolute `CURSOR_GOAL_PYTHON` (doctor requires it on Windows marketplace) |
 | Cursor CLI | same | `Task` | `hooks.json` | NO (E2E) |
@@ -20,10 +20,11 @@ Also: [known-limitations.md](known-limitations.md) · [troubleshooting.md](troub
 ```
 .cursor/agents/goalKeeper.md       → ~/.cursor/agents/goalKeeper.md
 .cursor/agents/goal-evaluator.md   → ~/.cursor/agents/goal-evaluator.md
+.cursor/agents/goal-auditor.md     → ~/.cursor/agents/goal-auditor.md
 .cursor/skills/goal/SKILL.md       → ~/.cursor/skills/goal/SKILL.md
 .cursor/skills/goal/scripts/*      → ~/.cursor/skills/goal/scripts/
 src/cursor_goal/                   → ~/.cursor/skills/goal/cursor_goal/
-~/.cursor/hooks.json               → stop, subagentStop (matcher: goal-evaluator)
+~/.cursor/hooks.json               → stop, subagentStop (matcher: goal-evaluator and goal-auditor)
                                    → (Unix) <python> -u …/stop_hook.py
                                    → (Windows) …/stop_hook.cmd
 VERSION                            → ~/.cursor/skills/goal/VERSION (package stamp)
@@ -34,6 +35,7 @@ VERSION                            → ~/.cursor/skills/goal/VERSION (package st
 | Role | Model | Mechanism |
 |------|--------|-----------|
 | Worker | Session model | Skill + `goalKeeper` (`model: inherit`) |
+| Remaining-work auditor | Session model (`inherit`) | `goal-auditor` via `Task` |
 | Evaluator | `CURSOR_GOAL_EVAL_MODEL` or default `composer-2.5` | `goal-evaluator` via `Task` |
 | Continuation | N/A (no LLM) | `stop` + `subagentStop` hooks (`followup_message`, documented, primary) + wake watchdog (`AGENT_GOAL_WAKE`, undocumented, best-effort) |
 
@@ -42,6 +44,8 @@ Resolve Task spawn parameters from the harness (do not hardcode a premium model)
 ```bash
 python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval spawn-config
 # → {"subagent_type":"goal-evaluator","model":"composer-2.5","readonly":true}
+python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval audit-spawn-config
+# → {"subagent_type":"goal-auditor","model":"inherit","readonly":true}
 ```
 
 `fast` is **not** a valid Cursor `model` ID — it is only a bracket parameter on a real model (e.g. `composer-2.5[fast=false]`). Setting `CURSOR_GOAL_EVAL_MODEL=fast` is treated as a known-invalid legacy value: it logs a warning and falls back to the default rather than being passed through, and `manage doctor` hard-fails on it. On legacy request-based Cursor plans without Max Mode, Task subagents may still run on a Cursor-selected model regardless of the requested `model` — `spawn-config` reflects the *requested* model, not a runtime guarantee. See [Cursor subagents](https://cursor.com/docs/subagents.md).
@@ -54,6 +58,7 @@ python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval spawn-config
 | `CURSOR_GOAL_HOME` | Absolute override for skill/home resolution used by path helpers (when set) |
 | `CURSOR_GOAL_PYTHON` | Absolute Python 3.12+ interpreter for marketplace/classic Windows `.cmd` launchers (required for reliable Teams marketplace on Windows) |
 | `CURSOR_GOAL_EVAL_MODEL` | Evaluator model slug for `eval spawn-config` (default `composer-2.5`; `fast` is a known-invalid legacy value that falls back to the default) |
+| `CURSOR_GOAL_VALIDATE_TIMEOUT_SEC` | `eval validate` timeout in seconds (default 600; clamped to 25–3600). Invalid values fall back to 600 |
 | `CURSOR_GOAL_LOG` | Log level (`WARNING` default; invalid values fall back to WARNING). `last-stop-response.json` is always written on stop emit (redacted) |
 | `CURSOR_GOAL_LOG_FILE` | Optional durable log path, or `1`/`.` for `cursor-goal.log` under the data dir |
 | `CURSOR_GOAL_STOP_DRAIN_MS` | Stop-hook stdout drain delay before exit (default ~250 on Windows, ~100 elsewhere; max 2000) |
@@ -74,7 +79,9 @@ python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval spawn-config
 | `…/run_goal.py manage …` | State lifecycle (`create`/`status`/`doctor`/`pause`/`resume`/`done`/`clear`) |
 | `…/run_goal.py eval validate` | Run `validation_command`; persist output |
 | `…/run_goal.py eval spawn-config` | JSON Task params for the evaluator |
+| `…/run_goal.py eval audit-spawn-config` | JSON Task params for the remaining-work auditor |
 | `…/run_goal.py eval prompt\|parse-result\|signal\|check` | Evaluator harness (`parse-result --stdin` / `@file` preferred on Windows) |
+| `…/run_goal.py eval audit-prompt\|parse-audit` | Remaining-work auditor harness (`parse-audit --stdin` / `@file` preferred on Windows) |
 | `…/run_goal.py stop` / `stop_hook.py` | Cursor stop hook stdin/stdout JSON |
 | `…/run_goal.py wake …` | Wake watchdog (`arm`/`tick`/`disarm`/`status`/`loop`) |
 
@@ -91,7 +98,7 @@ SPAWN=$(python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval spawn-config)
 python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval parse-result --stdin <<'EOF'
 <subagent response>
 EOF
-# YES auto-records a YES-bound signal → manage done
+# YES auto-records a YES-bound signal; CLEAR from parse-audit is also required → manage done
 ```
 
 On Windows, pipe the response into `eval parse-result --stdin` (or use `@file`) — do not put long evaluator text on the command line.
@@ -108,7 +115,8 @@ On Windows, pipe the response into `eval parse-result --stdin` (or use `@file`) 
 
 ## Design notes
 
-- **Primary evaluation is in-turn.** The `stop`/`subagentStop` hooks are Cursor's documented continuation mechanism, not the evaluator — they only keep the turn loop going.
+- **Primary evaluation is in-turn.** After validation, spawn `goal-auditor` then `goal-evaluator`. The `stop`/`subagentStop` hooks are Cursor's documented continuation mechanism, not the evaluator — they only keep the turn loop going.
+- `eval validate` defaults to a 600s timeout (`CURSOR_GOAL_VALIDATE_TIMEOUT_SEC`, clamped 25–3600). Timeouts count as failed validation. Do not replace the user's `--test` with a shorter proxy.
 - Installer sets `loop_limit: null` so product `turn_budget` governs length (Cursor default would be 5).
 - Prefer `--test "..."` for compound validation commands; NL runner hints truncate at `&&` / `|` / `;`.
 - **Windows stop-hook mitigation:** installer writes `stop_hook.cmd` (cmd.exe launcher with absolute Python) and the Python hook flushes + waits (~250ms on Windows via `CURSOR_GOAL_STOP_DRAIN_MS`) before exit so Cursor's stdout reader can catch `followup_message` ([Cursor race](https://forum.cursor.com/t/race-condition-silently-disables-hooks-that-exit-quickly/165818)). Residual risk remains until Cursor ships a permanent launcher fix. Always writes `last-stop-response.json`. **Wake watchdog** (`wake loop` + `notify_on_output`) is a best-effort, undocumented supplement that continues goals when followups drop — see [cursor-windows-stop-hook-race.md](cursor-windows-stop-hook-race.md) and [known-limitations.md](known-limitations.md).

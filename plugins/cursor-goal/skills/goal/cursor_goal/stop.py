@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import IO, Any
 
 from cursor_goal.logging_config import get_logger
-from cursor_goal.models import EVAL_SUBAGENT_TYPE
+from cursor_goal.models import AUDIT_SUBAGENT_TYPE, EVAL_SUBAGENT_TYPE
 from cursor_goal.state import (
     LAST_STOP_RESPONSE_NAME,
     GoalState,
@@ -374,15 +374,19 @@ def _continue_followup(state: GoalState, remaining: int) -> dict[str, Any]:
         safe_cmd = redact_command(state.validation_command)
         raw = (
             f"[GOAL] Turn {state.turns_used}/{state.turn_budget} "
-            f"({remaining} remaining). Run validation in-turn if needed "
-            f"({safe_cmd}), then evaluate completion via "
-            f"subagent. Goal: {safe_condition}"
+            f"({remaining} remaining). Status is still pursuing — an earlier "
+            '"this is complete" message is invalid. Run `manage status` and '
+            f"continue. Run validation in-turn if needed "
+            f"({safe_cmd}), then remaining-work audit, then evaluate. "
+            f"Goal: {safe_condition}"
         )
     else:
         raw = (
             f"[GOAL] Turn {state.turns_used}/{state.turn_budget} "
-            f"({remaining} remaining). Continue working toward: {safe_condition}. "
-            "Evaluate completion via subagent when ready."
+            f"({remaining} remaining). Status is still pursuing — an earlier "
+            '"this is complete" message is invalid. Run `manage status` and '
+            f"continue working toward: {safe_condition}. "
+            "Then remaining-work audit, then evaluate via subagent."
         )
     return {"followup_message": raw}
 
@@ -428,15 +432,16 @@ def handle_subagent_stop(payload: dict[str, Any] | None) -> dict[str, Any]:
     """Compute subagentStop-hook response. Never raises — fail open to {}.
 
     Documented (https://cursor.com/docs/hooks.md), race-free continuation
-    point: the instant the goal-evaluator subagent finishes, nudge the
-    worker to parse its verdict — *without* ever calling ``manage done``
-    itself. Defensive ``subagent_type`` check backs up the installer-side
-    ``matcher`` so no other subagent type can ever trigger this followup,
-    even if a hooks.json is hand-edited to drop the matcher.
+    point: the instant a goal-evaluator or goal-auditor subagent finishes,
+    nudge the worker to parse its verdict — *without* ever calling
+    ``manage done`` itself. Defensive ``subagent_type`` check backs up the
+    installer-side ``matcher`` so no other subagent type can ever trigger
+    this followup, even if a hooks.json is hand-edited to drop the matcher.
     """
     if not isinstance(payload, dict):
         return {}
-    if payload.get("subagent_type") != EVAL_SUBAGENT_TYPE:
+    subagent_type = payload.get("subagent_type")
+    if subagent_type not in {EVAL_SUBAGENT_TYPE, AUDIT_SUBAGENT_TYPE}:
         return {}
     if payload.get("status") != "completed":
         return {}
@@ -450,11 +455,21 @@ def handle_subagent_stop(payload: dict[str, Any] | None) -> dict[str, Any]:
     if state is None or not state.active or state.status != "pursuing":
         return {}
     safe_condition = redact_secrets(state.condition, max_chars=None)
-    message = (
-        "[GOAL] The evaluator subagent finished. Run `eval parse-result` on "
-        "its response now — YES: `manage done`; NO: continue working toward: "
-        f"{safe_condition}"
-    )
+    if subagent_type == AUDIT_SUBAGENT_TYPE:
+        message = (
+            "[GOAL] The remaining-work auditor finished. Run `eval parse-audit` "
+            "on its response now — REMAINING: implement that list; CLEAR: spawn "
+            "goal-evaluator. Status is still pursuing. Goal: "
+            f"{safe_condition}"
+        )
+    else:
+        message = (
+            "[GOAL] The evaluator subagent finished. Run `eval parse-result` on "
+            "its response now — YES: `manage done` only if a CLEAR audit signal "
+            "also exists; NO: continue working toward: "
+            f"{safe_condition}. Status is still pursuing; an earlier "
+            '"this is complete" message is invalid.'
+        )
     return {"followup_message": message}
 
 

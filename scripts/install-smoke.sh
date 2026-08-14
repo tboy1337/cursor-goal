@@ -47,10 +47,12 @@ test ! -f "$HOME/.cursor/skills/goal/scripts/wake_loop.cmd"
 test -f "$HOME/.cursor/skills/goal/VERSION"
 test -f "$HOME/.cursor/agents/goalKeeper.md"
 test -f "$HOME/.cursor/agents/goal-evaluator.md"
+test -f "$HOME/.cursor/agents/goal-auditor.md"
 test -f "$HOME/.cursor/hooks.json"
 
 grep -q "goalKeeper\|Autonomous\|goal" "$HOME/.cursor/agents/goalKeeper.md"
 grep -q "goal-evaluator\|evaluator\|readonly" "$HOME/.cursor/agents/goal-evaluator.md"
+grep -q "goal-auditor\|remaining-work\|CLEAR" "$HOME/.cursor/agents/goal-auditor.md"
 
 # Use the absolute interpreter baked into hooks.json (same as installer-selected).
 HOOK_CMD="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8"))["hooks"]["stop"][0]["command"])' "$HOME/.cursor/hooks.json" 2>/dev/null || true)"
@@ -100,6 +102,11 @@ echo "[install-smoke] Running eval spawn-config..."
 SPAWN="$("$SMOKE_PY" -u "$RUN_GOAL" eval spawn-config)"
 echo "[install-smoke] spawn-config: $SPAWN"
 "$SMOKE_PY" -c 'import json,sys; d=json.loads(sys.argv[1]); assert d.get("subagent_type")=="goal-evaluator"; assert d.get("readonly") is True; assert "model" in d' "$SPAWN"
+
+echo "[install-smoke] Running eval audit-spawn-config..."
+AUDIT_SPAWN="$("$SMOKE_PY" -u "$RUN_GOAL" eval audit-spawn-config)"
+echo "[install-smoke] audit-spawn-config: $AUDIT_SPAWN"
+"$SMOKE_PY" -c 'import json,sys; d=json.loads(sys.argv[1]); assert d.get("subagent_type")=="goal-auditor"; assert d.get("readonly") is True; assert d.get("model")=="inherit"' "$AUDIT_SPAWN"
 
 echo "[install-smoke] Uninstalling..."
 bash "${REPO_ROOT}/scripts/uninstall-goal.sh" --purge-data

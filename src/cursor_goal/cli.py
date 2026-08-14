@@ -76,7 +76,8 @@ def _print_help() -> None:
     print("  eval <subcommand> [...]       Evaluator harness")
     print(
         "                                "
-        "(validate|spawn-config|prompt|parse-result|signal|check)"
+        "(validate|spawn-config|prompt|parse-result|parse-audit|"
+        "audit-prompt|audit-spawn-config|signal|check)"
     )
     print(
         "  stop                          Cursor stop hook (stdin JSON -> stdout JSON)"

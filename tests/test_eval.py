@@ -11,8 +11,10 @@ from pathlib import Path
 import pytest
 
 from cursor_goal.evaluate import (
+    MISSING_AUDIT_CLEAR,
     MISSING_VALIDATION_EVIDENCE,
     _emit_prompt,
+    parse_audit_text,
     parse_result_text,
     validation_evidence_missing,
 )
@@ -470,9 +472,13 @@ def test_eval_validate_redacts_live_stdout(
     run_cli("manage", "create", "g", "--test", f'{sys.executable} -c "pass"')
 
     def fake_run(
-        _cmd: str, *, shell_ok: bool = False, cwd: str | None = None
+        _cmd: str,
+        *,
+        shell_ok: bool = False,
+        cwd: str | None = None,
+        timeout_sec: float | None = None,
     ) -> ValidationResult:
-        del shell_ok, cwd
+        del shell_ok, cwd, timeout_sec
         return ValidationResult(
             exit_code=0,
             output="api_key=sk-secretvalue1234567890\n",
@@ -535,3 +541,150 @@ def test_eval_spawn_config_warns_but_continues_by_default(
     assert "wake" in err.lower()
     data = json.loads(out.strip())
     assert data["subagent_type"] == "goal-evaluator"
+
+
+def test_eval_prompt_rejects_validation_as_sufficient(goal_home: Path) -> None:
+    run_cli("manage", "create", "production audit")
+    code, out, _err = run_cli("eval", "prompt")
+    assert code == 0
+    assert "strong evidence" not in out.lower()
+    assert "NOT sufficient" in out
+    assert MISSING_AUDIT_CLEAR in out
+    assert "Remaining-work audit: not CLEAR" in out
+
+
+def test_eval_prompt_shows_clear_audit(goal_home: Path) -> None:
+    run_cli("manage", "create", "production audit")
+    assert run_cli("eval", "parse-audit", "CLEAR: nothing remains")[0] == 0
+    code, out, _err = run_cli("eval", "prompt")
+    assert code == 0
+    assert "Remaining-work audit: CLEAR this cycle" in out
+    assert MISSING_AUDIT_CLEAR not in out
+
+
+def test_eval_audit_prompt_has_no_work_summary(goal_home: Path) -> None:
+    run_cli("manage", "create", "production audit")
+    code, out, _err = run_cli("eval", "audit-prompt", "--work-summary", "did X")
+    assert code == 0
+    assert "did X" not in out
+    assert "Goal condition: production audit" in out
+    assert "inspect" in out.lower()
+    assert "CLEAR:" in out
+    assert "REMAINING:" in out
+
+
+def test_eval_audit_spawn_config(goal_home: Path) -> None:
+    code, out, _err = run_cli("eval", "audit-spawn-config")
+    assert code == 0
+    data = json.loads(out.strip())
+    assert data["subagent_type"] == "goal-auditor"
+    assert data["model"] == "inherit"
+    assert data["readonly"] is True
+
+
+def test_parse_audit_text_last_line_wins() -> None:
+    verdict, reason = parse_audit_text("CLEAR: nope\nREMAINING: src/foo.py still leaks")
+    assert verdict == "REMAINING"
+    assert "src/foo.py" in reason
+    verdict2, reason2 = parse_audit_text(
+        "Notes\nREMAINING: maybe\nCLEAR: in-scope work is done"
+    )
+    assert verdict2 == "CLEAR"
+    assert "in-scope" in reason2
+
+
+def test_parse_audit_unclear_without_verdict() -> None:
+    verdict, _reason = parse_audit_text("looks fine overall")
+    assert verdict == "UNCLEAR"
+
+
+def test_eval_parse_audit_clear_auto_signals(goal_home: Path) -> None:
+    run_cli("manage", "create", "test condition")
+    code, out, _err = run_cli("eval", "parse-audit", "CLEAR: nothing in-scope remains")
+    assert code == 0
+    assert "VERDICT=CLEAR" in out
+    assert "CLEAR remaining-work" in out
+    assert (goal_home / "goal-audit-clear").is_file()
+    state = load_goal()
+    assert state is not None
+    assert state.last_audit_verdict == "CLEAR"
+    _code, status_out, _err = run_cli("manage", "status")
+    assert "Last audit: CLEAR" in status_out
+
+
+def test_eval_parse_audit_remaining_clears_yes(goal_home: Path) -> None:
+    run_cli("manage", "create", "test condition")
+    run_cli("eval", "parse-result", "YES: looks done")
+    run_cli("eval", "parse-audit", "CLEAR: first pass")
+    assert (goal_home / "goal-eval-done").is_file()
+    assert (goal_home / "goal-audit-clear").is_file()
+    code, out, _err = run_cli(
+        "eval", "parse-audit", "REMAINING: src/foo.py rooted C:foo path"
+    )
+    assert code == 1
+    assert "VERDICT=REMAINING" in out
+    assert not (goal_home / "goal-audit-clear").exists()
+    assert not (goal_home / "goal-eval-done").exists()
+
+
+def test_eval_parse_result_no_clears_audit(goal_home: Path) -> None:
+    run_cli("manage", "create", "test condition")
+    run_cli("eval", "parse-audit", "CLEAR: ok")
+    assert (goal_home / "goal-audit-clear").is_file()
+    code, out, _err = run_cli("eval", "parse-result", "NO: tests still fail")
+    assert code == 1
+    assert "VERDICT=NO" in out
+    assert not (goal_home / "goal-audit-clear").exists()
+
+
+def test_eval_parse_audit_clear_rejects_paused(goal_home: Path) -> None:
+    assert run_cli("manage", "create", "paused-clear")[0] == 0
+    assert run_cli("manage", "pause")[0] == 0
+    code, _out, err = run_cli("eval", "parse-audit", "CLEAR: done")
+    assert code == 1
+    assert "pursuing" in err.lower()
+
+
+def test_eval_help_lists_audit_commands(goal_home: Path) -> None:
+    code, out, _err = run_cli("eval", "help")
+    assert code == 0
+    assert "audit-prompt" in out
+    assert "parse-audit" in out
+    assert "audit-spawn-config" in out
+
+
+def test_eval_audit_prompt_no_goal(goal_home: Path) -> None:
+    code, _out, err = run_cli("eval", "audit-prompt")
+    assert code == 1
+    assert "No active goal" in err
+
+
+def test_eval_audit_prompt_corrupt_goal(goal_home: Path) -> None:
+    (goal_home / "goal.json").write_text("{not-json", encoding="utf-8")
+    code, _out, err = run_cli("eval", "audit-prompt")
+    assert code == 1
+    assert "corrupt" in err.lower() or "Error" in err
+
+
+def test_eval_audit_prompt_refuses_dead_wake(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+    monkeypatch.setenv("CURSOR_GOAL_REQUIRE_WAKE", "1")
+    monkeypatch.delenv("CURSOR_GOAL_ALLOW_DEAD_WAKE", raising=False)
+    assert run_cli("manage", "create", "need audit")[0] == 0
+    code, _out, err = run_cli("eval", "audit-prompt")
+    assert code == 1
+    assert "wake" in err.lower()
+
+
+def test_eval_audit_spawn_config_refuses_dead_wake(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+    monkeypatch.setenv("CURSOR_GOAL_REQUIRE_WAKE", "1")
+    monkeypatch.delenv("CURSOR_GOAL_ALLOW_DEAD_WAKE", raising=False)
+    assert run_cli("manage", "create", "need audit spawn")[0] == 0
+    code, _out, err = run_cli("eval", "audit-spawn-config")
+    assert code == 1
+    assert "wake" in err.lower()

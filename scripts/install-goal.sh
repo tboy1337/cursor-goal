@@ -27,6 +27,7 @@ SKILL_BACKUP=""
 # should delete it, not "restore" a backup that never existed).
 AGENT_KEEPER_BACKUP=""
 AGENT_EVALUATOR_BACKUP=""
+AGENT_AUDITOR_BACKUP=""
 
 log_info()  { echo -e "${GREEN}[install-goal]${NC} $1"; }
 log_warn()  { echo -e "${YELLOW}[install-goal]${NC} $1"; }
@@ -98,6 +99,7 @@ install_skill_files() {
   local SOURCE_PKG="${REPO_ROOT}/src/cursor_goal"
   local SOURCE_AGENT="${REPO_ROOT}/.cursor/agents/goalKeeper.md"
   local SOURCE_EVALUATOR="${REPO_ROOT}/.cursor/agents/goal-evaluator.md"
+  local SOURCE_AUDITOR="${REPO_ROOT}/.cursor/agents/goal-auditor.md"
 
   if [ ! -d "$SOURCE_PKG" ]; then
     log_error "Package not found: $SOURCE_PKG"
@@ -114,6 +116,10 @@ install_skill_files() {
   fi
   if [ ! -f "$SOURCE_EVALUATOR" ]; then
     log_error "Required agent not found: $SOURCE_EVALUATOR"
+    exit 1
+  fi
+  if [ ! -f "$SOURCE_AUDITOR" ]; then
+    log_error "Required agent not found: $SOURCE_AUDITOR"
     exit 1
   fi
 
@@ -172,11 +178,18 @@ PY
     cp "${AGENTS_DIR}/goal-evaluator.md" "$AGENT_EVALUATOR_BACKUP"
     log_info "Backed up existing goal-evaluator.md"
   fi
+  if [ -f "${AGENTS_DIR}/goal-auditor.md" ]; then
+    AGENT_AUDITOR_BACKUP="${AGENTS_DIR}/goal-auditor.md.bak.${TS}"
+    cp "${AGENTS_DIR}/goal-auditor.md" "$AGENT_AUDITOR_BACKUP"
+    log_info "Backed up existing goal-auditor.md"
+  fi
 
   cp "$SOURCE_AGENT" "${AGENTS_DIR}/goalKeeper.md"
   log_info "Installed: ${AGENTS_DIR}/goalKeeper.md"
   cp "$SOURCE_EVALUATOR" "${AGENTS_DIR}/goal-evaluator.md"
   log_info "Installed: ${AGENTS_DIR}/goal-evaluator.md"
+  cp "$SOURCE_AUDITOR" "${AGENTS_DIR}/goal-auditor.md"
+  log_info "Installed: ${AGENTS_DIR}/goal-auditor.md"
 
   log_info "Installed package + scripts under $INSTALL_DIR"
 }
@@ -209,7 +222,7 @@ from cursor_goal.hooks_config import merge_hooks_at_path
 
 # Same launcher command for both events: cmd_stop() dispatches on payload
 # shape (subagentStop payloads carry "subagent_type"), scoped further by the
-# installed hooks.json "matcher": "goal-evaluator".
+# installed hooks.json "matcher": "goal-evaluator" / "goal-auditor".
 merge_hooks_at_path(Path(sys.argv[2]), sys.argv[3], subagent_stop_command=sys.argv[3])
 print("merged")
 PY
@@ -242,6 +255,13 @@ PY
       log_warn "Removing goal-evaluator.md installed this run (no prior version existed)"
       rm -f "${AGENTS_DIR}/goal-evaluator.md"
     fi
+    if [ -n "$AGENT_AUDITOR_BACKUP" ] && [ -f "$AGENT_AUDITOR_BACKUP" ]; then
+      log_warn "Restoring goal-auditor.md from $AGENT_AUDITOR_BACKUP"
+      mv "$AGENT_AUDITOR_BACKUP" "${AGENTS_DIR}/goal-auditor.md"
+    elif [ -f "${AGENTS_DIR}/goal-auditor.md" ]; then
+      log_warn "Removing goal-auditor.md installed this run (no prior version existed)"
+      rm -f "${AGENTS_DIR}/goal-auditor.md"
+    fi
     exit 1
   fi
   log_info "Merged/upgraded stop + subagentStop hooks in hooks.json"
@@ -266,6 +286,7 @@ print_summary() {
   echo "Components:"
   echo "  goalKeeper.md       $AGENTS_DIR/goalKeeper.md"
   echo "  goal-evaluator.md   $AGENTS_DIR/goal-evaluator.md"
+  echo "  goal-auditor.md     $AGENTS_DIR/goal-auditor.md"
   echo "  skill               $INSTALL_DIR"
   echo "  stop hook        $(hook_command)"
   echo "  hooks.json       $CURSOR_HOOKS_FILE"

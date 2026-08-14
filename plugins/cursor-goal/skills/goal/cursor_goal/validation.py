@@ -16,7 +16,10 @@ from cursor_goal.path_trust import path_has_symlink_or_reparse
 
 logger = get_logger("cursor_goal.validation")
 
-DEFAULT_TIMEOUT_SEC = 25
+DEFAULT_TIMEOUT_SEC = 600
+MIN_TIMEOUT_SEC = 25
+MAX_TIMEOUT_SEC = 3600
+VALIDATE_TIMEOUT_ENV = "CURSOR_GOAL_VALIDATE_TIMEOUT_SEC"
 
 _SECRETISH = re.compile(
     r"(?i)(?:"
@@ -294,10 +297,49 @@ def try_split_argv(command: str) -> list[str] | None:
     return parts
 
 
+def resolve_validation_timeout_sec() -> float:
+    """Return the validation timeout, clamped from env or the default.
+
+    ``CURSOR_GOAL_VALIDATE_TIMEOUT_SEC`` is clamped to
+    [``MIN_TIMEOUT_SEC``, ``MAX_TIMEOUT_SEC``]. Invalid values fall back to
+    ``DEFAULT_TIMEOUT_SEC``.
+    """
+    raw = os.environ.get(VALIDATE_TIMEOUT_ENV)
+    if raw is None or not str(raw).strip():
+        return float(DEFAULT_TIMEOUT_SEC)
+    try:
+        value = float(str(raw).strip())
+    except ValueError:
+        logger.warning(
+            "Invalid %s=%r; using default %s",
+            VALIDATE_TIMEOUT_ENV,
+            raw,
+            DEFAULT_TIMEOUT_SEC,
+        )
+        return float(DEFAULT_TIMEOUT_SEC)
+    if value < MIN_TIMEOUT_SEC:
+        logger.warning(
+            "%s=%s below min %s; clamping",
+            VALIDATE_TIMEOUT_ENV,
+            value,
+            MIN_TIMEOUT_SEC,
+        )
+        return float(MIN_TIMEOUT_SEC)
+    if value > MAX_TIMEOUT_SEC:
+        logger.warning(
+            "%s=%s above max %s; clamping",
+            VALIDATE_TIMEOUT_ENV,
+            value,
+            MAX_TIMEOUT_SEC,
+        )
+        return float(MAX_TIMEOUT_SEC)
+    return value
+
+
 def run_validation(
     command: str,
     *,
-    timeout_sec: float = DEFAULT_TIMEOUT_SEC,
+    timeout_sec: float | None = None,
     cwd: str | None = None,
     shell_ok: bool = False,
 ) -> ValidationResult:
@@ -318,6 +360,8 @@ def run_validation(
             exit_code=1,
             output="[goal-eval] Error: empty validation command",
         )
+    if timeout_sec is None:
+        timeout_sec = resolve_validation_timeout_sec()
 
     argv = try_split_argv(stripped)
     env = scrubbed_validation_env()

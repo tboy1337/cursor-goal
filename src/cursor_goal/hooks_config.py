@@ -19,8 +19,10 @@ from cursor_goal.logging_config import get_logger
 
 HOOK_MARKER = "cursor_goal_stop_hook"
 SUBAGENT_STOP_MARKER = "cursor_goal_subagent_stop_hook"
+AUDIT_SUBAGENT_STOP_MARKER = "cursor_goal_subagent_audit_stop_hook"
 SUBAGENT_STOP_EVENT = "subagentStop"
 SUBAGENT_STOP_MATCHER = "goal-evaluator"
+AUDIT_SUBAGENT_STOP_MATCHER = "goal-auditor"
 
 logger = get_logger("cursor_goal.hooks_config")
 
@@ -42,8 +44,13 @@ def is_goal_stop_hook(item: object) -> bool:
 
 
 def is_goal_subagent_stop_hook(item: object) -> bool:
-    """Return True if *item* is a marked cursor-goal subagentStop hook entry."""
+    """Return True if *item* is a marked cursor-goal evaluator subagentStop entry."""
     return is_goal_marked_entry(item, SUBAGENT_STOP_MARKER)
+
+
+def is_goal_audit_subagent_stop_hook(item: object) -> bool:
+    """Return True if *item* is a marked remaining-work auditor subagentStop entry."""
+    return is_goal_marked_entry(item, AUDIT_SUBAGENT_STOP_MARKER)
 
 
 def build_stop_entry(command: str, *, timeout: int = 30) -> dict[str, Any]:
@@ -55,8 +62,14 @@ def build_stop_entry(command: str, *, timeout: int = 30) -> dict[str, Any]:
     }
 
 
-def build_subagent_stop_entry(command: str, *, timeout: int = 30) -> dict[str, Any]:
-    """Build a subagentStop entry scoped to the goal-evaluator subagent.
+def build_subagent_stop_entry(
+    command: str,
+    *,
+    timeout: int = 30,
+    matcher: str | None = None,
+    marker: str | None = None,
+) -> dict[str, Any]:
+    """Build a subagentStop entry scoped to a goal subagent.
 
     Uses the same launcher *command* as the stop hook — the payload shape
     (presence of ``subagent_type``) distinguishes the two events at runtime.
@@ -65,9 +78,21 @@ def build_subagent_stop_entry(command: str, *, timeout: int = 30) -> dict[str, A
         "command": command,
         "loop_limit": None,
         "timeout": timeout,
-        "matcher": SUBAGENT_STOP_MATCHER,
-        "_cursor_goal": SUBAGENT_STOP_MARKER,
+        "matcher": matcher or SUBAGENT_STOP_MATCHER,
+        "_cursor_goal": marker or SUBAGENT_STOP_MARKER,
     }
+
+
+def build_audit_subagent_stop_entry(
+    command: str, *, timeout: int = 30
+) -> dict[str, Any]:
+    """Build a subagentStop entry scoped to the remaining-work auditor."""
+    return build_subagent_stop_entry(
+        command,
+        timeout=timeout,
+        matcher=AUDIT_SUBAGENT_STOP_MATCHER,
+        marker=AUDIT_SUBAGENT_STOP_MARKER,
+    )
 
 
 def normalize_hook_event(value: object, *, label: str) -> list[Any]:
@@ -143,8 +168,20 @@ def merge_subagent_stop_hook(
     return _merge_marked_entry(data, SUBAGENT_STOP_EVENT, SUBAGENT_STOP_MARKER, entry)
 
 
+def merge_audit_subagent_stop_hook(
+    data: dict[str, Any], entry: dict[str, Any]
+) -> dict[str, Any]:
+    return _merge_marked_entry(
+        data, SUBAGENT_STOP_EVENT, AUDIT_SUBAGENT_STOP_MARKER, entry
+    )
+
+
 def remove_subagent_stop_hooks(data: dict[str, Any]) -> dict[str, Any]:
     return _remove_marked_entries(data, SUBAGENT_STOP_EVENT, SUBAGENT_STOP_MARKER)
+
+
+def remove_audit_subagent_stop_hooks(data: dict[str, Any]) -> dict[str, Any]:
+    return _remove_marked_entries(data, SUBAGENT_STOP_EVENT, AUDIT_SUBAGENT_STOP_MARKER)
 
 
 def write_hooks_file(path: Path, data: dict[str, Any]) -> None:
@@ -181,8 +218,9 @@ def merge_hooks_at_path(
     """Merge goal hooks into hooks.json (installer entry point).
 
     Always merges the ``stop`` hook. When *subagent_stop_command* is given,
-    also merges a ``subagentStop`` hook scoped to the goal-evaluator subagent
-    (typically the same command, since one script handles both event shapes).
+    also merges ``subagentStop`` hooks scoped to ``goal-evaluator`` and
+    ``goal-auditor`` (typically the same command, since one script handles
+    both event shapes).
     """
     if hooks_path.is_file():
         data = read_hooks_file(hooks_path)
@@ -192,6 +230,9 @@ def merge_hooks_at_path(
     if subagent_stop_command:
         data = merge_subagent_stop_hook(
             data, build_subagent_stop_entry(subagent_stop_command)
+        )
+        data = merge_audit_subagent_stop_hook(
+            data, build_audit_subagent_stop_entry(subagent_stop_command)
         )
     write_hooks_file(hooks_path, data)
 
@@ -203,4 +244,5 @@ def remove_hooks_at_path(hooks_path: Path) -> None:
     data = read_hooks_file(hooks_path)
     data = remove_stop_hooks(data)
     data = remove_subagent_stop_hooks(data)
+    data = remove_audit_subagent_stop_hooks(data)
     write_hooks_file(hooks_path, data)

@@ -16,6 +16,8 @@ logger = get_logger("cursor_goal.models")
 DEFAULT_EVAL_MODEL = "composer-2.5"
 EVAL_MODEL_ENV = "CURSOR_GOAL_EVAL_MODEL"
 EVAL_SUBAGENT_TYPE = "goal-evaluator"
+AUDIT_SUBAGENT_TYPE = "goal-auditor"
+AUDIT_MODEL = "inherit"
 
 # Legacy/invalid values that look like a model but are not honored by Cursor's
 # subagent `model` field today. "fast" in particular is only a bracket option
@@ -73,11 +75,23 @@ def spawn_config_dict() -> dict[str, str | bool]:
     }
 
 
+def audit_spawn_config_dict() -> dict[str, str | bool]:
+    """Build Task parameters for the readonly remaining-work auditor."""
+    return {
+        "subagent_type": AUDIT_SUBAGENT_TYPE,
+        "model": AUDIT_MODEL,
+        "readonly": True,
+    }
+
+
 __all__ = [
+    "AUDIT_MODEL",
+    "AUDIT_SUBAGENT_TYPE",
     "DEFAULT_EVAL_MODEL",
     "EVAL_MODEL_ENV",
     "EVAL_SUBAGENT_TYPE",
     "KNOWN_INVALID_EVAL_MODELS",
+    "audit_spawn_config_dict",
     "eval_model_is_known_invalid",
     "resolve_eval_model",
     "spawn_config_dict",

@@ -61,6 +61,9 @@ try {
     if (-not (Test-Path (Join-Path $agentsDir "goal-evaluator.md"))) {
         throw "Missing goal-evaluator.md"
     }
+    if (-not (Test-Path (Join-Path $agentsDir "goal-auditor.md"))) {
+        throw "Missing goal-auditor.md"
+    }
     $keeper = Get-Content -LiteralPath (Join-Path $agentsDir "goalKeeper.md") -Raw
     if ($keeper -notmatch "goalKeeper|Autonomous|goal") {
         throw "goalKeeper.md content looks empty/wrong"
@@ -109,6 +112,21 @@ try {
         throw "spawn-config missing model: $spawn"
     }
     Write-Host "[install-smoke] spawn-config: $spawn"
+
+    Write-Host "[install-smoke] Running eval audit-spawn-config..."
+    $auditSpawnOut = & $py.Exe @($py.PrefixArgs) "-u" $runGoal "eval" "audit-spawn-config" 2>&1 | Out-String
+    $auditSpawn = $auditSpawnOut.Trim()
+    $auditObj = $auditSpawn | ConvertFrom-Json
+    if ($auditObj.subagent_type -ne "goal-auditor") {
+        throw "Unexpected audit-spawn-config: $auditSpawn"
+    }
+    if ($auditObj.readonly -ne $true) {
+        throw "audit-spawn-config readonly should be true: $auditSpawn"
+    }
+    if ($auditObj.model -ne "inherit") {
+        throw "audit-spawn-config model should be inherit: $auditSpawn"
+    }
+    Write-Host "[install-smoke] audit-spawn-config: $auditSpawn"
 
     Write-Host "[install-smoke] Uninstalling..."
     $env:CURSOR_GOAL_SKIP_MAIN = "1"

@@ -285,6 +285,7 @@ Describe 'Invoke-GoalInstall' {
         Test-Path (Join-Path $installDir 'scripts\run_goal.py') | Should -BeTrue
         Test-Path (Join-Path $TempHome '.cursor\agents\goalKeeper.md') | Should -BeTrue
         Test-Path (Join-Path $TempHome '.cursor\agents\goal-evaluator.md') | Should -BeTrue
+        Test-Path (Join-Path $TempHome '.cursor\agents\goal-auditor.md') | Should -BeTrue
         Test-Path (Join-Path $TempHome '.cursor-goal\data') | Should -BeTrue
 
         $hooksPath = Join-Path $TempHome '.cursor\hooks.json'
@@ -318,12 +319,14 @@ Describe 'Invoke-GoalInstall' {
         $agentsDir = Join-Path $TempHome '.cursor\agents'
         Set-Content -Path (Join-Path $agentsDir 'goalKeeper.md') -Value 'old-keeper' -Encoding utf8
         Set-Content -Path (Join-Path $agentsDir 'goal-evaluator.md') -Value 'old-eval' -Encoding utf8
+        Set-Content -Path (Join-Path $agentsDir 'goal-auditor.md') -Value 'old-audit' -Encoding utf8
 
         $code = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $RepoRoot -Python (Find-GoalPython)
         $code | Should -Be 0
         $backups = @(Get-ChildItem -LiteralPath $agentsDir -Filter '*.bak.*')
         @($backups | Where-Object { $_.Name -like 'goalKeeper.md.bak.*' }).Count | Should -BeGreaterThan 0
         @($backups | Where-Object { $_.Name -like 'goal-evaluator.md.bak.*' }).Count | Should -BeGreaterThan 0
+        @($backups | Where-Object { $_.Name -like 'goal-auditor.md.bak.*' }).Count | Should -BeGreaterThan 0
         (Get-Content -Raw (Join-Path $agentsDir 'goalKeeper.md')).Trim() | Should -Not -Be 'old-keeper'
     }
 
@@ -404,6 +407,7 @@ Describe 'Invoke-GoalInstall' {
         Set-Content -Path (Join-Path $partial '.cursor\skills\goal\SKILL.md') -Value 'skill'
         New-Item -ItemType Directory -Force -Path (Join-Path $partial '.cursor\agents') | Out-Null
         Set-Content -Path (Join-Path $partial '.cursor\agents\goal-evaluator.md') -Value 'eval'
+        Set-Content -Path (Join-Path $partial '.cursor\agents\goal-auditor.md') -Value 'audit'
         $code = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $partial -Python (Find-GoalPython)
         $code | Should -Be 1
     }
@@ -416,6 +420,20 @@ Describe 'Invoke-GoalInstall' {
         Set-Content -Path (Join-Path $partial '.cursor\skills\goal\SKILL.md') -Value 'skill'
         New-Item -ItemType Directory -Force -Path (Join-Path $partial '.cursor\agents') | Out-Null
         Set-Content -Path (Join-Path $partial '.cursor\agents\goalKeeper.md') -Value 'keeper'
+        Set-Content -Path (Join-Path $partial '.cursor\agents\goal-auditor.md') -Value 'audit'
+        $code = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $partial -Python (Find-GoalPython)
+        $code | Should -Be 1
+    }
+
+    It 'returns 1 when goal-auditor agent is missing' {
+        $partial = Join-Path $TempHome 'no-auditor'
+        New-Item -ItemType Directory -Force -Path (Join-Path $partial 'src\cursor_goal') | Out-Null
+        Set-Content -Path (Join-Path $partial 'src\cursor_goal\__init__.py') -Value '__version__ = "0.0.0"'
+        New-Item -ItemType Directory -Force -Path (Join-Path $partial '.cursor\skills\goal') | Out-Null
+        Set-Content -Path (Join-Path $partial '.cursor\skills\goal\SKILL.md') -Value 'skill'
+        New-Item -ItemType Directory -Force -Path (Join-Path $partial '.cursor\agents') | Out-Null
+        Set-Content -Path (Join-Path $partial '.cursor\agents\goalKeeper.md') -Value 'keeper'
+        Set-Content -Path (Join-Path $partial '.cursor\agents\goal-evaluator.md') -Value 'eval'
         $code = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $partial -Python (Find-GoalPython)
         $code | Should -Be 1
     }
@@ -472,6 +490,7 @@ Describe 'Invoke-GoalUninstall' {
         Test-Path (Join-Path $TempHome '.cursor\skills\goal') | Should -BeFalse
         Test-Path (Join-Path $TempHome '.cursor\agents\goalKeeper.md') | Should -BeFalse
         Test-Path (Join-Path $TempHome '.cursor\agents\goal-evaluator.md') | Should -BeFalse
+        Test-Path (Join-Path $TempHome '.cursor\agents\goal-auditor.md') | Should -BeFalse
         Test-Path (Join-Path $TempHome '.cursor-goal') | Should -BeTrue
         $hooks = Get-Content -Raw (Join-Path $TempHome '.cursor\hooks.json') | ConvertFrom-Json
         @($hooks.hooks.stop).Count | Should -Be 0
@@ -485,11 +504,13 @@ Describe 'Invoke-GoalUninstall' {
         $agentsDir = Join-Path $TempHome '.cursor\agents'
         Set-Content -Path (Join-Path $agentsDir 'goalKeeper.md.bak.20200101T000000Z') -Value 'x' -Encoding utf8
         Set-Content -Path (Join-Path $agentsDir 'goal-evaluator.md.bak.20200101T000000Z') -Value 'y' -Encoding utf8
+        Set-Content -Path (Join-Path $agentsDir 'goal-auditor.md.bak.20200101T000000Z') -Value 'z' -Encoding utf8
         $code = Invoke-GoalUninstall -HomeDir $TempHome
         $code | Should -Be 0
         Test-Path -LiteralPath $bak | Should -BeFalse
         Test-Path -LiteralPath (Join-Path $agentsDir 'goalKeeper.md.bak.20200101T000000Z') | Should -BeFalse
         Test-Path -LiteralPath (Join-Path $agentsDir 'goal-evaluator.md.bak.20200101T000000Z') | Should -BeFalse
+        Test-Path -LiteralPath (Join-Path $agentsDir 'goal-auditor.md.bak.20200101T000000Z') | Should -BeFalse
     }
 
     It 'purges data when -PurgeData is set' {
@@ -694,7 +715,7 @@ Describe 'Test-GoalManagedAgentFile' {
 }
 
 Describe 'Invoke-GoalInstall rollback restores prior agent files' {
-    It 'restores pre-existing goalKeeper.md and goal-evaluator.md when the hook merge fails' {
+    It 'restores pre-existing goalKeeper.md, goal-evaluator.md, and goal-auditor.md when the hook merge fails' {
         Mock Invoke-GoalHooksConfigMerge { return 1 }
         $TempHome = Join-Path ([IO.Path]::GetTempPath()) ("cg-agentrestore-" + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Force -Path $TempHome | Out-Null
@@ -703,14 +724,17 @@ Describe 'Invoke-GoalInstall rollback restores prior agent files' {
             New-Item -ItemType Directory -Force -Path $agentsDir | Out-Null
             $priorKeeper = "<!-- cursor-goal:managed-agent -->`nprior keeper v1"
             $priorEvaluator = "<!-- cursor-goal:managed-agent -->`nprior evaluator v1"
+            $priorAuditor = "<!-- cursor-goal:managed-agent -->`nprior auditor v1"
             Set-Content -Path (Join-Path $agentsDir 'goalKeeper.md') -Value $priorKeeper -Encoding utf8
             Set-Content -Path (Join-Path $agentsDir 'goal-evaluator.md') -Value $priorEvaluator -Encoding utf8
+            Set-Content -Path (Join-Path $agentsDir 'goal-auditor.md') -Value $priorAuditor -Encoding utf8
 
             $code = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $RepoRoot -Python (Find-GoalPython)
             $code | Should -Be 1
 
             (Get-Content -Raw (Join-Path $agentsDir 'goalKeeper.md')).Trim() | Should -Be $priorKeeper
             (Get-Content -Raw (Join-Path $agentsDir 'goal-evaluator.md')).Trim() | Should -Be $priorEvaluator
+            (Get-Content -Raw (Join-Path $agentsDir 'goal-auditor.md')).Trim() | Should -Be $priorAuditor
             Get-ChildItem -LiteralPath $agentsDir -Filter '*.bak.*' | Should -BeNullOrEmpty
         }
         finally {
@@ -782,10 +806,12 @@ Describe 'Invoke-GoalUninstall leaves foreign or backup artifacts as documented'
         $agentsDir = Join-Path $TempHome '.cursor\agents'
         Set-Content -Path (Join-Path $agentsDir 'goalKeeper.md') -Value 'hand-edited, no marker' -Encoding utf8
         Set-Content -Path (Join-Path $agentsDir 'goal-evaluator.md') -Value 'hand-edited, no marker' -Encoding utf8
+        Set-Content -Path (Join-Path $agentsDir 'goal-auditor.md') -Value 'hand-edited, no marker' -Encoding utf8
         $code = Invoke-GoalUninstall -HomeDir $TempHome
         $code | Should -Be 0
         Test-Path (Join-Path $agentsDir 'goalKeeper.md') | Should -BeTrue
         Test-Path (Join-Path $agentsDir 'goal-evaluator.md') | Should -BeTrue
+        Test-Path (Join-Path $agentsDir 'goal-auditor.md') | Should -BeTrue
     }
 
     It 'removes stale hooks.json.bak.* backup files' {

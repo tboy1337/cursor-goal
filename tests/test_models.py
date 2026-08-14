@@ -9,6 +9,7 @@ import pytest
 from cursor_goal.models import (
     DEFAULT_EVAL_MODEL,
     KNOWN_INVALID_EVAL_MODELS,
+    audit_spawn_config_dict,
     eval_model_is_known_invalid,
     resolve_eval_model,
     spawn_config_dict,
@@ -87,3 +88,12 @@ def test_eval_spawn_config_cli(
     data = json.loads(out)
     assert data["subagent_type"] == "goal-evaluator"
     assert data["readonly"] is True
+
+
+def test_audit_spawn_config_dict_shape() -> None:
+    cfg = audit_spawn_config_dict()
+    assert cfg == {
+        "subagent_type": "goal-auditor",
+        "model": "inherit",
+        "readonly": True,
+    }

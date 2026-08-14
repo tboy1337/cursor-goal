@@ -473,6 +473,8 @@ def cmd_status(_argv: list[str]) -> int:  # pylint: disable=too-many-branches
         print(f"  Last evaluation: {redact_secrets(state.last_reason, max_chars=500)}")
     if state.last_eval_verdict:
         print(f"  Last verdict: {state.last_eval_verdict}")
+    if state.last_audit_verdict:
+        print(f"  Last audit: {state.last_audit_verdict}")
     print(f"  Created: {state.created_at}")
     if display_active and wake_enabled() and not ready:
         return 1
@@ -619,6 +621,18 @@ def cmd_done(argv: list[str]) -> int:
         print(
             "[goal] Run: cursor-goal eval parse-result --stdin "
             '(or parse-result "YES: <reason>") after spawning an evaluator.',
+            file=sys.stderr,
+        )
+        print("[goal] Then retry: cursor-goal manage done", file=sys.stderr)
+        return 1
+    if status == "rejected_audit":
+        print(
+            "[goal] REJECTED: No CLEAR remaining-work audit signal for this cycle.",
+            file=sys.stderr,
+        )
+        print(
+            "[goal] Run: cursor-goal eval parse-audit --stdin "
+            "after spawning goal-auditor.",
             file=sys.stderr,
         )
         print("[goal] Then retry: cursor-goal manage done", file=sys.stderr)
@@ -820,6 +834,6 @@ def _print_help() -> int:
     print("  harness-cmd  Print resolved run_goal.py / wake loop invocation")
     print("  pause      Pause auto-continuation")
     print("  resume     Resume a paused goal")
-    print("  done       Mark goal as achieved (requires YES-bound eval signal)")
+    print("  done       Mark goal as achieved (requires YES + CLEAR signals)")
     print("  clear      Remove goal entirely")
     return 0

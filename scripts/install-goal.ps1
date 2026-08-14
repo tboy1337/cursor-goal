@@ -268,7 +268,7 @@ sys.path.insert(0, sys.argv[1])
 from cursor_goal.hooks_config import merge_hooks_at_path
 # Same launcher command for both events: cmd_stop() dispatches on payload
 # shape (subagentStop payloads carry "subagent_type"), scoped further by the
-# installed hooks.json "matcher": "goal-evaluator".
+# installed hooks.json "matcher": "goal-evaluator" / "goal-auditor".
 merge_hooks_at_path(Path(sys.argv[2]), sys.argv[3], subagent_stop_command=sys.argv[3])
 print("merged")
 '@
@@ -397,6 +397,7 @@ function Invoke-GoalInstall {
     $sourceSkill = Join-Path $RepoRoot ".cursor\skills\goal"
     $sourceAgent = Join-Path $RepoRoot ".cursor\agents\goalKeeper.md"
     $sourceEvaluator = Join-Path $RepoRoot ".cursor\agents\goal-evaluator.md"
+    $sourceAuditor = Join-Path $RepoRoot ".cursor\agents\goal-auditor.md"
 
     if (-not (Test-Path (Join-Path $sourcePkg "__init__.py"))) {
         Write-GoalErr "Package not found: $sourcePkg"
@@ -413,6 +414,10 @@ function Invoke-GoalInstall {
     }
     if (-not (Test-Path $sourceEvaluator)) {
         Write-GoalErr "Required agent not found: $sourceEvaluator"
+        return 1
+    }
+    if (-not (Test-Path $sourceAuditor)) {
+        Write-GoalErr "Required agent not found: $sourceAuditor"
         return 1
     }
 
@@ -495,10 +500,12 @@ print(__version__)
     $agentTs = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
     $destKeeper = Join-Path $agentsDir "goalKeeper.md"
     $destEvaluator = Join-Path $agentsDir "goal-evaluator.md"
+    $destAuditor = Join-Path $agentsDir "goal-auditor.md"
     # $null means the agent file did not exist before this install (rollback
     # should delete it, not "restore" a backup that never existed).
     $keeperBak = $null
     $evaluatorBak = $null
+    $auditorBak = $null
     if (Test-Path -LiteralPath $destKeeper) {
         $keeperBak = Join-Path $agentsDir "goalKeeper.md.bak.$agentTs"
         Copy-Item -LiteralPath $destKeeper -Destination $keeperBak -Force
@@ -509,10 +516,17 @@ print(__version__)
         Copy-Item -LiteralPath $destEvaluator -Destination $evaluatorBak -Force
         Write-GoalInfo "Backed up existing goal-evaluator.md to $evaluatorBak"
     }
+    if (Test-Path -LiteralPath $destAuditor) {
+        $auditorBak = Join-Path $agentsDir "goal-auditor.md.bak.$agentTs"
+        Copy-Item -LiteralPath $destAuditor -Destination $auditorBak -Force
+        Write-GoalInfo "Backed up existing goal-auditor.md to $auditorBak"
+    }
     Copy-Item $sourceAgent $destKeeper -Force
     Write-GoalInfo "Installed: $destKeeper"
     Copy-Item $sourceEvaluator $destEvaluator -Force
     Write-GoalInfo "Installed: $destEvaluator"
+    Copy-Item $sourceAuditor $destAuditor -Force
+    Write-GoalInfo "Installed: $destAuditor"
 
     New-Item -ItemType Directory -Force -Path (Join-Path $HomeDir ".cursor") | Out-Null
 
@@ -558,6 +572,14 @@ print(__version__)
         elseif (Test-Path -LiteralPath $destEvaluator) {
             Write-GoalWarn "Removing goal-evaluator.md installed this run (no prior version existed)"
             Remove-Item -Force -LiteralPath $destEvaluator
+        }
+        if ($auditorBak -and (Test-Path -LiteralPath $auditorBak)) {
+            Write-GoalWarn "Restoring goal-auditor.md from $auditorBak"
+            Move-Item -LiteralPath $auditorBak -Destination $destAuditor -Force
+        }
+        elseif (Test-Path -LiteralPath $destAuditor) {
+            Write-GoalWarn "Removing goal-auditor.md installed this run (no prior version existed)"
+            Remove-Item -Force -LiteralPath $destAuditor
         }
         return 1
     }

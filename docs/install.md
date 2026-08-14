@@ -45,7 +45,8 @@ After install, **restart Cursor** (or reload hooks) so `hooks.json` takes effect
 | `~/.cursor/skills/goal/VERSION` | Installed package version stamp |
 | `~/.cursor/agents/goalKeeper.md` | Worker agent (`model: inherit`) |
 | `~/.cursor/agents/goal-evaluator.md` | Readonly evaluator (`model: composer-2.5` default) |
-| `~/.cursor/hooks.json` | `stop` **and** `subagentStop` (`matcher: goal-evaluator`) hook registration, both using the same launcher. Unix: `<absolute-python> -u …/stop_hook.py`. Windows: absolute `…/stop_hook.cmd` (cmd launcher). `loop_limit: null`, `timeout: 30`. Prior file is copied to a timestamped `.bak.<UTC>` |
+| `~/.cursor/agents/goal-auditor.md` | Readonly remaining-work auditor (`model: inherit`) |
+| `~/.cursor/hooks.json` | `stop` **and** `subagentStop` (`matcher: goal-evaluator` and `matcher: goal-auditor`) hook registration, both using the same launcher. Unix: `<absolute-python> -u …/stop_hook.py`. Windows: absolute `…/stop_hook.cmd` (cmd launcher). `loop_limit: null`, `timeout: 30`. Prior file is copied to a timestamped `.bak.<UTC>` |
 | `~/.cursor-goal/data/` | Runtime state (`goal.json`, `goal-eval-done`) — trusted-user local state (≡ shell trust) |
 
 Override data directory with `CURSOR_GOAL_DATA` (must be an absolute path; relative paths are rejected).
@@ -60,10 +61,10 @@ On upgrade, a previous skill tree is copied to `~/.cursor/skills/goal.bak.<UTC>`
 
 ### Install from a tagged release
 
-Package version **4.1.3** pins the clone branch below. Use it when tag `v4.1.3` exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If `git clone --branch` fails, clone `main` with the Quick install steps above ([release.md](release.md)).
+Package version **4.2.0** pins the clone branch below. Use it when tag `v4.2.0` exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If `git clone --branch` fails, clone `main` with the Quick install steps above ([release.md](release.md)).
 
 ```bash
-git clone --branch v4.1.3 https://github.com/tboy1337/cursor-goal.git
+git clone --branch v4.2.0 https://github.com/tboy1337/cursor-goal.git
 cd cursor-goal
 ./scripts/install-goal.sh   # or install-goal.ps1 on Windows
 ```
@@ -77,6 +78,7 @@ Unix / macOS / WSL:
 ```bash
 python3 -u ~/.cursor/skills/goal/scripts/run_goal.py manage status
 python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval spawn-config
+python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval audit-spawn-config
 python3 -u ~/.cursor/skills/goal/scripts/run_goal.py manage doctor
 ```
 
@@ -85,11 +87,13 @@ Windows PowerShell:
 ```powershell
 py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" manage status
 py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" eval spawn-config
+py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" eval audit-spawn-config
 py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" manage doctor
 ```
 
 Expected status: `[goal] No active goal.`  
 Expected spawn-config: JSON with `"subagent_type":"goal-evaluator"` and `"model":"composer-2.5"` (unless overridden).  
+Expected audit-spawn-config: JSON with `"subagent_type":"goal-auditor"` and `"model":"inherit"`.  
 Doctor should print `Doctor: OK` (fix any `FAIL` lines before starting a goal).
 
 Then in Agent chat: `/goal status`
@@ -116,7 +120,7 @@ On Cursor **Teams** / **Enterprise**, admins can import this repository as a Tea
 2. Dashboard → Settings → Plugins → Import Marketplace → paste the repo URL.
 3. Cursor reads [`.cursor-plugin/marketplace.json`](../.cursor-plugin/marketplace.json) and the plugin under `plugins/cursor-goal/`.
 
-The plugin ships skill, agents, vendored harness, and marketplace hooks that register both `stop_hook.cmd` (Windows via `cmd /c`) and `python3 -u "…/stop_hook.py"` (Unix) for **both** the `stop` and `subagentStop` (`matcher: goal-evaluator`) events — `cmd_stop()` dispatches between the two event shapes based on the JSON payload (`subagentStop` payloads carry `subagent_type`). On each OS one entry per event typically fails (expected). A singleflight lock plus a `generation_id`-keyed dedupe stamp ensure only one hook instance mutates turn state and writes stdout per turn; the loser exits silently (no `{}`, no `last-stop-response.json` overwrite). Prefer in-turn evaluation; the two hooks are the documented continuation safety net (see [known-limitations.md](known-limitations.md)). Classic `install-goal.ps1` still writes a single absolute `stop_hook.cmd` and `wake_loop.cmd` (best path on native Windows).
+The plugin ships skill, agents, vendored harness, and marketplace hooks that register both `stop_hook.cmd` (Windows via `cmd /c`) and `python3 -u "…/stop_hook.py"` (Unix) for **both** the `stop` and `subagentStop` (`matcher: goal-evaluator` and `matcher: goal-auditor`) events — `cmd_stop()` dispatches between the two event shapes based on the JSON payload (`subagentStop` payloads carry `subagent_type`). On each OS one entry per event typically fails (expected). A singleflight lock plus a `generation_id`-keyed dedupe stamp ensure only one hook instance mutates turn state and writes stdout per turn; the loser exits silently (no `{}`, no `last-stop-response.json` overwrite). Prefer in-turn evaluation; the two hooks are the documented continuation safety net (see [known-limitations.md](known-limitations.md)). Classic `install-goal.ps1` still writes a single absolute `stop_hook.cmd` and `wake_loop.cmd` (best path on native Windows).
 
 Resolve harness commands with `manage harness-cmd` (works from `${CURSOR_PLUGIN_ROOT}/skills/goal` without a classic install). Do **not** stack classic installer hooks with marketplace hooks — pick one path. `manage doctor` **FAIL**s when both look configured.
 

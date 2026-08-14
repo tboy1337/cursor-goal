@@ -7,9 +7,9 @@ Operational limits of cursor-goal for real-world use. See also [troubleshooting]
 Cursor documents the [`stop` and `subagentStop` hooks](https://cursor.com/docs/hooks.md) with `followup_message` and `loop_limit: null` as the supported continuation contract. This harness registers **both**:
 
 1. **`stop`** — fires when your turn ends; if the goal is still `pursuing`, returns a `followup_message` that auto-continues you. Cursor can drop stop-hook stdout on Windows and Linux (upstream race: process `exit` vs stream `close`; confirmed still open in Cursor forum reports through mid-2026 — see [cursor-windows-stop-hook-race.md](cursor-windows-stop-hook-race.md)). Drain delays in the stop hook are mitigations only. A `generation_id`-keyed dedupe stamp guards the marketplace's two `stop` entries (Windows `.cmd` + Unix `python3`) from double-charging `turns_used` when both run sequentially for the same turn. When Cursor omits `generation_id`, the stamp falls back to a SHA-256 of `status` + `loop_count` + `hook_event_name` + `conversation_id` so sequential dual hooks still share one key.
-2. **`subagentStop`** (`matcher: "goal-evaluator"`) — fires the instant the evaluator subagent finishes, independent of the worker's own turn ending. This is a second, documented, race-free continuation point that reminds the worker to run `eval parse-result` — it never calls `manage done` itself.
+2. **`subagentStop`** (`matcher: "goal-evaluator"` and `matcher: "goal-auditor"`) — fires the instant that subagent finishes, independent of the worker's own turn ending. Evaluator finished → `eval parse-result`. Auditor finished → `eval parse-audit`. Neither hook calls `manage done` itself.
 
-In-turn `goal-evaluator` Task evaluation remains the primary driver of *progress* (deciding YES/NO); the two hooks above are what keeps the *turn loop* itself going when the agent would otherwise idle.
+In-turn remaining-work audit (`goal-auditor`) then `goal-evaluator` Task evaluation remains the primary driver of *progress* (CLEAR then YES/NO); the two hooks above are what keeps the *turn loop* itself going when the agent would otherwise idle.
 
 **Wake watchdog (`wake arm`/`loop`/`tick`/`disarm`) is a best-effort, undocumented supplement**, not a Cursor-documented mechanism — it relies on `notify_on_output` matching a background Shell's stdout, which is not listed in Cursor's hook/tooling docs and is subject to the platform reaping idle background shells during long sessions. `manage create`/`resume` still prints `GOAL_WAKE_REQUIRED` and arming still gates `pursuing` status by default; starting the loop and confirming `wake status` `continuation_ready=true` remains recommended for the closest thing to a race-immune path, but it is no longer a hard requirement for evaluation:
 
@@ -46,9 +46,11 @@ No multi-tenant / shared-host isolation. Anyone who can write `~/.cursor-goal/da
 
 When a `validation_command` is set but has never been run, `eval prompt` tells the checker it **MUST answer NO** (missing evidence). That is a prompt instruction, not a harness refusal — the worker is still expected to run `eval validate` this turn before spawning the evaluator.
 
-## Planning and review skills are outside the loop
+## Remaining-work audit is in the loop; Plan Mode UI is not
 
-`/goal` does not invoke Plan Mode, `ce-plan`, `/review`, `/review-bugbot`, `/review-security`, or thermo-nuclear review. Those skills either wait on the user (which stalls unattended continuation) or add a second checker that can refuse a goal whose condition is already met (for example tests passing). The worker playbook instead verifies every turn, debugs failures systematically, and evaluates with `goal-evaluator` only.
+`/goal` spawns a readonly `goal-auditor` subagent (empty context, original condition, no work summary) as the unattended equivalent of a fresh plan-mode chat. `manage done` requires that CLEAR signal plus evaluator YES (unless `--force`). The auditor is scoped to the original condition: it must not invent extra polish for a “tests pass” goal.
+
+`/goal` still does **not** invoke the Cursor Plan Mode UI, `ce-plan`, `/review`, `/review-bugbot`, `/review-security`, or thermo-nuclear review. Those wait on the user (which stalls unattended continuation) or add a second checker that can refuse a goal whose condition is already met.
 
 ## Marketplace vs classic Windows install
 
@@ -58,7 +60,7 @@ Teams marketplace installs are **standalone**: resolve the harness with `manage 
 
 `${CURSOR_PLUGIN_ROOT}` (used inside the marketplace `hooks.json` commands) is **not** one of Cursor's documented hook environment variables — it is set by the plugin host at hook-invocation time, on a best-effort basis. `stop_hook.py`'s own path resolution does not depend on it: it locates the vendored `cursor_goal` package relative to its own file location first (`scripts/`, the parent skill directory, or a source checkout's `src/`), so the hook still works if `CURSOR_PLUGIN_ROOT` is ever unset. The classic `~/.cursor/skills/goal` install path never references `CURSOR_PLUGIN_ROOT` at all.
 
-The marketplace `hooks.json` registers **two** unconditional entries per event (`stop` and `subagentStop`): a Windows `cmd /c ...stop_hook.cmd` and a Unix `python3 -u ...stop_hook.py`. Exactly one is expected to fail per platform (missing `cmd` on Unix, missing/renamed `python3` on Windows) — this is expected Hooks UI noise, not a broken install. A singleflight lock plus a `generation_id`-keyed dedupe stamp ensure only one hook instance mutates goal state and emits a `followup_message` per turn even when both entries happen to run.
+The marketplace `hooks.json` registers **two** unconditional entries per event (`stop` and `subagentStop`): a Windows `cmd /c ...stop_hook.cmd` and a Unix `python3 -u ...stop_hook.py`. `subagentStop` is registered twice per launcher (`matcher: goal-evaluator` and `matcher: goal-auditor`), so the marketplace tree has four `subagentStop` rows. Exactly one launcher is expected to fail per platform (missing `cmd` on Unix, missing/renamed `python3` on Windows) — this is expected Hooks UI noise, not a broken install. A singleflight lock plus a `generation_id`-keyed dedupe stamp ensure only one hook instance mutates goal state and emits a `followup_message` per turn even when both entries happen to run.
 
 ## Name collision
 

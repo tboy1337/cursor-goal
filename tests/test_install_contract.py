@@ -187,11 +187,14 @@ def test_merge_hooks_at_path_with_subagent_stop(tmp_path: Path) -> None:
     data = read_hooks_file(path)
     assert len(data["hooks"]["stop"]) == 1
     subagent_stop = data["hooks"]["subagentStop"]
-    assert len(subagent_stop) == 1
-    assert subagent_stop[0]["matcher"] == "goal-evaluator"
-    assert subagent_stop[0]["command"] == "python3 -u /abs/stop_hook.py"
+    assert len(subagent_stop) == 2
+    matchers = {entry["matcher"] for entry in subagent_stop}
+    assert matchers == {"goal-evaluator", "goal-auditor"}
+    assert {entry["command"] for entry in subagent_stop} == {
+        "python3 -u /abs/stop_hook.py"
+    }
 
-    # Re-merging (upgrade path) replaces rather than duplicating the marked entry.
+    # Re-merging (upgrade path) replaces rather than duplicating the marked entries.
     merge_hooks_at_path(
         path,
         "python3 -u /abs/stop_hook.py",
@@ -199,7 +202,7 @@ def test_merge_hooks_at_path_with_subagent_stop(tmp_path: Path) -> None:
     )
     data = read_hooks_file(path)
     assert len(data["hooks"]["stop"]) == 1
-    assert len(data["hooks"]["subagentStop"]) == 1
+    assert len(data["hooks"]["subagentStop"]) == 2
 
 
 def test_remove_hooks_at_path_removes_subagent_stop(tmp_path: Path) -> None:
@@ -239,6 +242,32 @@ def test_merge_subagent_stop_hook_preserves_other_matchers() -> None:
     assert any(item.get("command") == "./user-hook.sh" for item in subagent_stop)
     assert is_goal_subagent_stop_hook(subagent_stop[-1])
     assert subagent_stop[-1]["matcher"] == "goal-evaluator"
+
+
+def test_merge_audit_subagent_stop_hook_preserves_evaluator() -> None:
+    from cursor_goal.hooks_config import (
+        build_audit_subagent_stop_entry,
+        build_subagent_stop_entry,
+        is_goal_audit_subagent_stop_hook,
+        is_goal_subagent_stop_hook,
+        merge_audit_subagent_stop_hook,
+        merge_subagent_stop_hook,
+    )
+
+    data: dict[str, object] = {"version": 1, "hooks": {"subagentStop": []}}
+    data = merge_subagent_stop_hook(
+        data, build_subagent_stop_entry("python3 -u /abs/stop_hook.py")
+    )
+    data = merge_audit_subagent_stop_hook(
+        data, build_audit_subagent_stop_entry("python3 -u /abs/stop_hook.py")
+    )
+    subagent_stop = data["hooks"]["subagentStop"]
+    assert isinstance(subagent_stop, list)
+    assert len(subagent_stop) == 2
+    matchers = {entry["matcher"] for entry in subagent_stop}
+    assert matchers == {"goal-evaluator", "goal-auditor"}
+    assert any(is_goal_subagent_stop_hook(entry) for entry in subagent_stop)
+    assert any(is_goal_audit_subagent_stop_hook(entry) for entry in subagent_stop)
 
 
 def test_remove_subagent_stop_hooks_leaves_user_entries() -> None:
@@ -311,12 +340,16 @@ def test_plugin_manifests_and_hooks_contract() -> None:
         assert entry["loop_limit"] is None
         assert entry["_cursor_goal"] == HOOK_MARKER
     subagent_stop_list = hooks_data["hooks"]["subagentStop"]
-    assert isinstance(subagent_stop_list, list) and len(subagent_stop_list) == 2
+    assert isinstance(subagent_stop_list, list) and len(subagent_stop_list) == 4
+    matchers = {entry["matcher"] for entry in subagent_stop_list}
+    assert matchers == {"goal-evaluator", "goal-auditor"}
     for entry in subagent_stop_list:
         assert "${CURSOR_PLUGIN_ROOT}" in entry["command"]
         assert entry["loop_limit"] is None
-        assert entry["matcher"] == "goal-evaluator"
-        assert entry["_cursor_goal"] == "cursor_goal_subagent_stop_hook"
+        if entry["matcher"] == "goal-evaluator":
+            assert entry["_cursor_goal"] == "cursor_goal_subagent_stop_hook"
+        else:
+            assert entry["_cursor_goal"] == "cursor_goal_subagent_audit_stop_hook"
     # Same launcher commands as stop — cmd_stop() dispatches on payload shape.
     assert {e["command"] for e in subagent_stop_list} == {
         e["command"] for e in stop_list
@@ -329,6 +362,10 @@ def test_plugin_manifests_and_hooks_contract() -> None:
     assert "Iron law" in skill
     evaluator = (plugin / "agents" / "goal-evaluator.md").read_text(encoding="utf-8")
     assert "MISSING EVIDENCE" in evaluator
+    assert "strong evidence" not in evaluator.lower()
+    auditor = (plugin / "agents" / "goal-auditor.md").read_text(encoding="utf-8")
+    assert "CLEAR:" in auditor
+    assert "REMAINING:" in auditor
     assert (plugin / "skills" / "goal" / "scripts" / "stop_hook.cmd").is_file()
     assert (plugin / "skills" / "goal" / "scripts" / "wake_loop.sh").is_file()
     stop_cmd = (plugin / "skills" / "goal" / "scripts" / "stop_hook.cmd").read_text(

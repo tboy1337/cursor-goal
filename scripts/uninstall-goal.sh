@@ -71,6 +71,7 @@ def is_goal_hook(item: object, marker: str) -> bool:
 for event, marker in (
     ("stop", "cursor_goal_stop_hook"),
     ("subagentStop", "cursor_goal_subagent_stop_hook"),
+    ("subagentStop", "cursor_goal_subagent_audit_stop_hook"),
 ):
     entries = hooks.get(event) or []
     hooks[event] = [item for item in entries if not is_goal_hook(item, marker)]
@@ -116,7 +117,7 @@ for bak in "${HOME}/.cursor/skills"/goal.bak.*; do
   rm -rf "$bak"
   echo "[uninstall-goal] Removed backup $bak"
 done
-for bak in "${AGENTS_DIR}"/goalKeeper.md.bak.* "${AGENTS_DIR}"/goal-evaluator.md.bak.*; do
+for bak in "${AGENTS_DIR}"/goalKeeper.md.bak.* "${AGENTS_DIR}"/goal-evaluator.md.bak.* "${AGENTS_DIR}"/goal-auditor.md.bak.*; do
   rm -f "$bak"
 done
 for bak in "${CURSOR_HOOKS_FILE}".bak.*; do
@@ -126,7 +127,7 @@ done
 shopt -u nullglob
 
 echo "[uninstall-goal] Removing agent definitions"
-for agent in "${AGENTS_DIR}/goalKeeper.md" "${AGENTS_DIR}/goal-evaluator.md"; do
+for agent in "${AGENTS_DIR}/goalKeeper.md" "${AGENTS_DIR}/goal-evaluator.md" "${AGENTS_DIR}/goal-auditor.md"; do
   if [ -f "$agent" ]; then
     if is_goal_managed_agent_file "$agent"; then
       rm -f "$agent"

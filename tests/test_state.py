@@ -16,8 +16,10 @@ from cursor_goal.state import (
     GoalState,
     clear_eval_signal,
     data_dir,
+    has_audit_signal,
     has_eval_signal,
     load_goal,
+    record_parse_audit,
     save_goal,
     set_eval_signal,
     update_goal_fields,
@@ -250,6 +252,53 @@ def test_eval_signal_bound_to_goal_hash(goal_home: Path) -> None:
     assert has_eval_signal() is False
     clear_eval_signal()
     assert has_eval_signal() is False
+
+
+def test_audit_signal_bound_to_goal_hash(goal_home: Path) -> None:
+    save_goal(
+        GoalState(
+            condition="first",
+            created_at="t1",
+            status="pursuing",
+            active=True,
+        )
+    )
+    updated = record_parse_audit("CLEAR", "nothing remains")
+    assert updated is not None
+    assert has_audit_signal() is True
+    raw = json.loads((goal_home / "goal-audit-clear").read_text(encoding="utf-8"))
+    assert raw["verdict"] == "CLEAR"
+    save_goal(
+        GoalState(
+            condition="second",
+            created_at="t2",
+            status="pursuing",
+            active=True,
+        )
+    )
+    assert has_audit_signal() is False
+
+
+def test_record_parse_audit_remaining_clears_yes(goal_home: Path) -> None:
+    save_goal(
+        GoalState(
+            condition="c",
+            created_at="t",
+            status="pursuing",
+            active=True,
+        )
+    )
+    set_eval_signal()
+    record_parse_audit("CLEAR", "first pass")
+    assert has_eval_signal() is True
+    assert has_audit_signal() is True
+    record_parse_audit("REMAINING", "src/foo.py still leaks")
+    assert has_audit_signal() is False
+    assert has_eval_signal() is False
+
+
+def test_has_audit_signal_no_goal(goal_home: Path) -> None:
+    assert has_audit_signal() is False
 
 
 def test_eval_signal_rejects_missing_verdict(goal_home: Path) -> None:

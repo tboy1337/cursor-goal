@@ -9,16 +9,18 @@ continuation, and subagent `Task` behavior cannot be fully exercised by
 
 ## Continuation protocol these tests assume
 
-As of v4.1.3, the continuation story is:
+As of v4.2.0, the continuation story is:
 
 1. **`stop` hook (documented, primary).** Fires at the end of every agent
    turn; `followup_message` re-prompts the worker. Sequential dual hook
    entries (marketplace ships both a `cmd` and a `python3` entry) are
    deduped by `generation_id` so a turn is never double-charged.
-2. **`subagentStop` hook, `matcher: "goal-evaluator"` (documented, primary).**
-   Fires when the evaluator subagent completes; `followup_message` nudges
-   the worker to run `eval parse-result` immediately, without waiting for
-   the end-of-turn `stop` hook.
+2. **`subagentStop` hook, `matcher: "goal-evaluator"` and
+   `matcher: "goal-auditor"` (documented, primary).** Fires when that
+   subagent completes; `followup_message` nudges the worker to run
+   `eval parse-result` or `eval parse-audit` immediately, without waiting
+   for the end-of-turn `stop` hook. `manage done` still requires CLEAR +
+   YES.
 3. **Wake watchdog (undocumented, best-effort supplement).** A background
    Shell loop using `notify_on_output`, only useful if you explicitly armed
    it (`wake arm`/`wake loop`). Cursor may reap idle background shells, so

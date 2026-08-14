@@ -753,6 +753,16 @@ def test_handle_subagent_stop_success(goal_home: Path) -> None:
     assert 'evaluator "done" check' in response["followup_message"]
 
 
+def test_handle_subagent_stop_auditor_success(goal_home: Path) -> None:
+    run_cli("manage", "create", "remaining-work audit")
+    response = handle_subagent_stop(
+        {"subagent_type": "goal-auditor", "status": "completed"}
+    )
+    assert "eval parse-audit" in response["followup_message"]
+    assert "remaining-work auditor finished" in response["followup_message"]
+    assert "remaining-work audit" in response["followup_message"]
+
+
 def test_subagent_stop_singleflight_second_is_silent(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -11,8 +11,12 @@ from typing import Any
 import pytest
 
 from cursor_goal.validation import (
+    DEFAULT_TIMEOUT_SEC,
+    MAX_TIMEOUT_SEC,
+    MIN_TIMEOUT_SEC,
     _stream_to_text,
     redact_command,
+    resolve_validation_timeout_sec,
     run_validation,
     try_split_argv,
 )
@@ -434,3 +438,27 @@ def test_run_validation_refuses_symlink_cwd(
     )
     assert result.exit_code == 1
     assert "symlink" in result.output.lower() or "reparse" in result.output.lower()
+
+
+def test_resolve_validation_timeout_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CURSOR_GOAL_VALIDATE_TIMEOUT_SEC", raising=False)
+    assert resolve_validation_timeout_sec() == float(DEFAULT_TIMEOUT_SEC)
+    assert DEFAULT_TIMEOUT_SEC == 600
+
+
+def test_resolve_validation_timeout_clamps(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CURSOR_GOAL_VALIDATE_TIMEOUT_SEC", "1")
+    assert resolve_validation_timeout_sec() == float(MIN_TIMEOUT_SEC)
+    monkeypatch.setenv("CURSOR_GOAL_VALIDATE_TIMEOUT_SEC", "99999")
+    assert resolve_validation_timeout_sec() == float(MAX_TIMEOUT_SEC)
+    monkeypatch.setenv("CURSOR_GOAL_VALIDATE_TIMEOUT_SEC", "120")
+    assert resolve_validation_timeout_sec() == 120.0
+
+
+def test_resolve_validation_timeout_invalid_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CURSOR_GOAL_VALIDATE_TIMEOUT_SEC", "not-a-number")
+    assert resolve_validation_timeout_sec() == float(DEFAULT_TIMEOUT_SEC)
+    monkeypatch.setenv("CURSOR_GOAL_VALIDATE_TIMEOUT_SEC", "   ")
+    assert resolve_validation_timeout_sec() == float(DEFAULT_TIMEOUT_SEC)

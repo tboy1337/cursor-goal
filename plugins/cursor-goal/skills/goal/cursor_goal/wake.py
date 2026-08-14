@@ -198,7 +198,8 @@ def _followup_prompt() -> str:
     if state is None:
         return (
             "[GOAL] Resume working toward the active goal. "
-            "Evaluate completion via subagent when ready."
+            "Status is still pursuing — an earlier completion claim is invalid. "
+            "Run `manage status`, then remaining-work audit, then evaluate."
         )
     remaining = max(0, state.turn_budget - state.turns_used)
     wake_remaining = max(0, int(state.wake_budget) - int(state.wake_ticks))
@@ -208,9 +209,10 @@ def _followup_prompt() -> str:
         f"[GOAL] Turn {state.turns_used}/{state.turn_budget} "
         f"({remaining} remaining, wake_ticks={wake_ticks}/"
         f"{state.wake_budget}, wake_remaining={wake_remaining}). "
-        f"Continue working toward: {safe_condition}. "
-        "Evaluate completion via subagent when ready. "
-        "(Wake watchdog — stop-hook followup may have been dropped.)"
+        'Status is still pursuing — an earlier "this is complete" message '
+        "is invalid. Run `manage status` and continue working toward: "
+        f"{safe_condition}. Then remaining-work audit, then evaluate via "
+        "subagent. (Wake watchdog — stop-hook followup may have been dropped.)"
     )
 
 

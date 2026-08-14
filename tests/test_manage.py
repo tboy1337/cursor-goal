@@ -753,6 +753,7 @@ def test_manage_done_with_signal(goal_home: Path) -> None:
     run_cli("manage", "pause")
     run_cli("manage", "resume")
     run_cli("eval", "parse-result", "YES: ready")
+    run_cli("eval", "parse-audit", "CLEAR: nothing in-scope remains")
     code, out, _err = run_cli("manage", "done")
     assert code == 0
     data = load_goal_json(goal_home)
@@ -760,6 +761,19 @@ def test_manage_done_with_signal(goal_home: Path) -> None:
     assert data["active"] is False
     assert "Goal achieved" in out
     assert not (goal_home / "goal-eval-done").exists()
+    assert not (goal_home / "goal-audit-clear").exists()
+
+
+def test_manage_done_yes_without_audit_rejected(goal_home: Path) -> None:
+    run_cli("manage", "create", "test condition")
+    run_cli("eval", "parse-result", "YES: ready")
+    code, _out, err = run_cli("manage", "done")
+    assert code == 1
+    assert "REJECTED" in err
+    assert "CLEAR" in err
+    assert "parse-audit" in err
+    data = load_goal_json(goal_home)
+    assert data["status"] == "pursuing"
 
 
 def test_manage_done_force(goal_home: Path) -> None:

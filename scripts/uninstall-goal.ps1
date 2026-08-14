@@ -159,6 +159,7 @@ def is_goal_hook(item, marker):
 for event, marker in (
     ("stop", "cursor_goal_stop_hook"),
     ("subagentStop", "cursor_goal_subagent_stop_hook"),
+    ("subagentStop", "cursor_goal_subagent_audit_stop_hook"),
 ):
     entries = hooks.get(event) or []
     hooks[event] = [item for item in entries if not is_goal_hook(item, marker)]
@@ -253,6 +254,8 @@ print("hooks cleaned")
             ForEach-Object { Remove-Item -Force -LiteralPath $_.FullName -ErrorAction SilentlyContinue }
         Get-ChildItem -LiteralPath $agentsDir -File -Filter "goal-evaluator.md.bak.*" -ErrorAction SilentlyContinue |
             ForEach-Object { Remove-Item -Force -LiteralPath $_.FullName -ErrorAction SilentlyContinue }
+        Get-ChildItem -LiteralPath $agentsDir -File -Filter "goal-auditor.md.bak.*" -ErrorAction SilentlyContinue |
+            ForEach-Object { Remove-Item -Force -LiteralPath $_.FullName -ErrorAction SilentlyContinue }
     }
     $hooksParent = Split-Path -Parent $hooksFile
     $hooksName = Split-Path -Leaf $hooksFile
@@ -285,6 +288,16 @@ print("hooks cleaned")
         }
         else {
             Write-Host "[uninstall-goal] Left $evaluator in place (missing cursor-goal provenance marker; looks hand-edited or foreign)"
+        }
+    }
+    $auditor = Join-Path $agentsDir "goal-auditor.md"
+    if (Test-Path -LiteralPath $auditor) {
+        if (Test-GoalManagedAgentFile -Path $auditor) {
+            Remove-Item -Force -LiteralPath $auditor
+            Write-Host "[uninstall-goal] Removed $auditor"
+        }
+        else {
+            Write-Host "[uninstall-goal] Left $auditor in place (missing cursor-goal provenance marker; looks hand-edited or foreign)"
         }
     }
 

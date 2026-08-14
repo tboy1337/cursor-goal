@@ -9,14 +9,16 @@ from collections.abc import Callable
 from pathlib import Path
 
 from cursor_goal.logging_config import get_logger
-from cursor_goal.models import spawn_config_dict
+from cursor_goal.models import audit_spawn_config_dict, spawn_config_dict
 from cursor_goal.state import (
     CorruptGoalError,
     GoalLockTimeoutError,
     GoalState,
     assert_workdir_usable,
     data_dir,
+    has_audit_signal,
     has_eval_signal,
+    record_parse_audit,
     record_parse_result,
     refuse_if_acl_harden_failed,
     refuse_if_data_dir_insecure,
@@ -24,17 +26,29 @@ from cursor_goal.state import (
     snapshot_goal,
     update_goal_fields,
 )
-from cursor_goal.validation import redact_command, redact_secrets, run_validation
+from cursor_goal.validation import (
+    redact_command,
+    redact_secrets,
+    resolve_validation_timeout_sec,
+    run_validation,
+)
 from cursor_goal.wake import refuse_if_wake_dead, wake_dead_warning
 
 logger = get_logger("cursor_goal.eval")
 
 _VERDICT_LINE = re.compile(r"^(YES|NO):\s*(.*)$", re.IGNORECASE)
+_AUDIT_LINE = re.compile(r"^(CLEAR|REMAINING):\s*(.*)$", re.IGNORECASE)
 MAX_PARSE_RESULT_BYTES = 2 * 1024 * 1024
 MISSING_VALIDATION_EVIDENCE = (
     "MISSING EVIDENCE: a validation command is configured but has not been "
     "run this cycle. You MUST answer NO. Do not infer success from the work "
     "summary."
+)
+MISSING_AUDIT_CLEAR = (
+    "Remaining-work audit: not CLEAR this cycle. If the goal condition is "
+    "broader than the validation command (or no validation command is set), "
+    "you MUST answer NO until a CLEAR remaining-work audit exists for this "
+    "cycle. Work summary is not a substitute."
 )
 
 
@@ -120,6 +134,21 @@ def _build_validation_section(state: GoalState) -> str:
     return "No validation command configured."
 
 
+def _build_audit_section(state: GoalState) -> str:
+    """Render remaining-work audit evidence for the evaluator prompt."""
+    if has_audit_signal():
+        last = state.last_audit_verdict or "CLEAR"
+        logger.info("eval prompt remaining-work audit CLEAR last=%s", last)
+        return "Remaining-work audit: CLEAR this cycle.\n" f"Last audit verdict: {last}"
+    last = state.last_audit_verdict or "none"
+    logger.info("eval prompt remaining-work audit not CLEAR last=%s", last)
+    return (
+        f"Remaining-work audit: not CLEAR this cycle "
+        f"(last_audit_verdict={last}).\n"
+        f"{MISSING_AUDIT_CLEAR}"
+    )
+
+
 def cmd_prompt(argv: list[str]) -> int:
     wake_code = _check_wake()
     if wake_code is not None:
@@ -139,6 +168,7 @@ def cmd_prompt(argv: list[str]) -> int:
 
     work_summary = _extract_work_summary(argv)
     validation_section = _build_validation_section(state)
+    audit_section = _build_audit_section(state)
 
     if work_summary:
         work_section = f"Recent work summary:\n{work_summary}"
@@ -151,24 +181,33 @@ def cmd_prompt(argv: list[str]) -> int:
     prompt = (
         "You are a goal completion evaluator (checker), not the worker "
         "(maker). Judge whether the goal condition has been achieved based "
-        "on the evidence provided below — validation output and work summary.\n"
+        "on the evidence provided below — validation output, remaining-work "
+        "audit, and work summary. Prefer inspecting the workspace over "
+        "trusting the work summary.\n"
         "\n"
         f"Goal condition: {redact_secrets(state.condition, max_chars=None)}\n"
         "\n"
         f"{validation_section}\n"
+        "\n"
+        f"{audit_section}\n"
         "\n"
         f"{work_section}\n"
         "\n"
         "Rules:\n"
         "1. Answer ONLY with 'YES: <reason>' or 'NO: <reason>' as the final line\n"
         "2. Be conservative — only YES when there is clear evidence\n"
-        "3. If validation command passed (exit 0), that is strong evidence\n"
+        "3. Validation command exit 0 is necessary evidence that the command "
+        "passed, but is NOT sufficient when the goal condition is broader "
+        "than that command. Treat the worker summary as a claim, not proof.\n"
         "4. Keep reason to 1-2 sentences\n"
         "5. For NO, explain what specific work remains\n"
         "6. Prefer the evidence in this prompt; do not invent unstated results\n"
         "7. If a validation command is configured but has not been run "
         "(MISSING EVIDENCE / has not been run yet), you MUST answer NO. "
         "Work summary is not a substitute for a validation run.\n"
+        "8. If the remaining-work audit is not CLEAR this cycle and the "
+        "condition is broader than the validation command (or no validation "
+        "command is set), you MUST answer NO.\n"
     )
     _emit_prompt(prompt)
     return 0
@@ -187,6 +226,67 @@ def cmd_spawn_config(_argv: list[str]) -> int:
         config["readonly"],
     )
     print(json.dumps(config, separators=(",", ":")))
+    return 0
+
+
+def cmd_audit_spawn_config(_argv: list[str]) -> int:
+    """Print JSON Task parameters for the readonly remaining-work auditor."""
+    wake_code = _check_wake()
+    if wake_code is not None:
+        return wake_code
+    config = audit_spawn_config_dict()
+    logger.info(
+        "audit-spawn-config subagent_type=%s model=%s readonly=%s",
+        config["subagent_type"],
+        config["model"],
+        config["readonly"],
+    )
+    print(json.dumps(config, separators=(",", ":")))
+    return 0
+
+
+def cmd_audit_prompt(_argv: list[str]) -> int:
+    """Generate a remaining-work auditor prompt (condition only, no summary)."""
+    wake_code = _check_wake()
+    if wake_code is not None:
+        return wake_code
+
+    try:
+        state = snapshot_goal(raise_corrupt=True)
+    except CorruptGoalError as exc:
+        print(f"[goal-eval] Error: {exc}", file=sys.stderr)
+        return 1
+    if state is None:
+        print(
+            "[goal-eval] Error: No active goal. Run cursor-goal manage create first.",
+            file=sys.stderr,
+        )
+        return 1
+
+    prompt = (
+        "You are a remaining-work auditor (fresh chat), not the worker and "
+        "not the YES/NO evaluator. Inspect the workspace as a new plan-mode "
+        "session would against the original goal condition. Do not trust any "
+        "worker claim that this is done. Use readonly tools to inspect the "
+        "repository. Do not edit files.\n"
+        "\n"
+        f"Goal condition: {redact_secrets(state.condition, max_chars=None)}\n"
+        "\n"
+        "Rules:\n"
+        "1. Answer ONLY with 'CLEAR: <reason>' or 'REMAINING: <items>' as "
+        "the final line\n"
+        "2. CLEAR only when a new plan-mode chat would not produce in-scope "
+        "remaining work required by the condition\n"
+        "3. On REMAINING, list concrete file + issue items; no style nits, "
+        "extra features, or a second quality bar the condition does not ask "
+        "for\n"
+        "4. If the condition is equivalent to a test/validation command and "
+        "that command meets it, answer CLEAR\n"
+        "5. Validation passing is not enough when the condition is broader "
+        "than the test command\n"
+        "6. There is no work summary — inspect the tree yourself\n"
+    )
+    _emit_prompt(prompt)
     return 0
 
 
@@ -264,7 +364,12 @@ def cmd_validate(_argv: list[str]) -> int:
     cwd, cwd_ok = _resolve_validate_cwd(state)
     if not cwd_ok:
         return 1
-    result = run_validation(cmd, shell_ok=bool(state.shell_ok), cwd=cwd)
+    result = run_validation(
+        cmd,
+        shell_ok=bool(state.shell_ok),
+        cwd=cwd,
+        timeout_sec=resolve_validation_timeout_sec(),
+    )
     output = result.output
     if result.timed_out:
         output = f"[timed out]\n{output}".strip()
@@ -379,10 +484,37 @@ def parse_result_text(result: str) -> tuple[str, str]:
     return verdict, reason
 
 
+def parse_audit_text(result: str) -> tuple[str, str]:
+    """Return (verdict, reason). Verdict is CLEAR, REMAINING, or UNCLEAR.
+
+    Only the last non-empty line matching CLEAR:/REMAINING: counts.
+    """
+    last_match: re.Match[str] | None = None
+    for line in result.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        match = _AUDIT_LINE.match(stripped)
+        if match:
+            last_match = match
+    if last_match is None:
+        return (
+            "UNCLEAR",
+            "Could not parse auditor response. Treat as REMAINING and continue.",
+        )
+    verdict = last_match.group(1).upper()
+    reason = last_match.group(2).strip()
+    return verdict, reason
+
+
 def _usage_parse_result() -> None:
+    _usage_parse_input("parse-result")
+
+
+def _usage_parse_input(command: str) -> None:
     print(
         "[goal-eval] Error: Usage: "
-        'cursor-goal eval parse-result "<output>" | --stdin | @file '
+        f'cursor-goal eval {command} "<output>" | --stdin | @file '
         "[--allow-cwd]",
         file=sys.stderr,
     )
@@ -449,7 +581,9 @@ def _read_stdin_capped() -> str | None:
     return raw
 
 
-def _read_parse_result_text(argv: list[str]) -> str | None:
+def _read_parse_result_text(
+    argv: list[str], *, command: str = "parse-result"
+) -> str | None:
     """Resolve parse-result input from argv, --stdin, or @file.
 
     Returns the text, or None after printing a usage error.
@@ -457,7 +591,7 @@ def _read_parse_result_text(argv: list[str]) -> str | None:
     allow_cwd = "--allow-cwd" in argv
     filtered = [a for a in argv if a != "--allow-cwd"]
     if not filtered or not filtered[0]:
-        _usage_parse_result()
+        _usage_parse_input(command)
         return None
     if filtered[0] == "--stdin":
         return _read_stdin_capped()
@@ -500,6 +634,36 @@ def cmd_parse_result(argv: list[str]) -> int:
     return 0 if verdict == "YES" else 1
 
 
+def cmd_parse_audit(argv: list[str]) -> int:
+    unsafe = _refuse_if_data_dir_unsafe()
+    if unsafe is not None:
+        print(unsafe.replace("[goal]", "[goal-eval]"), file=sys.stderr)
+        return 1
+
+    result = _read_parse_result_text(argv, command="parse-audit")
+    if result is None:
+        return 1
+
+    verdict, reason = parse_audit_text(result)
+    logger.info("parse-audit verdict=%s reason_len=%s", verdict, len(reason))
+
+    try:
+        updated = record_parse_audit(verdict, reason)
+    except ValueError as exc:
+        print(f"[goal-eval] Error: {exc}", file=sys.stderr)
+        return 1
+    except GoalLockTimeoutError as exc:
+        print(f"[goal-eval] Error: {exc}", file=sys.stderr)
+        return 1
+
+    if updated is not None and verdict == "CLEAR":
+        print("[goal-eval] CLEAR remaining-work audit signal recorded automatically.")
+
+    print(f"VERDICT={verdict}")
+    print(f"REASON={redact_secrets(reason, max_chars=500)}")
+    return 0 if verdict == "CLEAR" else 1
+
+
 def cmd_eval(argv: list[str]) -> int:
     if not argv:
         _print_help()
@@ -512,9 +676,12 @@ def cmd_eval(argv: list[str]) -> int:
         "prompt": cmd_prompt,
         "validate": cmd_validate,
         "spawn-config": cmd_spawn_config,
+        "audit-prompt": cmd_audit_prompt,
+        "audit-spawn-config": cmd_audit_spawn_config,
         "signal": cmd_signal,
         "check": cmd_check,
         "parse-result": cmd_parse_result,
+        "parse-audit": cmd_parse_audit,
     }
     handler = dispatch.get(command)
     if handler is None:
@@ -532,6 +699,11 @@ def _print_help() -> int:
         "  spawn-config                      "
         "Print JSON Task params (subagent_type/model/readonly)"
     )
+    print("  audit-prompt                      Generate remaining-work auditor prompt")
+    print(
+        "  audit-spawn-config                "
+        "Print JSON Task params for goal-auditor (inherit/readonly)"
+    )
     print(
         "  signal [--force]                  "
         "Record YES-bound signal (prefer parse-result)"
@@ -541,18 +713,27 @@ def _print_help() -> int:
         '  parse-result "<output>"|--stdin|@file [--allow-cwd]  '
         "Parse YES/NO; auto-signal on YES (prefer --stdin on Windows)"
     )
+    print(
+        '  parse-audit "<output>"|--stdin|@file [--allow-cwd]  '
+        "Parse CLEAR/REMAINING; auto-signal on CLEAR"
+    )
     return 0
 
 
 __all__ = [
+    "MISSING_AUDIT_CLEAR",
     "MISSING_VALIDATION_EVIDENCE",
     "cmd_eval",
     "cmd_prompt",
     "cmd_validate",
     "cmd_spawn_config",
+    "cmd_audit_prompt",
+    "cmd_audit_spawn_config",
     "cmd_signal",
     "cmd_check",
     "cmd_parse_result",
+    "cmd_parse_audit",
     "parse_result_text",
+    "parse_audit_text",
     "validation_evidence_missing",
 ]

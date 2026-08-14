@@ -50,6 +50,9 @@ py -3 -u "$env:CURSOR_PLUGIN_ROOT\skills\goal\scripts\run_goal.py" <command> ...
 | `eval spawn-config` | JSON Task params for the evaluator (`goal-evaluator` + model) |
 | `eval prompt [--work-summary "..."]` | Generate evaluator prompt from goal.json |
 | `eval parse-result --stdin` / `@file` / `"<short>"` | Parse YES/NO; auto-record YES-bound signal (prefer `--stdin` on Windows) |
+| `eval audit-spawn-config` | JSON Task params for the remaining-work auditor (`goal-auditor` + inherit) |
+| `eval audit-prompt` | Generate remaining-work auditor prompt (no work summary) |
+| `eval parse-audit --stdin` / `@file` / `"<short>"` | Parse CLEAR/REMAINING; auto-record CLEAR signal |
 | `eval signal [--force]` | Recovery-only signal (prefer parse-result) |
 | `eval check` | Verify YES-bound signal before marking done |
 | `wake arm\|tick\|disarm\|status\|loop` | Wake watchdog (race-immune continuation) |
@@ -61,58 +64,69 @@ py -3 -u "$env:CURSOR_PLUGIN_ROOT\skills\goal\scripts\run_goal.py" <command> ...
    wake_budget/workdir/force from parse JSON to manage create flags
    (allow_shell true→--allow-shell, false→--deny-shell). If parse omits
    allow_shell but raw text has --allow-shell/--deny-shell, forward from raw.
+   Do not invent a --test the user did not pass. Never weaken --test to dodge
+   the validation timeout (default 600s; CURSOR_GOAL_VALIDATE_TIMEOUT_SEC).
 0b. After create/resume: parse GOAL_WAKE_REQUIRED; start that command in background
    Shell with notify_on_output matching pattern or notify_pattern; wake status →
    continuation_ready=true — do not skip. Exit 1 / paused means arm failed — fix and resume.
    manage status exits 1 while pursuing with continuation_ready=false.
 1. Do focused work (next concrete change). Do not ask which playbook to use.
 2. Verify this turn. If validation_command set: …/run_goal.py eval validate.
-   Never spawn the evaluator or manage done without fresh this-turn evidence.
-   No "should pass" / "looks done".
+   Never spawn the auditor/evaluator or manage done without fresh this-turn evidence.
+   No "should pass" / "looks done". Never claim complete while status is pursuing.
 2a. If validate failed: investigate root cause from the failure output before
    fixing (do not shotgun-patch or hardcode expected values). If compile/type
    errors: group by file, fix high-confidence first, re-validate. If conflict
    markers: resolve then re-validate. If 2+ independent failure domains: parallel
-   Task workers (not goal-evaluator), then re-validate. Then back to step 2.
+   Task workers (not goal-evaluator/goal-auditor), then re-validate. Then back to step 2.
 2b. If validate passed and git diff is non-empty: once before the first YES
    attempt, remove AI slop without behavior change; re-validate. Skip on later
    wakes if already done for this goal.
-3. Capture eval prompt + spawn-config (OS-appropriate Shell; do not rely on bash-only $())
-4. Task(subagent_type, model, readonly from SPAWN JSON, prompt=EVAL_PROMPT)
+3. Remaining-work audit: capture eval audit-prompt + audit-spawn-config.
+   Task(subagent_type/model/readonly from AUDIT SPAWN JSON, prompt=AUDIT_PROMPT).
+   Never use generalPurpose. Pipe response into eval parse-audit --stdin.
+   → REMAINING: implement the punch list (back to step 1); do not evaluate yet
+   → CLEAR: continue to step 4
+4. Capture eval prompt + spawn-config (OS-appropriate Shell; do not rely on bash-only $())
+5. Task(subagent_type, model, readonly from SPAWN JSON, prompt=EVAL_PROMPT)
    Never use generalPurpose for evaluation. Never omit spawn-config.
    Do not spawn the evaluator if validation_command is set but validate was
-   not run this turn (the prompt will force NO).
-5. Pipe subagent response into: …/run_goal.py eval parse-result --stdin
-   → YES: manage done
+   not run this turn (the prompt will force NO). Do not spawn the evaluator
+   without a CLEAR audit this cycle.
+6. Pipe subagent response into: …/run_goal.py eval parse-result --stdin
+   → YES: manage done (requires CLEAR + YES)
    → NO:  continue working (back to step 1)
 ```
 
-Do **not** put long evaluator responses on the Windows command line (argv length limits). Use `--stdin` or `@file`.
+Do **not** put long evaluator or auditor responses on the Windows command line (argv length limits). Use `--stdin` or `@file`.
 
-Do **not** invoke Plan Mode, `/ce-plan`, `/review`, `/review-bugbot`, `/review-security`, or thermo-nuclear review in this loop.
+Do **not** invoke Plan Mode, `/ce-plan`, `/review`, `/review-bugbot`, `/review-security`, or thermo-nuclear review in this loop. The remaining-work auditor is the unattended plan-mode-quality pass.
 
 ## Platform Notes (Cursor)
 
 - **Worker model:** session / `inherit` (this agent).
 - **Evaluator model:** from `eval spawn-config` (default `composer-2.5`; override with `CURSOR_GOAL_EVAL_MODEL`).
-- **Subagent tool:** `Task` — spawn `goal-evaluator` with spawn-config params.
+- **Auditor model:** `inherit` (fresh context, same as the session) via `eval audit-spawn-config`.
+- **Subagent tool:** `Task` — spawn `goal-auditor` then `goal-evaluator` with the matching spawn-config params.
 - **Stop hook (primary, documented):** Cursor `hooks.json` → `stop_hook.py` (Unix) or `stop_hook.cmd` (Windows) returns `followup_message`. Prefer in-turn evaluation. Windows uses a cmd launcher + stdout drain delay to mitigate Cursor's capture race. Marketplace installs register both launchers; singleflight + a `generation_id` dedupe stamp prevent double followups / double-charged turns.
-- **subagentStop hook (documented, race-free):** the same script is also registered for `subagentStop` scoped to `goal-evaluator` (`matcher`). The instant the evaluator subagent finishes it returns a `followup_message` reminding the worker to run `eval parse-result`. It never calls `manage done` itself — only the worker does, after parsing the verdict.
+- **subagentStop hook (documented, race-free):** the same script is registered for `subagentStop` scoped to `goal-evaluator` and `goal-auditor` (`matcher`). Evaluator finished → `eval parse-result`. Auditor finished → `eval parse-audit`. It never calls `manage done` itself — only the worker does, after parsing both verdicts.
 - **Wake watchdog (required while pursuing):** After `manage create` / `resume`, parse `GOAL_WAKE_REQUIRED`, start its `command` in a background Shell with `notify_on_output` matching `pattern` or `notify_pattern` (`^AGENT_GOAL_WAKE`), then verify `wake status` shows `continuation_ready=true`. Prefer the event/`harness-cmd` command over hardcoded paths. Continues even when Cursor drops stop-hook stdout. Disarmed on done/pause/clear. Disable with `CURSOR_GOAL_WAKE=0`.
-- **No idle while pursuing:** do not end a turn without `manage done` or a completed evaluate→NO cycle with the next action started.
+- **No idle while pursuing:** do not end a turn without `manage done` or a completed audit/evaluate cycle with the next action started. Do not tell the user the goal is complete while status is `pursuing`.
 
 ## Rules
 
-- `manage done` **rejects** unless a YES-bound evaluator signal exists (unless `--force`)
-- `parse-result` on YES records the signal automatically — do not skip it
+- `manage done` **rejects** unless a YES-bound evaluator signal **and** a CLEAR remaining-work audit signal exist (unless `--force`)
+- `parse-result` on YES records the evaluator signal automatically — do not skip it
+- `parse-audit` on CLEAR records the audit signal automatically — do not skip it
 - Use `parse` and read JSON — do **not** evaluate shell strings from the parser
 - Forward parse create flags (`allow_shell`, `workdir`, `wake_budget`, `force`, `test_cmd`, `budget`) to `manage create` — do not leave them in the condition text
-- Use `eval prompt` to generate prompts — do not manually template them
+- Do not invent `--test` when parse JSON has no `test_cmd`; do not weaken `--test` to fit the validation timeout
+- Use `eval prompt` / `eval audit-prompt` to generate prompts — do not manually template them
 - Stop hook + wake watchdog handle auto-continuation between turns (evaluate in-turn first)
-- On `AGENT_GOAL_WAKE`, check `manage status` then continue if still pursuing
+- On `AGENT_GOAL_WAKE`, check `manage status` then continue if still pursuing. An earlier "this is complete" message is invalid while pursuing.
 - `--force` on `done` / `signal` is recovery only — not cryptographic attestation
 - Never claim wake is running from `pid_alive` alone without having started Shell with `notify_on_output`
-- Never claim done or spawn `goal-evaluator` without fresh this-turn validation (or an explicit no-command evidence note)
+- Never claim done or spawn `goal-evaluator` without fresh this-turn validation (or an explicit no-command evidence note) and a CLEAR audit
 - On validation failure: root-cause first; do not thrash random edits
 
 <!-- cursor-goal:managed-agent - installed/uninstalled by scripts/install-goal.*; back up before hand-editing -->
