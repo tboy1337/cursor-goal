@@ -10,18 +10,19 @@ point (scoped to the ``goal-evaluator`` subagent) alongside the existing
 from __future__ import annotations
 
 import json
-import logging
 import os
 import secrets
 from pathlib import Path
 from typing import Any
+
+from cursor_goal.logging_config import get_logger
 
 HOOK_MARKER = "cursor_goal_stop_hook"
 SUBAGENT_STOP_MARKER = "cursor_goal_subagent_stop_hook"
 SUBAGENT_STOP_EVENT = "subagentStop"
 SUBAGENT_STOP_MATCHER = "goal-evaluator"
 
-logger = logging.getLogger("cursor_goal.hooks_config")
+logger = get_logger("cursor_goal.hooks_config")
 
 
 def is_goal_marked_entry(item: object, marker: str) -> bool:

@@ -11,6 +11,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
+from typing import Any
 
 from cursor_goal import __version__
 from cursor_goal.logging_config import get_logger
@@ -329,25 +330,21 @@ def _stale_baked_python_failures() -> list[str]:
     return fails
 
 
-# pylint: disable-next=too-many-branches,too-many-statements,too-many-locals
-def cmd_doctor(_argv: list[str]) -> int:
-    """Health check for install / data dir / wake / shell. Exit 1 on hard fail."""
-    hard_fails: list[str] = []
-    warnings: list[str] = []
-
-    print("[goal] Doctor")
+def _doctor_check_python(hard_fails: list[str]) -> None:
     print(f"  Python: {sys.version.split()[0]} ({sys.executable})")
     if sys.version_info < (3, 12):  # pragma: no cover — CI/runtime is 3.12+
         hard_fails.append("Python 3.12+ is required")
 
+
+def _doctor_check_data_dir(hard_fails: list[str]) -> Path | None:
     try:
         ddir = data_dir(check_writable=False)
         print(f"  Data dir: {ddir}")
     except (OSError, ValueError) as exc:
         hard_fails.append(f"Cannot access data dir: {exc}")
-        ddir = None
+        return None
 
-    if ddir is not None and data_dir_is_insecure(ddir):
+    if data_dir_is_insecure(ddir):
         if os.name == "nt":
             hard_fails.append(
                 f"Data directory is insecure ({ddir}). "
@@ -361,14 +358,17 @@ def cmd_doctor(_argv: list[str]) -> int:
                 "group/world-writable. Run chmod 700 or set CURSOR_GOAL_DATA."
             )
 
-    if ddir is not None and os.name == "nt":
+    if os.name == "nt":
         # Force re-harden so long-lived processes cannot stale-trust forever.
         harden_windows_acl(ddir, force=True)
 
-    acl_fail = acl_harden_failure_message(ddir) if ddir is not None else None
+    acl_fail = acl_harden_failure_message(ddir)
     if acl_fail is not None:
         hard_fails.append(acl_fail)
+    return ddir
 
+
+def _doctor_check_eval_model(hard_fails: list[str]) -> None:
     resolved_eval_model = resolve_eval_model()
     print(f"  Evaluator model: {resolved_eval_model}")
     raw_eval_model_env = (os.environ.get(EVAL_MODEL_ENV) or "").strip()
@@ -382,15 +382,21 @@ def cmd_doctor(_argv: list[str]) -> int:
             "https://cursor.com/docs/subagents.md#model-configuration"
         )
 
-    orphan = read_orphan_wake()
-    if orphan is not None:
-        orphan_pid = orphan.get("pid", "?")
-        orphan_reason = str(orphan.get("reason") or "unspecified")
-        hard_fails.append(
-            f"Orphan wake suspected (pid={orphan_pid}): {orphan_reason}. "
-            "Confirm no leftover wake loop, then re-arm or clear the goal."
-        )
 
+def _doctor_check_orphan_wake(hard_fails: list[str]) -> None:
+    orphan = read_orphan_wake()
+    if orphan is None:
+        return
+    orphan_pid = orphan.get("pid", "?")
+    orphan_reason = str(orphan.get("reason") or "unspecified")
+    hard_fails.append(
+        f"Orphan wake suspected (pid={orphan_pid}): {orphan_reason}. "
+        "Confirm no leftover wake loop, then re-arm or clear the goal."
+    )
+
+
+def _doctor_check_hooks(hard_fails: list[str], warnings: list[str]) -> bool | None:
+    """Inspect hook install paths; return marketplace-hooks truth for later checks."""
     hooks_state = _hooks_look_configured()
     classic_hooks = _classic_hooks_configured()
     market_hooks = _marketplace_hooks_configured()
@@ -415,7 +421,10 @@ def cmd_doctor(_argv: list[str]) -> int:
     stacked = _hooks_stacking_failure()
     if stacked is not None:
         hard_fails.append(stacked)
+    return market_hooks
 
+
+def _doctor_check_harness(hard_fails: list[str], warnings: list[str]) -> None:
     try:
         report = harness_cmd_report()
         print(f"  Harness: {report['run_goal']} (exists={report['exists']})")
@@ -430,63 +439,77 @@ def cmd_doctor(_argv: list[str]) -> int:
     except ValueError as exc:
         warnings.append(f"Harness path unresolved: {exc}")
 
-    if os.name == "nt":
-        env_py = (os.environ.get("CURSOR_GOAL_PYTHON") or "").strip()
-        if env_py:
-            if _cursor_goal_python_is_unsafe(env_py):
-                hard_fails.append(
-                    "CURSOR_GOAL_PYTHON contains unsafe cmd metacharacters "
-                    f'(one of " & | ^ < >): {env_py!r}'
-                )
-            elif not _is_absolute_interpreter_path(env_py):
-                hard_fails.append(
-                    "CURSOR_GOAL_PYTHON must be an absolute path to Python 3.12+ "
-                    f"(got {env_py!r})"
-                )
-            else:
-                print(f"  CURSOR_GOAL_PYTHON: {env_py}")
-        else:
-            msg = (
-                "CURSOR_GOAL_PYTHON unset — marketplace stop_hook.cmd / wake_loop.cmd "
-                "resolve Python via PATH (prefer classic install-goal.ps1 bake, or set "
-                "CURSOR_GOAL_PYTHON to an absolute 3.12+ interpreter)"
+
+# pylint: disable-next=too-many-branches,too-many-statements
+def _doctor_check_windows_python(
+    hard_fails: list[str],
+    warnings: list[str],
+    market_hooks: bool | None,
+) -> None:
+    if os.name != "nt":
+        return
+    env_py = (os.environ.get("CURSOR_GOAL_PYTHON") or "").strip()
+    if env_py:
+        if _cursor_goal_python_is_unsafe(env_py):
+            hard_fails.append(
+                "CURSOR_GOAL_PYTHON contains unsafe cmd metacharacters "
+                f'(one of " & | ^ < >): {env_py!r}'
             )
-            if market_hooks is True:
-                hard_fails.append(msg)
-            else:
-                warnings.append(msg)
-        py = shutil.which("py") or shutil.which("python") or shutil.which("python3")
-        if not py:
-            no_py = (
-                "No py/python/python3 on PATH — marketplace stop_hook.cmd / "
-                "wake_loop.cmd cannot resolve Python; set CURSOR_GOAL_PYTHON to an "
-                "absolute 3.12+ interpreter or use classic install-goal.ps1"
+        elif not _is_absolute_interpreter_path(env_py):
+            hard_fails.append(
+                "CURSOR_GOAL_PYTHON must be an absolute path to Python 3.12+ "
+                f"(got {env_py!r})"
             )
-            if market_hooks is True:
-                hard_fails.append(no_py)
-            else:
-                warnings.append(no_py)
         else:
-            print(f"  PATH Python: {py}")
+            print(f"  CURSOR_GOAL_PYTHON: {env_py}")
+    else:
+        msg = (
+            "CURSOR_GOAL_PYTHON unset — marketplace stop_hook.cmd / wake_loop.cmd "
+            "resolve Python via PATH (prefer classic install-goal.ps1 bake, or set "
+            "CURSOR_GOAL_PYTHON to an absolute 3.12+ interpreter)"
+        )
         if market_hooks is True:
-            print(
-                "  Tip: Teams marketplace registers dual stop hooks (one per OS); "
-                "Hooks UI may show a failure on the non-native entry by design."
-            )
+            hard_fails.append(msg)
+        else:
+            warnings.append(msg)
+    py = shutil.which("py") or shutil.which("python") or shutil.which("python3")
+    if not py:
+        no_py = (
+            "No py/python/python3 on PATH — marketplace stop_hook.cmd / "
+            "wake_loop.cmd cannot resolve Python; set CURSOR_GOAL_PYTHON to an "
+            "absolute 3.12+ interpreter or use classic install-goal.ps1"
+        )
+        if market_hooks is True:
+            hard_fails.append(no_py)
+        else:
+            warnings.append(no_py)
+    else:
+        print(f"  PATH Python: {py}")
+    if market_hooks is True:
+        print(
+            "  Tip: Teams marketplace registers dual stop hooks (one per OS); "
+            "Hooks UI may show a failure on the non-native entry by design."
+        )
 
-    hard_fails.extend(_stale_baked_python_failures())
-    hard_fails.extend(_install_version_failures())
 
+def _doctor_load_goal(hard_fails: list[str]) -> GoalState | None:
     try:
-        state = snapshot_goal(raise_corrupt=True)
+        return snapshot_goal(raise_corrupt=True)
     except CorruptGoalError as exc:
         hard_fails.append(f"Corrupt goal.json: {exc}")
-        state = None
+        return None
     except GoalLockTimeoutError as exc:
         hard_fails.append(f"goal.lock timeout: {exc}")
-        state = None
+        return None
 
-    wake_info = wake_status_info()
+
+# pylint: disable-next=too-many-branches,too-many-statements
+def _doctor_check_pursuing(
+    hard_fails: list[str],
+    warnings: list[str],
+    state: GoalState | None,
+    wake_info: dict[str, Any],
+) -> None:
     if state is not None and state.active and state.status == "pursuing":
         print(f"  Goal: pursuing " f"({redact_secrets(state.condition, max_chars=60)})")
         print(
@@ -543,6 +566,8 @@ def cmd_doctor(_argv: list[str]) -> int:
     else:
         print(f"  Goal: {state.status}")
 
+
+def _doctor_print_wake_summary(wake_info: dict[str, Any]) -> None:
     if not wake_enabled():
         print("  Wake: disabled")
     elif wake_info.get("armed"):
@@ -554,6 +579,8 @@ def cmd_doctor(_argv: list[str]) -> int:
     else:
         print("  Wake: not armed")
 
+
+def _doctor_check_stop_artifacts(warnings: list[str], ddir: Path | None) -> None:
     last_stop = (ddir / "last-stop-response.json") if ddir is not None else None
     if last_stop is not None and last_stop.is_file():
         print(f"  Last stop response: {last_stop}")
@@ -578,6 +605,8 @@ def cmd_doctor(_argv: list[str]) -> int:
                 "(persist failures while pursuing — wake should still continue)"
             )
 
+
+def _doctor_check_log_env(warnings: list[str], state: GoalState | None) -> None:
     if os.environ.get("CURSOR_GOAL_LOG_SECRETS", "").strip().lower() in {
         "1",
         "true",
@@ -589,17 +618,41 @@ def cmd_doctor(_argv: list[str]) -> int:
     log_file = os.environ.get("CURSOR_GOAL_LOG_FILE", "").strip()
     if log_file:
         print(f"  Durable log: CURSOR_GOAL_LOG_FILE={log_file}")
-    else:
-        log_level = os.environ.get("CURSOR_GOAL_LOG", "").strip()
-        if not log_level:
-            tip = (
-                "For richer diagnostics set CURSOR_GOAL_LOG=INFO "
-                "or CURSOR_GOAL_LOG_FILE=1"
-            )
-            if state is not None and state.active and state.status == "pursuing":
-                warnings.append(tip)
-            else:
-                print(f"  Tip: {tip}")
+        return
+    log_level = os.environ.get("CURSOR_GOAL_LOG", "").strip()
+    if not log_level:
+        tip = (
+            "For richer diagnostics set CURSOR_GOAL_LOG=INFO "
+            "or CURSOR_GOAL_LOG_FILE=1"
+        )
+        if state is not None and state.active and state.status == "pursuing":
+            warnings.append(tip)
+        else:
+            print(f"  Tip: {tip}")
+
+
+def cmd_doctor(_argv: list[str]) -> int:
+    """Health check for install / data dir / wake / shell. Exit 1 on hard fail."""
+    hard_fails: list[str] = []
+    warnings: list[str] = []
+
+    print("[goal] Doctor")
+    _doctor_check_python(hard_fails)
+    ddir = _doctor_check_data_dir(hard_fails)
+    _doctor_check_eval_model(hard_fails)
+    _doctor_check_orphan_wake(hard_fails)
+    market_hooks = _doctor_check_hooks(hard_fails, warnings)
+    _doctor_check_harness(hard_fails, warnings)
+    _doctor_check_windows_python(hard_fails, warnings, market_hooks)
+    hard_fails.extend(_stale_baked_python_failures())
+    hard_fails.extend(_install_version_failures())
+
+    state = _doctor_load_goal(hard_fails)
+    wake_info = wake_status_info()
+    _doctor_check_pursuing(hard_fails, warnings, state, wake_info)
+    _doctor_print_wake_summary(wake_info)
+    _doctor_check_stop_artifacts(warnings, ddir)
+    _doctor_check_log_env(warnings, state)
 
     for item in warnings:
         print(f"  Warning: {item}")

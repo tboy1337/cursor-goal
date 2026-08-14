@@ -1107,7 +1107,19 @@ def test_get_logger_existing_stream_and_child_handlers(
 def test_windows_username_rejects_unsafe(monkeypatch: pytest.MonkeyPatch) -> None:
     from cursor_goal import win_acl
 
+    monkeypatch.setattr(win_acl, "_windows_logon_name", lambda: None)
+    monkeypatch.setattr(win_acl.sys, "platform", "linux")
     monkeypatch.setenv("USERNAME", "bad;user")
     monkeypatch.delenv("USER", raising=False)
     monkeypatch.setattr(win_acl.os, "getlogin", lambda: "")
     assert win_acl.windows_username() is None
+
+
+def test_goal_lock_same_thread_reentrant(goal_home: Path) -> None:
+    from cursor_goal.state import goal_lock
+
+    marker = goal_home / "nested.txt"
+    with goal_lock():
+        with goal_lock():
+            marker.write_text("ok", encoding="utf-8")
+    assert marker.read_text(encoding="utf-8") == "ok"

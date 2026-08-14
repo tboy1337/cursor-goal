@@ -10,6 +10,14 @@ $tmpHome = Join-Path ([IO.Path]::GetTempPath()) ("cursor-goal-smoke-" + [guid]::
 New-Item -ItemType Directory -Force -Path $tmpHome | Out-Null
 
 try {
+    # Isolate Python expanduser("~") and goal data from the real profile.
+    # Unix install-smoke.sh exports HOME and USERPROFILE for the same reason.
+    $env:HOME = $tmpHome
+    $env:USERPROFILE = $tmpHome
+    Remove-Item Env:CURSOR_GOAL_DATA -ErrorAction SilentlyContinue
+    Remove-Item Env:CURSOR_GOAL_HOME -ErrorAction SilentlyContinue
+    Remove-Item Env:CURSOR_PLUGIN_ROOT -ErrorAction SilentlyContinue
+
     Write-Host "[install-smoke] HOME=$tmpHome"
     Write-Host "[install-smoke] Installing..."
 

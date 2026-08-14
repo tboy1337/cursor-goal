@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import ctypes
 import os
 import re
-import shutil
 import subprocess  # nosec B404 — Windows ACL via icacls only
+import sys
 from pathlib import Path
 
 from cursor_goal.logging_config import get_logger
+from cursor_goal.native_path import windows_system_root_file
 
 logger = get_logger("cursor_goal.win_acl")
 
@@ -20,30 +22,108 @@ ACL_HARDEN_FAILURES: dict[str, str] = {}
 _WINDOWS_USERNAME_RE = re.compile(r"^[A-Za-z0-9._$\\-]+$")
 
 
-def windows_username() -> str | None:
-    """Best-effort current Windows username for icacls grants.
+def _safe_username(value: str | None) -> str | None:
+    """Return *value* when it is a safe icacls grant identity, else None."""
+    if not value:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if _WINDOWS_USERNAME_RE.fullmatch(text):
+        return text
+    logger.warning(
+        "Ignoring unsafe Windows username for ACL harden: %r",
+        text[:64],
+    )
+    return None
 
-    Rejects values with characters that could alter icacls grant syntax.
-    """
-    candidates: list[str] = []
+
+def _windows_logon_name() -> str | None:
+    """Current Windows logon name via GetUserNameW (not spoofable env)."""
+    if sys.platform != "win32":
+        return None
+    windll = getattr(ctypes, "windll", None)
+    if windll is None:
+        return None
+    try:
+        get_user_name = windll.advapi32.GetUserNameW
+    except AttributeError:
+        return None
+    size = ctypes.c_ulong(256)
+    buf = ctypes.create_unicode_buffer(size.value)
+    try:
+        if not get_user_name(buf, ctypes.byref(size)):
+            if size.value <= 1:
+                return None
+            buf = ctypes.create_unicode_buffer(size.value)
+            if not get_user_name(buf, ctypes.byref(size)):
+                return None
+    except (OSError, ValueError, TypeError) as exc:
+        logger.debug("GetUserNameW failed: %s", exc)
+        return None
+    return _safe_username(buf.value)
+
+
+def _env_usernames() -> list[str]:
+    found: list[str] = []
     for key in ("USERNAME", "USER"):
         value = os.environ.get(key, "").strip()
         if value:
-            candidates.append(value)
+            found.append(value)
+    return found
+
+
+def _warn_env_username_mismatch(os_name: str) -> None:
+    for env_user in _env_usernames():
+        if env_user != os_name:
+            logger.warning(
+                "Ignoring spoofable USERNAME/USER %r; using OS logon %r",
+                env_user[:64],
+                os_name[:64],
+            )
+
+
+def _windows_os_identity() -> str | None:
+    """OS logon name on real Windows, or None when unavailable / not Windows."""
+    if sys.platform != "win32":
+        return None
+    os_name = _windows_logon_name()
+    if os_name is not None:
+        return os_name
     try:
-        login = os.getlogin()
-        if login:
-            candidates.append(login.strip())
+        return _safe_username(os.getlogin())
     except OSError:
-        pass
-    for user in candidates:
-        if _WINDOWS_USERNAME_RE.fullmatch(user):
-            return user
-        logger.warning(
-            "Ignoring unsafe Windows username for ACL harden: %r",
-            user[:64],
-        )
-    return None
+        return None
+
+
+def windows_username() -> str | None:
+    """Best-effort current Windows username for icacls grants.
+
+    On real Windows, prefers ``GetUserNameW`` then ``os.getlogin()`` over
+    spoofable ``USERNAME`` / ``USER`` environment variables. Env is a
+    last-resort fallback (and the path Linux tests use when ``os.name`` is
+    patched to ``nt``). Rejects values with characters that could alter
+    icacls grant syntax.
+    """
+    os_name = _windows_os_identity()
+    if os_name is not None:
+        _warn_env_username_mismatch(os_name)
+        return os_name
+
+    for user in _env_usernames():
+        safe = _safe_username(user)
+        if safe is not None:
+            return safe
+    try:
+        return _safe_username(os.getlogin())
+    except OSError:
+        return None
+
+
+def _pinned_icacls() -> str | None:
+    """Absolute System32 icacls.exe, or None (never PATH)."""
+    pinned = windows_system_root_file("System32", "icacls.exe")
+    return str(pinned) if pinned is not None else None
 
 
 def acl_harden_disabled() -> bool:
@@ -115,9 +195,12 @@ def harden_windows_acl(path: Path, *, force: bool = False) -> bool:
     if not user:
         record_acl_failure(path, "could not determine a safe Windows username")
         return False
-    icacls = shutil.which("icacls")
+    icacls = _pinned_icacls()
     if not icacls:
-        record_acl_failure(path, "icacls not found on PATH")
+        record_acl_failure(
+            path,
+            "icacls.exe not found under %SystemRoot%\\System32 (PATH is not used)",
+        )
         return False
     grant = f"{user}:(OI)(CI)F" if path.is_dir() else f"{user}:F"
     inheritance_stripped = False

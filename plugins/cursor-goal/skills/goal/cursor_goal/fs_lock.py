@@ -71,8 +71,10 @@ def lock_release(handle: IO[bytes]) -> None:
         try:
             handle.seek(0)
             msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-        except OSError:
-            pass
+        except OSError as exc:
+            sys.stderr.write(
+                f"[cursor_goal.fs_lock] debug: Windows unlock failed: {exc}\n"
+            )
     else:
         import fcntl  # isort: skip  # pylint: disable=import-outside-toplevel
 

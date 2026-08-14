@@ -29,6 +29,10 @@ WAKE_LOOP_SH="${REPO_ROOT}/.cursor/skills/goal/scripts/wake_loop.sh"
 if [ -f "${WAKE_LOOP_SH}" ]; then
   SCRIPTS+=("${WAKE_LOOP_SH}")
 fi
+PLUGIN_WAKE_LOOP_SH="${REPO_ROOT}/plugins/cursor-goal/skills/goal/scripts/wake_loop.sh"
+if [ -f "${PLUGIN_WAKE_LOOP_SH}" ]; then
+  SCRIPTS+=("${PLUGIN_WAKE_LOOP_SH}")
+fi
 
 if [ "${#SCRIPTS[@]}" -eq 0 ]; then
   echo "[shellcheck] No bash scripts found under scripts/" >&2

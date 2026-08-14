@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from cursor_goal.logging_config import get_logger
+from cursor_goal.native_path import windows_system_root_file
 from cursor_goal.state import atomic_write_text, data_dir, goal_lock
 from cursor_goal.state import now_iso as _now_iso
 
@@ -230,28 +231,33 @@ def _write_pid_record(pid: int, token: str) -> None:
 def _clear_pid(
     *, only_if_pid: int | None = None, only_if_token: str | None = None
 ) -> None:
-    """Remove wake.pid; optionally only when ownership still matches."""
+    """Remove wake.pid; optionally only when ownership still matches.
+
+    The read-check-unlink sequence holds ``goal_lock`` so a concurrent
+    ``_write_pid_record`` cannot have its new file deleted by a stale clearer.
+    """
     path = wake_pid_path()
-    if only_if_pid is not None or only_if_token is not None:
-        record = _read_pid_record()
-        if record is None:
-            return
-        if only_if_pid is not None and int(record["pid"]) != only_if_pid:
-            logger.debug(
-                "Skipping clear of wake.pid (pid %s != %s)",
-                record["pid"],
-                only_if_pid,
-            )
-            return
-        if only_if_token is not None and str(record.get("token") or "") != (
-            only_if_token
-        ):
-            logger.debug("Skipping clear of wake.pid (token mismatch)")
-            return
-    try:
-        path.unlink(missing_ok=True)
-    except OSError as exc:
-        logger.debug("Could not remove wake pid file: %s", exc)
+    with goal_lock():
+        if only_if_pid is not None or only_if_token is not None:
+            record = _read_pid_record()
+            if record is None:
+                return
+            if only_if_pid is not None and int(record["pid"]) != only_if_pid:
+                logger.debug(
+                    "Skipping clear of wake.pid (pid %s != %s)",
+                    record["pid"],
+                    only_if_pid,
+                )
+                return
+            if only_if_token is not None and str(record.get("token") or "") != (
+                only_if_token
+            ):
+                logger.debug("Skipping clear of wake.pid (token mismatch)")
+                return
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.debug("Could not remove wake pid file: %s", exc)
 
 
 def _cmdline_looks_owned(cmdline: str) -> bool:
@@ -276,14 +282,32 @@ def _cmdline_looks_owned(cmdline: str) -> bool:
     )
 
 
+def _pinned_powershell() -> str | None:
+    """Absolute System32 Windows PowerShell, or None (never PATH)."""
+    pinned = windows_system_root_file(
+        "System32", "WindowsPowerShell", "v1.0", "powershell.exe"
+    )
+    return str(pinned) if pinned is not None else None
+
+
+def _pinned_taskkill() -> str | None:
+    """Absolute System32 taskkill.exe, or None (never PATH)."""
+    pinned = windows_system_root_file("System32", "taskkill.exe")
+    return str(pinned) if pinned is not None else None
+
+
 def _windows_pid_looks_owned(pid: int) -> bool:
     """Best-effort: confirm PID exists and command line mentions wake/goal."""
+    powershell = _pinned_powershell()
+    if powershell is None:
+        logger.debug("Windows ownership probe skipped: pinned powershell.exe missing")
+        return False
     try:
         # Cast to Any so tests can monkeypatch run → None without mypy
         # treating the None guard as unreachable.
-        completed: Any = subprocess.run(  # nosec B603 B607 — fixed powershell args
+        completed: Any = subprocess.run(  # nosec B603 — pinned System32 powershell
             [
-                "powershell",
+                powershell,
                 "-NoProfile",
                 "-Command",
                 (
@@ -378,9 +402,16 @@ def _kill_pid(pid: int, *, token: str | None = None) -> None:
                 pid,
             )
             return
+        taskkill = _pinned_taskkill()
+        if taskkill is None:
+            logger.warning(
+                "Refusing Windows kill of pid=%s: pinned taskkill.exe missing",
+                pid,
+            )
+            return
         try:
-            subprocess.run(  # nosec B603 B607 — taskkill with integer PID only
-                ["taskkill", "/PID", str(int(pid)), "/T", "/F"],
+            subprocess.run(  # nosec B603 — pinned System32 taskkill, integer PID
+                [taskkill, "/PID", str(int(pid)), "/T", "/F"],
                 capture_output=True,
                 text=True,
                 timeout=10,

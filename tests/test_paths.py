@@ -210,3 +210,11 @@ def test_path_str_is_absolute_fallbacks(monkeypatch: pytest.MonkeyPatch) -> None
     p = native_path(__file__)
     assert native_path(p) is p
     assert native_path(str(p)) == p
+
+
+def test_windows_system_root_file_missing_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cursor_goal.native_path import windows_system_root_file
+
+    monkeypatch.delenv("SystemRoot", raising=False)
+    monkeypatch.delenv("SYSTEMROOT", raising=False)
+    assert windows_system_root_file("System32", "cmd.exe") is None

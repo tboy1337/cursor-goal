@@ -509,7 +509,7 @@ def test_harden_windows_acl_cached(
     monkeypatch.setattr(win_acl.os, "name", "nt")
     monkeypatch.setattr(win_acl.subprocess, "run", fake_run)
     monkeypatch.setattr(
-        win_acl.shutil, "which", lambda _n: r"C:\Windows\System32\icacls.exe"
+        win_acl, "_pinned_icacls", lambda: r"C:\Windows\System32\icacls.exe"
     )
     monkeypatch.setenv("USERNAME", "tester")
     monkeypatch.delenv("CURSOR_GOAL_SKIP_ACL", raising=False)
@@ -563,6 +563,8 @@ def test_windows_username_rejects_metacharacters(
     monkeypatch.setattr(
         win_acl_mod.os, "getlogin", lambda: (_ for _ in ()).throw(OSError("no"))
     )
+    monkeypatch.setattr(win_acl_mod, "_windows_logon_name", lambda: None)
+    monkeypatch.setattr(win_acl_mod.sys, "platform", "linux")
     assert win_acl_mod.windows_username() is None
 
 
@@ -638,7 +640,7 @@ def test_harden_windows_acl_strip_then_grant(
     monkeypatch.setattr(win_acl.os, "name", "nt")
     monkeypatch.setattr(win_acl.subprocess, "run", fake_run)
     monkeypatch.setattr(
-        win_acl.shutil, "which", lambda _n: r"C:\Windows\System32\icacls.exe"
+        win_acl, "_pinned_icacls", lambda: r"C:\Windows\System32\icacls.exe"
     )
     monkeypatch.setenv("USERNAME", "tester")
     monkeypatch.delenv("CURSOR_GOAL_SKIP_ACL", raising=False)
@@ -702,7 +704,7 @@ def test_harden_windows_acl_grant_fails_after_strip(
     monkeypatch.setattr(win_acl.os, "name", "nt")
     monkeypatch.setattr(win_acl.subprocess, "run", fake_run)
     monkeypatch.setattr(
-        win_acl.shutil, "which", lambda _n: r"C:\Windows\System32\icacls.exe"
+        win_acl, "_pinned_icacls", lambda: r"C:\Windows\System32\icacls.exe"
     )
     monkeypatch.setenv("USERNAME", "tester")
     monkeypatch.delenv("CURSOR_GOAL_SKIP_ACL", raising=False)
@@ -736,7 +738,7 @@ def test_harden_windows_acl_strip_fails_records_failure(
     monkeypatch.setattr(win_acl.os, "name", "nt")
     monkeypatch.setattr(win_acl.subprocess, "run", fake_run)
     monkeypatch.setattr(
-        win_acl.shutil, "which", lambda _n: r"C:\Windows\System32\icacls.exe"
+        win_acl, "_pinned_icacls", lambda: r"C:\Windows\System32\icacls.exe"
     )
     monkeypatch.setenv("USERNAME", "tester")
     monkeypatch.delenv("CURSOR_GOAL_SKIP_ACL", raising=False)
@@ -841,7 +843,7 @@ def test_harden_acl_oserror_after_strip(
     monkeypatch.setattr(win_acl.os, "name", "nt")
     monkeypatch.setattr(win_acl.subprocess, "run", fake_run)
     monkeypatch.setattr(
-        win_acl.shutil, "which", lambda _n: r"C:\Windows\System32\icacls.exe"
+        win_acl, "_pinned_icacls", lambda: r"C:\Windows\System32\icacls.exe"
     )
     monkeypatch.setenv("USERNAME", "tester")
     monkeypatch.delenv("CURSOR_GOAL_SKIP_ACL", raising=False)
@@ -861,6 +863,7 @@ def test_harden_windows_acl_failures(
     monkeypatch.delenv("CURSOR_GOAL_SKIP_ACL", raising=False)
     monkeypatch.delenv("USERNAME", raising=False)
     monkeypatch.delenv("USER", raising=False)
+    monkeypatch.setattr(win_acl, "_windows_logon_name", lambda: None)
 
     def boom_login() -> str:
         raise OSError("no login")
@@ -872,7 +875,7 @@ def test_harden_windows_acl_failures(
 
     monkeypatch.setenv("USERNAME", "tester")
     monkeypatch.setattr(
-        win_acl.shutil, "which", lambda _n: r"C:\Windows\System32\icacls.exe"
+        win_acl, "_pinned_icacls", lambda: r"C:\Windows\System32\icacls.exe"
     )
 
     def boom_run(*_a: object, **_k: object) -> object:
@@ -907,7 +910,7 @@ def test_harden_windows_acl_missing_icacls(
     monkeypatch.setattr(win_acl.os, "name", "nt")
     monkeypatch.delenv("CURSOR_GOAL_SKIP_ACL", raising=False)
     monkeypatch.setenv("USERNAME", "tester")
-    monkeypatch.setattr(win_acl.shutil, "which", lambda _n: None)
+    monkeypatch.setattr(win_acl, "_pinned_icacls", lambda: None)
     state_mod._HARDENED_PATHS.clear()
     state_mod._ACL_HARDEN_FAILURES.clear()
     state_mod._harden_windows_acl(goal_home)
@@ -1262,7 +1265,7 @@ def test_harden_windows_acl_force_reharden(
     monkeypatch.setattr(acl_mod.os, "name", "nt")
     monkeypatch.setattr(acl_mod, "acl_harden_disabled", lambda: False)
     monkeypatch.setattr(acl_mod, "windows_username", lambda: "testuser")
-    monkeypatch.setattr(acl_mod.shutil, "which", lambda _n: "icacls.exe")
+    monkeypatch.setattr(acl_mod, "_pinned_icacls", lambda: "icacls.exe")
     monkeypatch.setattr(acl_mod.subprocess, "run", fake_run)
     acl_mod.HARDENED_PATHS.clear()
     acl_mod.ACL_HARDEN_FAILURES.clear()
@@ -1477,3 +1480,157 @@ def test_record_agent_nudge_noop_when_unarmed(goal_home: Path) -> None:
     del goal_home
     # No wake.json — should no-op without raising.
     wake_mod.record_agent_nudge()
+
+
+def test_windows_username_prefers_os_logon_over_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(win_acl.sys, "platform", "win32")
+    monkeypatch.setenv("USERNAME", "OtherUser")
+    monkeypatch.setenv("USER", "OtherUser")
+    monkeypatch.setattr(win_acl, "_windows_logon_name", lambda: "RealUser")
+    assert win_acl.windows_username() == "RealUser"
+
+
+def test_windows_logon_name_error_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(win_acl.sys, "platform", "linux")
+    assert win_acl._windows_logon_name() is None
+
+    monkeypatch.setattr(win_acl.sys, "platform", "win32")
+
+    class NoWindll:
+        pass
+
+    monkeypatch.setattr(win_acl, "ctypes", NoWindll())
+    assert win_acl._windows_logon_name() is None
+
+
+def _patch_logon_ctypes(
+    monkeypatch: pytest.MonkeyPatch,
+    get_user_name: object,
+) -> None:
+    """Install a FakeCtypes whose helpers are not bound as instance methods."""
+
+    class FakeWindll:
+        class advapi32:
+            GetUserNameW = get_user_name
+
+    class FakeCtypes:
+        windll = FakeWindll()
+        c_ulong = win_acl.ctypes.c_ulong
+        create_unicode_buffer = staticmethod(win_acl.ctypes.create_unicode_buffer)
+        byref = staticmethod(lambda obj: obj)
+
+    monkeypatch.setattr(win_acl.sys, "platform", "win32")
+    monkeypatch.setattr(win_acl, "ctypes", FakeCtypes())
+
+
+def test_windows_logon_name_getusername_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def boom(_buf: object, _size: object) -> int:
+        raise OSError("access denied")
+
+    _patch_logon_ctypes(monkeypatch, boom)
+    assert win_acl._windows_logon_name() is None
+
+
+def test_windows_logon_name_missing_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(win_acl.sys, "platform", "win32")
+
+    class FakeCtypes:
+        class windll:
+            class advapi32:
+                pass
+
+    monkeypatch.setattr(win_acl, "ctypes", FakeCtypes())
+    assert win_acl._windows_logon_name() is None
+
+
+def test_windows_logon_name_empty_after_strip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fill(buf: object, _size: object) -> int:
+        buf.value = "   "  # type: ignore[attr-defined]
+        return 1
+
+    _patch_logon_ctypes(monkeypatch, fill)
+    assert win_acl._windows_logon_name() is None
+
+
+def test_windows_logon_name_buffer_too_small_then_ok(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"n": 0}
+
+    def get_user_name(buf: object, size: object) -> int:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            size.value = 32  # type: ignore[attr-defined]
+            return 0
+        buf.value = "RetryUser"  # type: ignore[attr-defined]
+        return 1
+
+    _patch_logon_ctypes(monkeypatch, get_user_name)
+    assert win_acl._windows_logon_name() == "RetryUser"
+
+
+def test_windows_logon_name_buffer_retry_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def get_user_name(_buf: object, size: object) -> int:
+        size.value = 32  # type: ignore[attr-defined]
+        return 0
+
+    _patch_logon_ctypes(monkeypatch, get_user_name)
+    assert win_acl._windows_logon_name() is None
+
+
+def test_windows_logon_name_zero_size(monkeypatch: pytest.MonkeyPatch) -> None:
+    def get_user_name(_buf: object, size: object) -> int:
+        size.value = 0  # type: ignore[attr-defined]
+        return 0
+
+    _patch_logon_ctypes(monkeypatch, get_user_name)
+    assert win_acl._windows_logon_name() is None
+
+
+def test_windows_system_root_file_is_file_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import native_path as np_mod
+
+    root = tmp_path / "Win"
+    (root / "System32").mkdir(parents=True)
+    monkeypatch.setenv("SystemRoot", str(root))
+    real_is_file = np_mod.Path.is_file
+
+    def boom(self: Path) -> bool:
+        if self.name == "icacls.exe":
+            raise OSError("stat failed")
+        return real_is_file(self)
+
+    monkeypatch.setattr(np_mod.Path, "is_file", boom)
+    assert np_mod.windows_system_root_file("System32", "icacls.exe") is None
+
+
+def test_windows_system_root_file_requires_existing_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal.native_path import windows_system_root_file
+
+    monkeypatch.delenv("SystemRoot", raising=False)
+    monkeypatch.delenv("SYSTEMROOT", raising=False)
+    assert windows_system_root_file("System32", "icacls.exe") is None
+
+    root = tmp_path / "Win"
+    system32 = root / "System32"
+    system32.mkdir(parents=True)
+    icacls = system32 / "icacls.exe"
+    icacls.write_bytes(b"")
+    monkeypatch.setenv("SystemRoot", str(root))
+    found = windows_system_root_file("System32", "icacls.exe")
+    assert found is not None
+    assert found == icacls
+    assert windows_system_root_file("System32", "missing.exe") is None
+    assert windows_system_root_file() is None

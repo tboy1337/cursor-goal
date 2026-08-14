@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -580,9 +581,11 @@ def cmd_stop(_argv: list[str] | None = None) -> int:
     Dual marketplace hooks use singleflight: the lock holder emits JSON; the
     loser exits silently (no stdout, no last-response write) so Cursor
     cannot overwrite a real followup with ``{}``. A ``generation_id``-keyed
-    dedupe stamp additionally guards *sequential* dual hooks (one hook fully
-    finishes, then the other starts) from re-charging ``turns_used`` or
-    emitting a second followup for the same Cursor turn.
+    dedupe stamp (falling back to a SHA-256 of status/loop_count/event/
+    conversation_id when ``generation_id`` is omitted) additionally guards
+    *sequential* dual hooks (one hook fully finishes, then the other starts)
+    from re-charging ``turns_used`` or emitting a second followup for the
+    same Cursor turn.
 
     Insecure/ACL refuse paths emit ``{}`` (fail-open), distinct from a
     singleflight lock miss.
@@ -655,13 +658,36 @@ def _stop_generation_id(payload_dict: dict[str, Any] | None) -> str:
     return raw_gen.strip() if isinstance(raw_gen, str) else ""
 
 
+def _stop_payload_fallback_key(payload_dict: dict[str, Any]) -> str:
+    """Stable key when Cursor omits ``generation_id`` (sequential dual hooks)."""
+    canonical = {
+        "conversation_id": payload_dict.get("conversation_id"),
+        "hook_event_name": payload_dict.get("hook_event_name"),
+        "loop_count": payload_dict.get("loop_count"),
+        "status": payload_dict.get("status"),
+    }
+    blob = json.dumps(canonical, sort_keys=True, default=str, separators=(",", ":"))
+    digest = hashlib.sha256(blob.encode("utf-8")).hexdigest()
+    return f"payload:{digest}"
+
+
+def _stop_dedupe_key(payload_dict: dict[str, Any] | None) -> str:
+    """Return generation_id, or a payload hash when generation_id is absent."""
+    generation_id = _stop_generation_id(payload_dict)
+    if generation_id:
+        return generation_id
+    if not isinstance(payload_dict, dict):
+        return ""
+    return _stop_payload_fallback_key(payload_dict)
+
+
 def _handle_stop_invocation(payload_dict: dict[str, Any] | None) -> int:
     lock = _try_acquire_singleflight(STOP_SINGLEFLIGHT_NAME)
     if lock is None:
         logger.info("Stop singleflight miss: silent exit (no stdout)")
         return 0
     try:
-        generation_id = _stop_generation_id(payload_dict)
+        generation_id = _stop_dedupe_key(payload_dict)
         cached = _cached_stop_response_for(generation_id) if generation_id else None
         if cached is not None:
             logger.info(

@@ -54,6 +54,9 @@ jobs:
           if [ -f .cursor/skills/goal/scripts/wake_loop.sh ]; then
             shellcheck --severity=warning .cursor/skills/goal/scripts/wake_loop.sh
           fi
+          if [ -f plugins/cursor-goal/skills/goal/scripts/wake_loop.sh ]; then
+            shellcheck --severity=warning plugins/cursor-goal/skills/goal/scripts/wake_loop.sh
+          fi
       - name: Unix install smoke
         if: matrix.python-version == '3.12'
         run: bash scripts/install-smoke.sh
@@ -126,6 +129,8 @@ jobs:
       - name: Wake smoke
         shell: bash
         run: python scripts/wake-smoke.py
+      - name: Mypy
+        run: mypy src/cursor_goal
 
   powershell:
     name: PowerShell scripts (${{ matrix.shell }})

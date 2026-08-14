@@ -33,6 +33,7 @@ trap cleanup EXIT
 
 export HOME="$TMP_HOME"
 export USERPROFILE="$TMP_HOME"
+unset CURSOR_GOAL_DATA CURSOR_GOAL_HOME CURSOR_PLUGIN_ROOT
 
 echo "[install-smoke] HOME=$HOME"
 echo "[install-smoke] Installing..."

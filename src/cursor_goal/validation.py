@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path, PosixPath
 
 from cursor_goal.logging_config import get_logger
+from cursor_goal.path_trust import path_has_symlink_or_reparse
 
 logger = get_logger("cursor_goal.validation")
 
@@ -365,6 +366,21 @@ def run_validation(
         "on",
     }:
         logger.debug("Validation full command (secrets enabled): %r", command)
+
+    if cwd:
+        cwd_path = Path(cwd)
+        if path_has_symlink_or_reparse(cwd_path):
+            logger.warning(
+                "Validation refused: cwd is a symlink/junction/reparse: %s",
+                cwd,
+            )
+            return ValidationResult(
+                exit_code=1,
+                output=(
+                    "[goal-eval] Error: validation cwd must not be a symlink, "
+                    f"junction, or reparse point: {cwd}"
+                ),
+            )
 
     try:
         completed = subprocess.run(

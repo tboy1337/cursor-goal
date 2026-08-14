@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import secrets
+import threading
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
@@ -135,6 +136,9 @@ def atomic_write_text(path: Path, text: str) -> None:
                 pass
         raise
     _chmod_private(path)
+    if os.name == "nt":
+        # Belt-and-suspenders: new files may not inherit a stripped DACL.
+        _harden_windows_acl(path)
 
 
 def goal_path() -> Path:
@@ -226,16 +230,38 @@ def _lock_release(handle: Any) -> None:
     _fs_lock_release(handle)
 
 
+# Same-thread reentry depth for goal_lock(). Cross-process exclusivity is
+# unchanged: only the outermost acquire/release touches the OS lock.
+_lock_nest = threading.local()
+
+
 @contextmanager
 def goal_lock() -> Iterator[None]:
-    """Exclusive cross-process lock for goal.json / eval-signal mutations."""
+    """Exclusive cross-process lock for goal.json / eval-signal mutations.
+
+    Same-thread reentry is a no-op so helpers that already hold the lock
+    (for example ``disarm`` → ``_read_pid_record`` → ``mark_orphan_wake``)
+    cannot deadlock on Windows ``msvcrt.locking``.
+    """
+    depth = getattr(_lock_nest, "depth", 0)
+    if depth > 0:
+        _lock_nest.depth = depth + 1
+        try:
+            yield
+        finally:
+            _lock_nest.depth = depth
+        return
     path = lock_path()
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     _chmod_dir_private(path.parent)
     handle = open(path, "a+b")
     try:
         _lock_acquire(handle)
-        yield
+        _lock_nest.depth = 1
+        try:
+            yield
+        finally:
+            _lock_nest.depth = 0
     finally:
         try:
             _lock_release(handle)

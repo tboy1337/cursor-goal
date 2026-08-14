@@ -636,6 +636,38 @@ def test_cmd_stop_sequential_dual_hooks_dedupe_by_generation_id(
     assert load_goal_json(goal_home)["turns_used"] == 1
 
 
+def test_cmd_stop_sequential_dual_hooks_dedupe_without_generation_id(
+    goal_home: Path,
+) -> None:
+    """Payload-hash fallback still charges turns_used once for sequential dual hooks."""
+    run_cli("manage", "create", "dual hook fallback")
+    payload = {
+        "status": "completed",
+        "loop_count": 0,
+        "hook_event_name": "stop",
+        "conversation_id": "conv-1",
+    }
+    code1, first = _run_stop(payload)
+    code2, second = _run_stop(payload)
+    assert code1 == 0
+    assert code2 == 0
+    assert first == second
+    assert load_goal_json(goal_home)["turns_used"] == 1
+
+
+def test_stop_dedupe_key_prefers_generation_id() -> None:
+    assert (
+        stop_mod._stop_dedupe_key({"generation_id": "  gen-9  ", "status": "completed"})
+        == "gen-9"
+    )
+    empty = stop_mod._stop_dedupe_key(None)
+    assert empty == ""
+    hashed = stop_mod._stop_dedupe_key({"status": "completed", "loop_count": 0})
+    assert hashed.startswith("payload:")
+    again = stop_mod._stop_dedupe_key({"loop_count": 0, "status": "completed"})
+    assert hashed == again
+
+
 def test_cmd_stop_dispatches_subagent_type_payload(goal_home: Path) -> None:
     run_cli("manage", "create", "subagent dispatch")
     code, payload = _run_stop(

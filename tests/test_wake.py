@@ -6,6 +6,8 @@ import io
 import json
 import os
 import subprocess
+import threading
+import time
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -13,6 +15,7 @@ import pytest
 
 import cursor_goal.wake as wake_mod
 import cursor_goal.wake_process as wake_process_mod
+from cursor_goal.state import goal_lock
 from tests.conftest import run_cli
 
 
@@ -21,6 +24,20 @@ def wake_on(goal_home: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
     monkeypatch.setenv("CURSOR_GOAL_WAKE_INTERVAL_S", "5")
     return goal_home
+
+
+def _pin_windows_bins(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub System32 powershell/taskkill so ownership probes are not PATH-based."""
+    monkeypatch.setattr(
+        wake_process_mod,
+        "_pinned_powershell",
+        lambda: r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+    )
+    monkeypatch.setattr(
+        wake_process_mod,
+        "_pinned_taskkill",
+        lambda: r"C:\Windows\System32\taskkill.exe",
+    )
 
 
 def test_wake_disabled_skips_arm(
@@ -442,8 +459,13 @@ def test_kill_pid_dead_and_oserror(
             return Result()
 
         monkeypatch.setattr(wake_process_mod.subprocess, "run", fake_run)
+        monkeypatch.setattr(
+            wake_process_mod,
+            "_pinned_taskkill",
+            lambda: r"C:\Windows\System32\taskkill.exe",
+        )
         wake_mod._kill_pid(4242, token="owned")
-        assert calls and calls[0][0] == "taskkill"
+        assert calls and calls[0][0].lower().endswith("taskkill.exe")
     else:
 
         def boom(_pid: int, _sig: int) -> None:
@@ -916,6 +938,7 @@ def test_windows_ownership_rejects_bare_wake_marker(
         "run",
         lambda *_a, **_k: Result(),
     )
+    _pin_windows_bins(monkeypatch)
     assert wake_process_mod._windows_pid_looks_owned(12345) is False
 
     class Owned:
@@ -1134,6 +1157,7 @@ def test_windows_ownership_probe(
         returncode = 0
 
     monkeypatch.setattr(wake_process_mod.subprocess, "run", lambda *_a, **_k: Res())
+    _pin_windows_bins(monkeypatch)
     assert wake_process_mod._windows_pid_looks_owned(123) is True
 
     class Empty:
@@ -1162,6 +1186,7 @@ def test_kill_pid_token_guards(wake_on: Path, monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(wake_process_mod, "_windows_pid_looks_owned", lambda _p: True)
     monkeypatch.setattr(wake_process_mod.subprocess, "run", lambda *_a, **_k: None)
     monkeypatch.setattr(wake_process_mod.os, "kill", lambda *_a, **_k: None)
+    _pin_windows_bins(monkeypatch)
     wake_mod._kill_pid(777, token="same")
 
 
@@ -1187,6 +1212,7 @@ def test_windows_pid_owned_none_subprocess(
 ) -> None:
     del wake_on
     monkeypatch.setattr(wake_process_mod.subprocess, "run", lambda *_a, **_k: None)
+    _pin_windows_bins(monkeypatch)
     assert wake_process_mod._windows_pid_looks_owned(42) is False
 
 
@@ -1436,6 +1462,11 @@ def test_taskkill_oserror(wake_on: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(wake_process_mod, "_pid_alive", lambda _p: True)
     monkeypatch.setattr(wake_process_mod.os, "name", "nt")
     monkeypatch.setattr(wake_process_mod, "_windows_pid_looks_owned", lambda _p: True)
+    monkeypatch.setattr(
+        wake_process_mod,
+        "_pinned_taskkill",
+        lambda: r"C:\Windows\System32\taskkill.exe",
+    )
 
     def boom(*_a: object, **_k: object) -> None:
         raise OSError("taskkill gone")
@@ -2112,3 +2143,89 @@ def test_pid_looks_owned_delegates_on_windows(
     monkeypatch.setattr(wake_process_mod.os, "name", "nt")
     monkeypatch.setattr(wake_process_mod, "_windows_pid_looks_owned", lambda _pid: True)
     assert wake_process_mod._pid_looks_owned(123) is True
+
+
+def test_clear_pid_skips_record_rewritten_under_lock(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A concurrent rewrite must not be unlinked by a stale only_if clearer."""
+    del monkeypatch
+    wake_process_mod._write_pid_record(1, "old")
+    started = threading.Event()
+    done_rewrite = threading.Event()
+
+    def rewriter() -> None:
+        with goal_lock():
+            started.set()
+            time.sleep(0.15)
+            wake_process_mod._write_pid_record(2, "new")
+        done_rewrite.set()
+
+    thread = threading.Thread(target=rewriter)
+    thread.start()
+    assert started.wait(timeout=5)
+    wake_process_mod._clear_pid(only_if_pid=1, only_if_token="old")
+    assert done_rewrite.wait(timeout=5)
+    thread.join(timeout=5)
+    assert wake_process_mod._read_pid() == 2
+
+
+def test_disarm_tokenless_pid_does_not_lock_timeout(wake_on: Path) -> None:
+    wake_process_mod.wake_pid_path().write_text("12345\n", encoding="utf-8")
+    started = time.monotonic()
+    wake_mod.disarm(kill_loop=False)
+    elapsed = time.monotonic() - started
+    assert elapsed < 5
+    assert not wake_process_mod.wake_pid_path().is_file()
+
+
+def test_windows_ownership_probe_uses_pinned_powershell(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del wake_on
+    captured: list[list[str]] = []
+
+    class Res:
+        stdout = "python run_goal.py wake loop"
+        stderr = ""
+        returncode = 0
+
+    def fake_run(cmd: list[str], **_k: object) -> object:
+        captured.append(list(cmd))
+        return Res()
+
+    pinned = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+    monkeypatch.setattr(wake_process_mod, "_pinned_powershell", lambda: pinned)
+    monkeypatch.setattr(wake_process_mod.subprocess, "run", fake_run)
+    assert wake_process_mod._windows_pid_looks_owned(9) is True
+    assert captured and captured[0][0] == pinned
+
+
+def test_windows_ownership_probe_missing_pin_is_false(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del wake_on
+    calls: list[object] = []
+    monkeypatch.setattr(wake_process_mod, "_pinned_powershell", lambda: None)
+    monkeypatch.setattr(
+        wake_process_mod.subprocess, "run", lambda *_a, **_k: calls.append(1)
+    )
+    assert wake_process_mod._windows_pid_looks_owned(9) is False
+    assert calls == []
+
+
+def test_windows_kill_refuses_missing_taskkill(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del wake_on
+    monkeypatch.setattr(wake_process_mod, "_read_pid_record", lambda: None)
+    monkeypatch.setattr(wake_process_mod, "_pid_alive", lambda _p: True)
+    monkeypatch.setattr(wake_process_mod.os, "name", "nt")
+    monkeypatch.setattr(wake_process_mod, "_windows_pid_looks_owned", lambda _p: True)
+    monkeypatch.setattr(wake_process_mod, "_pinned_taskkill", lambda: None)
+    calls: list[object] = []
+    monkeypatch.setattr(
+        wake_process_mod.subprocess, "run", lambda *_a, **_k: calls.append(1)
+    )
+    wake_mod._kill_pid(4242, token="owned")
+    assert calls == []

@@ -51,3 +51,29 @@ def native_path(value: str | Path) -> Path:
     if isinstance(value, NATIVE_PATH):
         return value
     return NATIVE_PATH(os.path.expanduser(str(value)))
+
+
+def windows_system_root_file(*relative_parts: str) -> Path | None:
+    """Return ``%SystemRoot%\\<parts>`` if that file exists.
+
+    Never falls back to PATH. Returns None when SystemRoot is unset or the
+    pinned file is missing so a PATH plant cannot substitute icacls,
+    taskkill, or powershell.
+    """
+    if not relative_parts:
+        return None
+    system_root = (
+        os.environ.get("SystemRoot") or os.environ.get("SYSTEMROOT") or ""
+    ).strip()
+    if not system_root:
+        return None
+    try:
+        candidate = native_path(system_root).joinpath(*relative_parts)
+    except (TypeError, ValueError, OSError):
+        return None
+    try:
+        if candidate.is_file():
+            return candidate
+    except OSError:
+        return None
+    return None

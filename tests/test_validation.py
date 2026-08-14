@@ -420,3 +420,17 @@ def test_pinned_comspec_fallback_and_oserror(
         }
     )
     assert scrubbed2.get("COMSPEC") == "C:\\ambient\\cmd.exe"
+
+
+def test_run_validation_refuses_symlink_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import validation as val_mod
+
+    monkeypatch.setattr(val_mod, "path_has_symlink_or_reparse", lambda _p: True)
+    result = val_mod.run_validation(
+        f"{sys.executable} -c print(1)",
+        cwd=str(tmp_path),
+    )
+    assert result.exit_code == 1
+    assert "symlink" in result.output.lower() or "reparse" in result.output.lower()

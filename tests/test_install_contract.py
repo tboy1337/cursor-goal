@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -494,3 +495,32 @@ def test_check_version_sync_detects_readme_pin_drift(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="Conflicting README"):
         mod._read_tagged_clone_pin(bad, label="README")
+
+
+def test_plugin_vendored_package_imports() -> None:
+    """Marketplace tree is a runnable copy of src/, not just a sync check."""
+    root = Path(__file__).resolve().parents[1]
+    plugin_parent = root / "plugins" / "cursor-goal" / "skills" / "goal"
+    assert (plugin_parent / "cursor_goal" / "__init__.py").is_file()
+    env = {**os.environ, "PYTHONPATH": str(plugin_parent)}
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; sys.path.insert(0, "
+                + repr(str(plugin_parent))
+                + "); import cursor_goal; from cursor_goal import __version__; "
+                "assert __version__; print(cursor_goal.__file__)"
+            ),
+        ],
+        cwd=str(root),
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr
+    printed = completed.stdout.strip().replace("\\", "/")
+    assert "plugins/cursor-goal/skills/goal/cursor_goal" in printed

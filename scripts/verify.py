@@ -99,6 +99,17 @@ def bash_scripts(root: Path) -> list[Path]:
     wake_loop_sh = root / ".cursor" / "skills" / "goal" / "scripts" / "wake_loop.sh"
     if wake_loop_sh.is_file():
         found.append(wake_loop_sh)
+    plugin_wake = (
+        root
+        / "plugins"
+        / "cursor-goal"
+        / "skills"
+        / "goal"
+        / "scripts"
+        / "wake_loop.sh"
+    )
+    if plugin_wake.is_file():
+        found.append(plugin_wake)
     return sorted(path for path in found if path.is_file())
 
 
