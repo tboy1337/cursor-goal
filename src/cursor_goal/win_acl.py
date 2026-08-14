@@ -38,9 +38,18 @@ def _safe_username(value: str | None) -> str | None:
     return None
 
 
+def _is_win32() -> bool:
+    """True on native Windows.
+
+    A function (not an inline ``sys.platform`` test) so mypy with
+    ``warn_unreachable`` does not treat the opposite platform's body as dead.
+    """
+    return sys.platform == "win32"
+
+
 def _windows_logon_name() -> str | None:
     """Current Windows logon name via GetUserNameW (not spoofable env)."""
-    if sys.platform != "win32":
+    if not _is_win32():
         return None
     windll = getattr(ctypes, "windll", None)
     if windll is None:
@@ -85,7 +94,7 @@ def _warn_env_username_mismatch(os_name: str) -> None:
 
 def _windows_os_identity() -> str | None:
     """OS logon name on real Windows, or None when unavailable / not Windows."""
-    if sys.platform != "win32":
+    if not _is_win32():
         return None
     os_name = _windows_logon_name()
     if os_name is not None:

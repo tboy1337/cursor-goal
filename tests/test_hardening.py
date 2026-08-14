@@ -1494,9 +1494,12 @@ def test_windows_username_prefers_os_logon_over_env(
 
 def test_windows_logon_name_error_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(win_acl.sys, "platform", "linux")
+    assert win_acl._is_win32() is False
     assert win_acl._windows_logon_name() is None
+    assert win_acl._windows_os_identity() is None
 
     monkeypatch.setattr(win_acl.sys, "platform", "win32")
+    assert win_acl._is_win32() is True
 
     class NoWindll:
         pass
