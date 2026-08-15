@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
+import cursor_goal.wake as wake_mod
 from tests.conftest import load_goal_json, run_cli
 
 
@@ -776,6 +778,37 @@ def test_manage_done_yes_without_audit_rejected(goal_home: Path) -> None:
     assert data["status"] == "pursuing"
 
 
+def test_manage_done_rejected_when_tree_changed_since_clear(
+    goal_home: Path, tmp_path: Path
+) -> None:
+    work = tmp_path / "tree"
+    work.mkdir()
+    subprocess.run(
+        ["git", "init"],
+        cwd=work,
+        check=True,
+        capture_output=True,
+        timeout=30,
+    )
+    (work / "keep.txt").write_text("a\n", encoding="utf-8")
+    run_cli(
+        "manage",
+        "create",
+        "test condition",
+        "--workdir",
+        str(work),
+    )
+    run_cli("eval", "parse-result", "YES: ready")
+    assert run_cli("eval", "parse-audit", "CLEAR: nothing in-scope remains")[0] == 0
+    (work / "extra.txt").write_text("drift\n", encoding="utf-8")
+    code, _out, err = run_cli("manage", "done")
+    assert code == 1
+    assert "REJECTED" in err
+    assert "tree changed" in err.lower() or "spawn goal-auditor" in err.lower()
+    data = load_goal_json(goal_home)
+    assert data["status"] == "pursuing"
+
+
 def test_manage_done_force(goal_home: Path) -> None:
     run_cli("manage", "create", "test condition")
     code, _out, _err = run_cli("manage", "done", "--force")
@@ -1022,7 +1055,7 @@ def test_blocking_checklist_on_create(
         line for line in out.splitlines() if line.startswith("GOAL_WAKE_REQUIRED ")
     )
     payload = json.loads(line[len("GOAL_WAKE_REQUIRED ") :])
-    assert payload["pattern"] == "^AGENT_GOAL_WAKE"
+    assert payload["pattern"] == wake_mod.NOTIFY_PATTERN
     assert payload["notify_pattern"] == payload["pattern"]
     assert "wake" in payload["command"] and "loop" in payload["command"]
     assert "interval_s" in payload

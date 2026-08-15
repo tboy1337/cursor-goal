@@ -18,7 +18,7 @@ py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" manage creat
 
 Expect `Wake budget: 50` (default `budget * 10`) and schema/status fields via `manage status`.
 
-4. Expect create output to mention wake armed. Start the wake loop in a **background** Cursor Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE`:
+4. Expect create output to mention wake armed. Start the wake loop in a **background** Cursor Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor`:
 
 ```powershell
 py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" wake loop
@@ -51,7 +51,7 @@ Wake tick check:
 ```powershell
 py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" manage create "wake smoke" --budget 3
 py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" wake tick
-# Expect: AGENT_GOAL_WAKE {"prompt":"[GOAL] ..."}
+# Expect: AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor {"prompt":"[GOAL] ..."}
 py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" manage clear
 ```
 

@@ -48,8 +48,8 @@ Parent-side spawn fixes (windowsHide, wait-for-close) apply to **Cursor’s** pr
 ### Wake watchdog (tertiary, race-immune)
 
 - `wake arm` / `wake loop` / `wake tick` / `wake disarm`
-- Background loop emits `AGENT_GOAL_WAKE {…}` while the goal is `pursuing`
-- Agent arms Shell with `notify_on_output` on `^AGENT_GOAL_WAKE` — **no hook stdout required**
+- Background loop emits `AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor {…}` while the goal is `pursuing`
+- Agent arms Shell with `notify_on_output` on `^AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor` — **no hook stdout required**
 - Disable with `CURSOR_GOAL_WAKE=0`
 
 ### Primary protocol

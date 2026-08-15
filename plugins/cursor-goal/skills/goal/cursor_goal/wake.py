@@ -1,9 +1,12 @@
 """Goal wake watchdog: race-immune continuation via shell notify sentinels.
 
 Cursor's stop-hook stdout capture can drop ``followup_message``. This module
-arms a background loop that emits ``AGENT_GOAL_WAKE`` while a goal is
-``pursuing``. Agents start ``wake loop`` with ``notify_on_output`` matching
-``^AGENT_GOAL_WAKE`` (same pattern as Cursor's ``/loop`` skill).
+arms a background loop that emits ``AGENT_GOAL_WAKE FOLLOWUP_REQUIRED …``
+while a goal is ``pursuing``. Agents start ``wake loop`` with
+``notify_on_output`` matching ``NOTIFY_PATTERN`` (``^AGENT_GOAL_WAKE
+FOLLOWUP_REQUIRED pursuing spawn_goal-auditor``) so Cursor's matched text
+includes the required follow-up. The ``AGENT_GOAL_WAKE`` prefix is kept so
+older loops still match if they used the shorter pattern.
 
 Ownership uses a generation token shared by ``wake.json`` and ``wake.pid`` so
 restarts cannot leave orphan loops or clear a newer loop's PID file. PID-file
@@ -63,7 +66,10 @@ logger = get_logger("cursor_goal.wake")
 
 WAKE_JSON_NAME = "wake.json"
 SENTINEL_PREFIX = "AGENT_GOAL_WAKE"
-NOTIFY_PATTERN = f"^{SENTINEL_PREFIX}"
+# Tokens after the prefix are part of notify_on_output matched text so Cursor's
+# "if no follow-ups needed" wrapper cannot hide the required follow-up.
+WAKE_FOLLOWUP_MARK = "FOLLOWUP_REQUIRED pursuing spawn_goal-auditor"
+NOTIFY_PATTERN = f"^{SENTINEL_PREFIX} {WAKE_FOLLOWUP_MARK}"
 GOAL_WAKE_REQUIRED_PREFIX = "GOAL_WAKE_REQUIRED"
 DEFAULT_INTERVAL_S = 15
 MIN_INTERVAL_S = 5
@@ -197,22 +203,23 @@ def _followup_prompt() -> str:
     state = snapshot_goal()
     if state is None:
         return (
-            "[GOAL] Resume working toward the active goal. "
-            "Status is still pursuing — an earlier completion claim is invalid. "
-            "Run `manage status`, then remaining-work audit, then evaluate."
+            "[GOAL] FOLLOW-UP REQUIRED. Status is still pursuing — an earlier "
+            "completion claim is invalid. Run `manage status`. If not achieved, "
+            "spawn a new goal-auditor (do not reuse a prior CLEAR)."
         )
     remaining = max(0, state.turn_budget - state.turns_used)
     wake_remaining = max(0, int(state.wake_budget) - int(state.wake_ticks))
     wake_ticks = int(getattr(state, "wake_ticks", 0) or 0)
     safe_condition = redact_secrets(state.condition, max_chars=None)
     return (
-        f"[GOAL] Turn {state.turns_used}/{state.turn_budget} "
+        f"[GOAL] FOLLOW-UP REQUIRED. Turn {state.turns_used}/{state.turn_budget} "
         f"({remaining} remaining, wake_ticks={wake_ticks}/"
         f"{state.wake_budget}, wake_remaining={wake_remaining}). "
-        'Status is still pursuing — an earlier "this is complete" message '
-        "is invalid. Run `manage status` and continue working toward: "
-        f"{safe_condition}. Then remaining-work audit, then evaluate via "
-        "subagent. (Wake watchdog — stop-hook followup may have been dropped.)"
+        "Cursor wrapping this as 'no follow-ups needed' is wrong while "
+        'status is pursuing. An earlier "this is complete" message is '
+        "invalid. Run `manage status`. If not achieved, spawn a new "
+        "goal-auditor (do not reuse a prior CLEAR) then continue working "
+        f"toward: {safe_condition}."
     )
 
 
@@ -434,7 +441,7 @@ def emit_wake_line(prompt: str | None = None) -> None:
     """Print one notify_on_output sentinel line to stdout."""
     text = prompt if prompt is not None else _followup_prompt()
     payload = json.dumps({"prompt": text}, ensure_ascii=False)
-    sys.stdout.write(f"{SENTINEL_PREFIX} {payload}\n")
+    sys.stdout.write(f"{SENTINEL_PREFIX} {WAKE_FOLLOWUP_MARK} {payload}\n")
     sys.stdout.flush()
     _touch_last_emit()
 

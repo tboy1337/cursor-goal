@@ -61,10 +61,10 @@ On upgrade, a previous skill tree is copied to `~/.cursor/skills/goal.bak.<UTC>`
 
 ### Install from a tagged release
 
-Package version **4.2.0** pins the clone branch below. Use it when tag `v4.2.0` exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If `git clone --branch` fails, clone `main` with the Quick install steps above ([release.md](release.md)).
+Package version **4.3.0** pins the clone branch below. Use it when tag `v4.3.0` exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If `git clone --branch` fails, clone `main` with the Quick install steps above ([release.md](release.md)).
 
 ```bash
-git clone --branch v4.2.0 https://github.com/tboy1337/cursor-goal.git
+git clone --branch v4.3.0 https://github.com/tboy1337/cursor-goal.git
 cd cursor-goal
 ./scripts/install-goal.sh   # or install-goal.ps1 on Windows
 ```
@@ -151,7 +151,7 @@ License remains **AGPL-3.0-only** for both distribution paths.
 
 | Platform | Install notes |
 |----------|----------------|
-| Cursor IDE (Unix/macOS) | Supported — harness unit-tested; `stop`/`subagentStop` hooks work but Cursor may still drop `followup_message` stdout (upstream race). **Recommended:** arm `wake loop` with `notify_on_output` matching `^AGENT_GOAL_WAKE` while pursuing as a best-effort supplement (see [known-limitations.md](known-limitations.md)). |
+| Cursor IDE (Unix/macOS) | Supported — harness unit-tested; `stop`/`subagentStop` hooks work but Cursor may still drop `followup_message` stdout (upstream race). **Recommended:** arm `wake loop` with `notify_on_output` matching `^AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor` while pursuing as a best-effort supplement (see [known-limitations.md](known-limitations.md)). |
 | Cursor IDE (Windows) | Use `install-goal.ps1` only. Writes absolute-baked `stop_hook.cmd` and `wake_loop.cmd`, plus a ~250ms stdout drain delay to mitigate Cursor’s capture race. Always writes redacted `last-stop-response.json`. Prefer in-turn evaluation and the documented hooks; arming `wake loop` with `notify_on_output` is a recommended, best-effort supplement (see [cursor-windows-stop-hook-race.md](cursor-windows-stop-hook-race.md)). Re-run the installer after moving/upgrading Python. `install-goal.sh` from Git Bash is refused. |
 | Teams marketplace | Import this repo; dual stop entries (`stop_hook.cmd` + `python3`) with singleflight. Set absolute `CURSOR_GOAL_PYTHON` on Windows, or prefer classic `install-goal.ps1` for individuals. Do not stack with classic hooks. |
 | WSL | Use `./scripts/install-goal.sh` inside WSL with a WSL home for WSL Cursor. Do not point `$HOME` at `/mnt/c/...` for native Windows Cursor — use `install-goal.ps1` instead. |

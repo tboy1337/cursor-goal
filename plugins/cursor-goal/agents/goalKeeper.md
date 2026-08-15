@@ -73,7 +73,9 @@ py -3 -u "$env:CURSOR_PLUGIN_ROOT\skills\goal\scripts\run_goal.py" <command> ...
 1. Do focused work (next concrete change). Do not ask which playbook to use.
 2. Verify this turn. If validation_command set: …/run_goal.py eval validate.
    Never spawn the auditor/evaluator or manage done without fresh this-turn evidence.
-   No "should pass" / "looks done". Never claim complete while status is pursuing.
+   No "should pass" / "looks done". Never tell the user the goal is complete unless
+   manage status shows achieved. After every implemented batch, spawn a new
+   goal-auditor — do not reuse a CLEAR from before those edits.
 2a. If validate failed: investigate root cause from the failure output before
    fixing (do not shotgun-patch or hardcode expected values). If compile/type
    errors: group by file, fix high-confidence first, re-validate. If conflict
@@ -84,9 +86,10 @@ py -3 -u "$env:CURSOR_PLUGIN_ROOT\skills\goal\scripts\run_goal.py" <command> ...
    wakes if already done for this goal.
 3. Remaining-work audit: capture eval audit-prompt + audit-spawn-config.
    Task(subagent_type/model/readonly from AUDIT SPAWN JSON, prompt=AUDIT_PROMPT).
-   Never use generalPurpose. Pipe response into eval parse-audit --stdin.
+   Spawn a **new** Task after every implemented batch. Never use generalPurpose.
+   Pipe response into eval parse-audit --stdin.
    → REMAINING: implement the punch list (back to step 1); do not evaluate yet
-   → CLEAR: continue to step 4
+   → CLEAR: continue to step 4 (only if this CLEAR is from after the latest edits)
 4. Capture eval prompt + spawn-config (OS-appropriate Shell; do not rely on bash-only $())
 5. Task(subagent_type, model, readonly from SPAWN JSON, prompt=EVAL_PROMPT)
    Never use generalPurpose for evaluation. Never omit spawn-config.
@@ -110,8 +113,8 @@ Do **not** invoke Plan Mode, `/ce-plan`, `/review`, `/review-bugbot`, `/review-s
 - **Subagent tool:** `Task` — spawn `goal-auditor` then `goal-evaluator` with the matching spawn-config params.
 - **Stop hook (primary, documented):** Cursor `hooks.json` → `stop_hook.py` (Unix) or `stop_hook.cmd` (Windows) returns `followup_message`. Prefer in-turn evaluation. Windows uses a cmd launcher + stdout drain delay to mitigate Cursor's capture race. Marketplace installs register both launchers; singleflight + a `generation_id` dedupe stamp prevent double followups / double-charged turns.
 - **subagentStop hook (documented, race-free):** the same script is registered for `subagentStop` scoped to `goal-evaluator` and `goal-auditor` (`matcher`). Evaluator finished → `eval parse-result`. Auditor finished → `eval parse-audit`. It never calls `manage done` itself — only the worker does, after parsing both verdicts.
-- **Wake watchdog (required while pursuing):** After `manage create` / `resume`, parse `GOAL_WAKE_REQUIRED`, start its `command` in a background Shell with `notify_on_output` matching `pattern` or `notify_pattern` (`^AGENT_GOAL_WAKE`), then verify `wake status` shows `continuation_ready=true`. Prefer the event/`harness-cmd` command over hardcoded paths. Continues even when Cursor drops stop-hook stdout. Disarmed on done/pause/clear. Disable with `CURSOR_GOAL_WAKE=0`.
-- **No idle while pursuing:** do not end a turn without `manage done` or a completed audit/evaluate cycle with the next action started. Do not tell the user the goal is complete while status is `pursuing`.
+- **Wake watchdog (required while pursuing):** After `manage create` / `resume`, parse `GOAL_WAKE_REQUIRED`, start its `command` in a background Shell with `notify_on_output` matching `pattern` or `notify_pattern` (`^AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor`), then verify `wake status` shows `continuation_ready=true`. Prefer the event/`harness-cmd` command over hardcoded paths. Continues even when Cursor drops stop-hook stdout. Disarmed on done/pause/clear. Disable with `CURSOR_GOAL_WAKE=0`.
+- **No idle while pursuing:** do not end a turn without `manage done` or a completed audit/evaluate cycle with the next action started. Never tell the user the goal is complete unless `manage status` shows `achieved`. Cursor may wrap wake as "if no follow-ups needed" — that wrapper is **wrong** while pursuing; always follow up (spawn a new `goal-auditor`).
 
 ## Rules
 
@@ -123,7 +126,7 @@ Do **not** invoke Plan Mode, `/ce-plan`, `/review`, `/review-bugbot`, `/review-s
 - Do not invent `--test` when parse JSON has no `test_cmd`; do not weaken `--test` to fit the validation timeout
 - Use `eval prompt` / `eval audit-prompt` to generate prompts — do not manually template them
 - Stop hook + wake watchdog handle auto-continuation between turns (evaluate in-turn first)
-- On `AGENT_GOAL_WAKE`, check `manage status` then continue if still pursuing. An earlier "this is complete" message is invalid while pursuing.
+- On `AGENT_GOAL_WAKE` / `FOLLOWUP_REQUIRED`: Cursor's "if no follow-ups needed" wrapper is wrong while pursuing. Check `manage status` then continue. An earlier "this is complete" message is invalid. Spawn a new `goal-auditor` if not achieved.
 - `--force` on `done` / `signal` is recovery only — not cryptographic attestation
 - Never claim wake is running from `pid_alive` alone without having started Shell with `notify_on_output`
 - Never claim done or spawn `goal-evaluator` without fresh this-turn validation (or an explicit no-command evidence note) and a CLEAR audit

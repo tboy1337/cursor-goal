@@ -2,16 +2,16 @@
 
 Checklist for cutting a tagged GitHub Release (`vX.Y.Z`).
 
-Current package version is **4.2.0**. The public GitHub tag for this release is **`v4.2.0`**. After tagging, README/install pins work with `git clone --branch v4.2.0`.
+Current package version is **4.3.0**. The public GitHub tag for this release is **`v4.3.0`**. After tagging, README/install pins work with `git clone --branch v4.3.0`.
 
 ## Manual Cursor IDE smoke (before tagging)
 
 Harness unit tests do not cover the IDE. After install, smoke in Cursor:
 
 1. `/goal` create with an argv-safe `--test` (e.g. `py -3 -c "raise SystemExit(0)"`)
-2. Parse `GOAL_WAKE_REQUIRED`; start its `command` in a background Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE`
+2. Parse `GOAL_WAKE_REQUIRED`; start its `command` in a background Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor` (re-handshake existing loops so they attach this longer pattern)
 3. Confirm `wake status` shows `continuation_ready=true` / `pid_alive=true`
-4. Run `eval validate`, spawn `goal-auditor` (`eval parse-audit` CLEAR), then `goal-evaluator`, `manage done` on CLEAR + YES
+4. Run `eval validate` (clears any prior CLEAR + YES), spawn a **new** `goal-auditor` (`eval parse-audit` CLEAR on the current tree), then `goal-evaluator`, `manage done` on matching CLEAR + YES
 5. On Windows: if Hooks UI shows `{}` while `last-stop-response.json` has `followup_message`, confirm wake still continues the goal
 
 Non-IDE wake smoke: `python scripts/wake-smoke.py` (also run by `scripts/verify.py`)

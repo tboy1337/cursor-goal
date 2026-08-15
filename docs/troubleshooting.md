@@ -18,7 +18,7 @@ Stall checklist (Hooks `{}`, no continuation): work the steps below before filin
 
 1. Check `~/.cursor-goal/data/last-stop-response.json`. If it contains `followup_message` while Hooks shows `{}`, you hit the [Cursor stdout race](cursor-windows-stop-hook-race.md).
 2. Ensure wake is armed and the loop is alive (`manage status` / `manage doctor`). Doctor **FAIL**s while `pursuing` if wake is enabled and `continuation_ready=false` (missing or dead loop). Doctor skips that gate when `CURSOR_GOAL_WAKE=0`.
-3. Prefer the `command` from create/resume's `GOAL_WAKE_REQUIRED` line (or `wake status` JSON). Start background Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE`:
+3. Prefer the `command` from create/resume's `GOAL_WAKE_REQUIRED` line (or `wake status` JSON). Start background Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor`:
 
 ```text
 # Unix

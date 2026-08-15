@@ -15,6 +15,8 @@ from cursor_goal.state import (
     GoalLockTimeoutError,
     GoalState,
     assert_workdir_usable,
+    audit_signal_tree_stale,
+    clear_protocol_signals,
     data_dir,
     has_audit_signal,
     has_eval_signal,
@@ -141,6 +143,13 @@ def _build_audit_section(state: GoalState) -> str:
         logger.info("eval prompt remaining-work audit CLEAR last=%s", last)
         return "Remaining-work audit: CLEAR this cycle.\n" f"Last audit verdict: {last}"
     last = state.last_audit_verdict or "none"
+    if audit_signal_tree_stale():
+        logger.info("eval prompt remaining-work audit stale last=%s", last)
+        return (
+            "Remaining-work audit: not CLEAR this cycle "
+            f"(tree changed since CLEAR; last_audit_verdict={last}).\n"
+            f"{MISSING_AUDIT_CLEAR}"
+        )
     logger.info("eval prompt remaining-work audit not CLEAR last=%s", last)
     return (
         f"Remaining-work audit: not CLEAR this cycle "
@@ -264,11 +273,13 @@ def cmd_audit_prompt(_argv: list[str]) -> int:
         return 1
 
     prompt = (
-        "You are a remaining-work auditor (fresh chat), not the worker and "
+        "You are a remaining-work auditor (new chat), not the worker and "
         "not the YES/NO evaluator. Inspect the workspace as a new plan-mode "
-        "session would against the original goal condition. Do not trust any "
-        "worker claim that this is done. Use readonly tools to inspect the "
-        "repository. Do not edit files.\n"
+        "session would against the original goal condition. Do not trust "
+        "CHANGELOG, commit messages, or any worker claim that this is done. "
+        "Uncommitted work is not proof of done. Use readonly tools (grep, "
+        "read, search) to inspect the repository. Do not edit files. Do not "
+        "invoke Plan Mode or ce-plan.\n"
         "\n"
         f"Goal condition: {redact_secrets(state.condition, max_chars=None)}\n"
         "\n"
@@ -280,11 +291,16 @@ def cmd_audit_prompt(_argv: list[str]) -> int:
         "3. On REMAINING, list concrete file + issue items; no style nits, "
         "extra features, or a second quality bar the condition does not ask "
         "for\n"
-        "4. If the condition is equivalent to a test/validation command and "
-        "that command meets it, answer CLEAR\n"
+        "4. If the condition is equivalent to a test/validation command "
+        "(tests pass) and that command meets it, answer CLEAR — do not "
+        "invent extra hardening\n"
         "5. Validation passing is not enough when the condition is broader "
         "than the test command\n"
         "6. There is no work summary — inspect the tree yourself\n"
+        "7. Broad conditions (production audit, ready for the real world): "
+        "map the tree; compare schema/docs vs runtime; read CI and "
+        "installers; search fail-open / swallowed errors / path confinement. "
+        "A shallow glance is not CLEAR\n"
     )
     _emit_prompt(prompt)
     return 0
@@ -390,6 +406,14 @@ def cmd_validate(_argv: list[str]) -> int:
             "[goal-eval] Error: Failed to persist validation output.", file=sys.stderr
         )
         return 1
+
+    # More work / a new validation run invalidates prior CLEAR + YES.
+    try:
+        clear_protocol_signals()
+    except GoalLockTimeoutError as exc:
+        print(f"[goal-eval] Error: {exc}", file=sys.stderr)
+        return 1
+    logger.info("Cleared CLEAR and YES signals after validation persist")
 
     print(f"[goal-eval] Validation exit={result.exit_code}")
     if result.timed_out:

@@ -360,12 +360,16 @@ def test_plugin_manifests_and_hooks_contract() -> None:
     assert "Verify this turn" in keeper
     skill = (plugin / "skills" / "goal" / "SKILL.md").read_text(encoding="utf-8")
     assert "Iron law" in skill
+    assert "FOLLOWUP_REQUIRED" in skill
     evaluator = (plugin / "agents" / "goal-evaluator.md").read_text(encoding="utf-8")
     assert "MISSING EVIDENCE" in evaluator
     assert "strong evidence" not in evaluator.lower()
     auditor = (plugin / "agents" / "goal-auditor.md").read_text(encoding="utf-8")
     assert "CLEAR:" in auditor
     assert "REMAINING:" in auditor
+    assert "CHANGELOG" in auditor
+    assert "Map the tree" in auditor
+    assert "tests pass" in auditor.lower()
     assert (plugin / "skills" / "goal" / "scripts" / "stop_hook.cmd").is_file()
     assert (plugin / "skills" / "goal" / "scripts" / "wake_loop.sh").is_file()
     stop_cmd = (plugin / "skills" / "goal" / "scripts" / "stop_hook.cmd").read_text(
@@ -399,6 +403,7 @@ def test_classic_install_ps1_cgp_metachar_parity() -> None:
     assert "failure_reason" in ps1
     assert "ACL harden failed" in ps1
     assert "Restart Cursor" in ps1
+    assert "FOLLOWUP_REQUIRED" in ps1
     assert r"scripts\.tmp" in ps1
     assert "PackageRoot" in ps1
     assert "skill tree not modified" in ps1

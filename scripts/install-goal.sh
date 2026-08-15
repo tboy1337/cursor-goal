@@ -299,7 +299,7 @@ print_summary() {
   echo "Next steps:"
   echo "  1) Restart Cursor (or reload hooks) so hooks.json takes effect"
   echo "  2) In Cursor: /goal <verifiable condition>"
-  echo "  3) Start wake loop with notify_on_output matching ^AGENT_GOAL_WAKE"
+  echo "  3) Start wake loop with notify_on_output matching ^AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor"
   echo "  4) Confirm wake status shows pid_alive=true / continuation_ready=true before other work"
   echo "  5) If Hooks UI shows {} but last-stop-response.json has followup_message, rely on wake"
   echo ""

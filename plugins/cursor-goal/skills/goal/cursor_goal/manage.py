@@ -637,6 +637,19 @@ def cmd_done(argv: list[str]) -> int:
         )
         print("[goal] Then retry: cursor-goal manage done", file=sys.stderr)
         return 1
+    if status == "rejected_audit_stale":
+        print(
+            "[goal] REJECTED: Working tree changed since CLEAR remaining-work "
+            "audit. Spawn goal-auditor again.",
+            file=sys.stderr,
+        )
+        print(
+            "[goal] Run: cursor-goal eval parse-audit --stdin "
+            "after spawning a new goal-auditor on the current tree.",
+            file=sys.stderr,
+        )
+        print("[goal] Then retry: cursor-goal manage done", file=sys.stderr)
+        return 1
     if status == "forced":
         print(
             "[goal] --force flag set, proceeding anyway "

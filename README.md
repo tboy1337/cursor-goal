@@ -21,7 +21,7 @@ Autonomous `/goal` loop for Cursor IDE: persist an objective, work across turns,
 1. Clone and install (`scripts/install-goal.sh` / `scripts/install-goal.ps1`), then **restart Cursor**.
 2. `manage doctor` — fix any FAIL lines.
 3. Create a demo goal (argv-safe `--test`).
-4. Start the `GOAL_WAKE_REQUIRED` command in a background Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE`.
+4. Start the `GOAL_WAKE_REQUIRED` command in a background Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor`.
 5. Confirm `wake status` → `continuation_ready=true`, then work until remaining-work audit CLEAR and evaluator YES → `manage done`.
 
 Wake is armed by default while pursuing and recommended as a best-effort supplement, but `eval` commands only **warn** (not refuse) when the loop isn't confirmed alive — see [worked example](#worked-example) and [First run](#first-run-wake-handshake).
@@ -34,7 +34,7 @@ Every `/goal` uses the same automatic playbook — nothing extra to set:
 2. Run `eval validate` **this turn** (or gather explicit evidence if no `--test` was given). Never evaluate or mark done without that fresh evidence. Never invent or weaken `--test` to fit a timeout.
 3. If validation fails: investigate the root cause from the failure output, then fix (group compile/type errors, resolve merge conflicts, split independent failures across parallel workers). Re-validate. Do not shotgun-patch.
 4. If validation passed and there is a git diff: once before the first YES attempt, strip AI slop without changing behavior, then re-validate.
-5. Spawn the readonly `goal-auditor` (original condition, no work summary). REMAINING → implement that list and return to step 2. CLEAR → spawn `goal-evaluator`. YES → `manage done`. NO → keep working.
+5. Spawn a **new** readonly `goal-auditor` (original condition, no work summary) after every implemented batch. Never evaluate or `manage done` on a CLEAR recorded before those edits. REMAINING → implement that list and return to step 2. CLEAR whose tree fingerprint still matches → spawn `goal-evaluator`. YES → `manage done`. NO → keep working.
 
 Do **not** invoke Plan Mode, `ce-plan`, Bugbot, `/review`, or thermo-nuclear review inside `/goal` (they wait on the user). The remaining-work auditor is the unattended equivalent of a fresh plan-mode chat, scoped to the original condition. Never claim complete in chat while `manage status` is `pursuing`.
 
@@ -52,7 +52,7 @@ Three supported paths:
 | Path | Who | How |
 |------|-----|-----|
 | **Clone + installer** | Individuals | Clone `main` (or a GitHub Release source archive) → `scripts/install-goal.sh` / `scripts/install-goal.ps1` |
-| **Tagged release** | Individuals | `git clone --branch v4.2.0 …` then installer (see [docs/install.md](docs/install.md)). |
+| **Tagged release** | Individuals | `git clone --branch v4.3.0 …` then installer (see [docs/install.md](docs/install.md)). |
 | **Teams marketplace** | Teams/Enterprise | Import this repo in Cursor Dashboard → Plugins (see `.cursor-plugin/marketplace.json`) |
 
 **Agent install (explicit steps):**
@@ -105,7 +105,7 @@ Uninstall: `./scripts/uninstall-goal.sh` or `.\scripts\uninstall-goal.ps1` (add 
 4. **Start the wake loop before doing other work** (recommended, best-effort supplement for continuation when Cursor drops `stop`/`subagentStop` hook stdout):
    - Find the create output line starting with `GOAL_WAKE_REQUIRED `.
    - Parse the JSON after that prefix; copy the `command` field.
-   - Start that command in a **background** Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE` (same as the JSON `pattern` / `notify_pattern`).
+   - Start that command in a **background** Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor` (same as the JSON `pattern` / `notify_pattern`). Existing wake Shells from older installs need a new create/resume handshake to attach this longer pattern.
    - Confirm: `wake status` shows `continuation_ready=true` (and usually `pid_alive=true`). `manage status` / `manage doctor` still hard-fail while pursuing without it; `eval validate`/`prompt`/`spawn-config` only warn by default (see [known limitations](docs/known-limitations.md)).
 5. Work toward the condition; on remaining-work audit CLEAR and evaluator YES run `manage done`. If Hooks UI shows `{}`, rely on the `subagentStop` hook and wake — see [known limitations](docs/known-limitations.md).
 
@@ -131,7 +131,7 @@ $RUN manage create "a file named ok.txt exists" \
 
 # 2. Start the wake loop in a background Shell (recommended; copy the `command`
 #    from the GOAL_WAKE_REQUIRED line create just printed) with notify_on_output
-#    matching ^AGENT_GOAL_WAKE, then confirm it is alive:
+#    matching ^AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor, then confirm it is alive:
 $RUN wake status
 # → {"armed": true, "pid_alive": true, "continuation_ready": true, ...}
 
@@ -165,7 +165,7 @@ $RUN manage done
 # → [goal] Goal achieved in N turns: a file named ok.txt exists
 ```
 
-If the auditor returns REMAINING, `eval parse-audit` exits 1 — implement that list and audit again; do not spawn the evaluator yet. If the evaluator returns NO, `eval parse-result` exits 1 with the reason on stderr — keep working and evaluate again; do not call `manage done`.
+If the auditor returns REMAINING, `eval parse-audit` exits 1 — implement that list and spawn a **new** auditor; do not spawn the evaluator yet. If the working tree changed after CLEAR, `manage done` rejects until you audit again. If the evaluator returns NO, `eval parse-result` exits 1 with the reason on stderr — keep working and evaluate again; do not call `manage done`.
 
 Verify (Unix / macOS / WSL):
 

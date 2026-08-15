@@ -330,6 +330,21 @@ def test_eval_validate_persists_output(goal_home: Path) -> None:
     assert "Exit code: 0" in prompt
 
 
+def test_eval_validate_clears_clear_and_yes(goal_home: Path) -> None:
+    cmd = f'{sys.executable} -c "print(1)"'
+    run_cli("manage", "create", "g", "--test", cmd)
+    assert run_cli("eval", "parse-result", "YES: ready")[0] == 0
+    assert run_cli("eval", "parse-audit", "CLEAR: nothing remains")[0] == 0
+    assert (goal_home / "goal-eval-done").is_file()
+    assert (goal_home / "goal-audit-clear").is_file()
+    assert run_cli("eval", "validate")[0] == 0
+    assert not (goal_home / "goal-eval-done").exists()
+    assert not (goal_home / "goal-audit-clear").exists()
+    _code, prompt, _err = run_cli("eval", "prompt")
+    assert "Remaining-work audit: not CLEAR" in prompt
+    assert MISSING_AUDIT_CLEAR in prompt
+
+
 def test_eval_validate_requires_command(goal_home: Path) -> None:
     run_cli("manage", "create", "g")
     code, _out, err = run_cli("eval", "validate")
@@ -562,6 +577,33 @@ def test_eval_prompt_shows_clear_audit(goal_home: Path) -> None:
     assert MISSING_AUDIT_CLEAR not in out
 
 
+def test_eval_prompt_stale_audit_when_fingerprint_drifts(goal_home: Path) -> None:
+    run_cli("manage", "create", "production audit")
+    assert run_cli("eval", "parse-audit", "CLEAR: nothing remains")[0] == 0
+    flag = goal_home / "goal-audit-clear"
+    raw = json.loads(flag.read_text(encoding="utf-8"))
+    raw["tree_fingerprint"] = "not-the-current-tree"
+    flag.write_text(json.dumps(raw), encoding="utf-8")
+    code, out, _err = run_cli("eval", "prompt")
+    assert code == 0
+    assert "Remaining-work audit: not CLEAR" in out
+    assert "tree changed" in out.lower()
+    assert MISSING_AUDIT_CLEAR in out
+
+
+def test_eval_prompt_missing_fingerprint_is_stale(goal_home: Path) -> None:
+    run_cli("manage", "create", "production audit")
+    assert run_cli("eval", "parse-audit", "CLEAR: nothing remains")[0] == 0
+    flag = goal_home / "goal-audit-clear"
+    raw = json.loads(flag.read_text(encoding="utf-8"))
+    del raw["tree_fingerprint"]
+    flag.write_text(json.dumps(raw), encoding="utf-8")
+    code, out, _err = run_cli("eval", "prompt")
+    assert code == 0
+    assert "Remaining-work audit: not CLEAR" in out
+    assert MISSING_AUDIT_CLEAR in out
+
+
 def test_eval_audit_prompt_has_no_work_summary(goal_home: Path) -> None:
     run_cli("manage", "create", "production audit")
     code, out, _err = run_cli("eval", "audit-prompt", "--work-summary", "did X")
@@ -569,6 +611,9 @@ def test_eval_audit_prompt_has_no_work_summary(goal_home: Path) -> None:
     assert "did X" not in out
     assert "Goal condition: production audit" in out
     assert "inspect" in out.lower()
+    assert "CHANGELOG" in out
+    assert "map the tree" in out.lower()
+    assert "tests pass" in out.lower()
     assert "CLEAR:" in out
     assert "REMAINING:" in out
 

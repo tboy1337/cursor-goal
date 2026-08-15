@@ -1,6 +1,6 @@
 {
   "name": "cursor-goal",
-  "version": "4.2.0",
+  "version": "4.3.0",
   "description": "Autonomous /goal loop for Cursor IDE (multi-model maker!=checker + stop-hook safety net)",
   "author": {
     "name": "tboy1337"

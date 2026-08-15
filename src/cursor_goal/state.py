@@ -16,6 +16,8 @@ import hashlib
 import json
 import os
 import secrets
+import shutil
+import subprocess  # nosec B404
 import threading
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -73,6 +75,10 @@ __all__ = (
 
 EVAL_FLAG_NAME = "goal-eval-done"
 AUDIT_FLAG_NAME = "goal-audit-clear"
+# Documented fallback when git is missing or cwd is not a repo. Drift
+# detection requires git; matching ``nogit`` fingerprints do not reject done.
+NOGIT_TREE_FINGERPRINT = "nogit"
+TREE_FINGERPRINT_TIMEOUT_SEC = 15.0
 GOAL_FILE_NAME = "goal.json"
 LOCK_FILE_NAME = "goal.lock"
 SCHEMA_VERSION = 1
@@ -153,6 +159,37 @@ def eval_flag_path() -> Path:
 
 def audit_flag_path() -> Path:
     return data_dir() / AUDIT_FLAG_NAME
+
+
+def compute_tree_fingerprint(*, cwd: str | None = None) -> str:
+    """Return a SHA-256 of ``git status --porcelain=v1 -uall``.
+
+    When git is missing, the timeout fires, or *cwd* is not a git work tree,
+    return ``NOGIT_TREE_FINGERPRINT`` (``nogit``). Drift detection then cannot
+    prove a change; matching ``nogit`` values do not reject ``manage done``.
+    """
+    git_bin = shutil.which("git")
+    if not git_bin:
+        logger.info("tree fingerprint fallback nogit: git not on PATH")
+        return NOGIT_TREE_FINGERPRINT
+    try:
+        proc = subprocess.run(  # nosec B603
+            [git_bin, "status", "--porcelain=v1", "-uall"],
+            cwd=cwd or None,
+            capture_output=True,
+            text=True,
+            timeout=TREE_FINGERPRINT_TIMEOUT_SEC,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.info("tree fingerprint fallback nogit: %s", exc)
+        return NOGIT_TREE_FINGERPRINT
+    if proc.returncode != 0:
+        logger.info("tree fingerprint fallback nogit: git exit %s", proc.returncode)
+        return NOGIT_TREE_FINGERPRINT
+    digest = hashlib.sha256(proc.stdout.encode("utf-8")).hexdigest()
+    logger.debug("tree fingerprint cwd=%s digest=%s", cwd or ".", digest[:12])
+    return digest
 
 
 def lock_path() -> Path:
@@ -591,6 +628,11 @@ class GoalState:  # pylint: disable=too-many-instance-attributes
         return hashlib.sha256(payload).hexdigest()[:32]
 
 
+def _fingerprint_cwd_for_state(state: GoalState) -> str | None:
+    workdir = (state.workdir or "").strip()
+    return workdir or None
+
+
 def _quarantine_corrupt_goal(reason: str) -> Path | None:
     """Rename corrupt goal.json aside for recovery/support. Returns quarantine path."""
     path = goal_path()
@@ -719,6 +761,13 @@ def clear_eval_signal() -> None:
         _clear_eval_signal_unlocked()
 
 
+def clear_protocol_signals() -> None:
+    """Clear YES and CLEAR signal files (validation / more-work happened)."""
+    with goal_lock():
+        _clear_eval_signal_unlocked()
+        _clear_audit_signal_unlocked()
+
+
 def _clear_eval_signal_unlocked() -> None:
     flag = eval_flag_path()
     if flag.exists():
@@ -730,7 +779,8 @@ def mark_goal_achieved(*, require_signal: bool = True) -> tuple[GoalState | None
     """Mark goal achieved under lock.
 
     Returns ``(state, status)`` where status is ``ok``, ``missing``,
-    ``rejected``, ``rejected_audit``, ``not_pursuing``, or ``forced``.
+    ``rejected``, ``rejected_audit``, ``rejected_audit_stale``,
+    ``not_pursuing``, or ``forced``.
     """
     with goal_lock():
         state = load_goal()
@@ -746,18 +796,21 @@ def mark_goal_achieved(*, require_signal: bool = True) -> tuple[GoalState | None
             )
         signaled = _has_eval_signal_unlocked(state)
         audit_ok = _has_audit_signal_unlocked(state)
+        fingerprint_ok = _audit_fingerprint_matches_unlocked(state)
         if require_signal:
             if not signaled:
                 return state, "rejected"
             if not audit_ok:
                 return state, "rejected_audit"
+            if not fingerprint_ok:
+                return state, "rejected_audit_stale"
             _clear_eval_signal_unlocked()
             _clear_audit_signal_unlocked()
             status = "ok"
         else:
             _clear_eval_signal_unlocked()
             _clear_audit_signal_unlocked()
-            status = "ok" if signaled and audit_ok else "forced"
+            status = "ok" if signaled and audit_ok and fingerprint_ok else "forced"
         state.status = "achieved"
         state.active = False
         _save_goal_unlocked(state)
@@ -825,28 +878,45 @@ def _write_audit_signal_unlocked(state: GoalState, *, reason: str) -> None:
     """Atomically write CLEAR-bound audit signal for *state* (caller holds lock)."""
     data_dir()
     flag = audit_flag_path()
+    fingerprint = compute_tree_fingerprint(cwd=_fingerprint_cwd_for_state(state))
     payload = {
         "condition_hash": state.content_hash(),
         "created_at": now_iso(),
         "verdict": "CLEAR",
         "reason": reason,
+        "tree_fingerprint": fingerprint,
     }
     atomic_write_text(
         flag,
         json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
     )
     logger.info(
-        "Recorded remaining-work audit signal hash=%s", payload["condition_hash"]
+        "Recorded remaining-work audit signal hash=%s fingerprint=%s",
+        payload["condition_hash"],
+        fingerprint[:16],
     )
 
 
 def has_audit_signal() -> bool:
-    """Return True when a CLEAR-bound audit signal matches the current goal."""
+    """Return True when a CLEAR-bound audit signal matches the current tree."""
     with goal_lock():
         state = load_goal()
         if state is None:
             return False
-        return _has_audit_signal_unlocked(state)
+        return _has_audit_signal_unlocked(
+            state
+        ) and _audit_fingerprint_matches_unlocked(state)
+
+
+def audit_signal_tree_stale() -> bool:
+    """Return True when CLEAR is bound but the working tree changed after it."""
+    with goal_lock():
+        state = load_goal()
+        if state is None:
+            return False
+        if not _has_audit_signal_unlocked(state):
+            return False
+        return not _audit_fingerprint_matches_unlocked(state)
 
 
 def _has_audit_signal_unlocked(state: GoalState) -> bool:
@@ -856,6 +926,42 @@ def _has_audit_signal_unlocked(state: GoalState) -> bool:
         expected_verdict="CLEAR",
         label="Audit",
     )
+
+
+def _read_audit_flag_unlocked() -> dict[str, Any] | None:
+    flag = audit_flag_path()
+    if not flag.is_file():
+        return None
+    try:
+        raw = json.loads(flag.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    return raw
+
+
+def _audit_fingerprint_matches_unlocked(state: GoalState) -> bool:
+    """True when the CLEAR flag's tree fingerprint still matches *state*'s tree.
+
+    Missing ``tree_fingerprint`` (pre-4.3.0 flags) is fail-closed (stale).
+    """
+    raw = _read_audit_flag_unlocked()
+    if raw is None:
+        return False
+    stored = str(raw.get("tree_fingerprint") or "")
+    if not stored:
+        logger.warning("Audit CLEAR missing tree_fingerprint; treating as stale")
+        return False
+    current = compute_tree_fingerprint(cwd=_fingerprint_cwd_for_state(state))
+    if stored != current:
+        logger.info(
+            "Audit tree fingerprint mismatch stored=%s current=%s",
+            stored[:16],
+            current[:16],
+        )
+        return False
+    return True
 
 
 def _has_bound_signal_unlocked(

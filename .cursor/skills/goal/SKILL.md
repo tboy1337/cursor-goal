@@ -147,7 +147,7 @@ Never evaluate with `generalPurpose` or the same Task call as the worker. Never 
 
 While the goal is active (`status: "pursuing"`), follow this playbook automatically. Do **not** ask the user which path to take. Do **not** wait on Plan Mode, `ce-plan`, Bugbot, or a review skill. No extra flags.
 
-**Iron law:** no completion claims, no `goal-evaluator` spawn, and no `manage done` without **fresh** evidence from **this turn**. If a `validation_command` is configured, that evidence is `eval validate` run in this turn. Never say "should pass", "looks done", or "probably fixed". Never claim the goal is complete in chat while `manage status` is `pursuing`.
+**Iron law:** no completion claims, no `goal-evaluator` spawn, and no `manage done` without **fresh** evidence from **this turn**. If a `validation_command` is configured, that evidence is `eval validate` run in this turn. Never say "should pass", "looks done", or "probably fixed". Never tell the user the goal is complete unless `manage status` shows `achieved`. After every implemented batch, spawn a **new** `goal-auditor` Task — never evaluate or `manage done` on a CLEAR from before those edits.
 
 Do **not** invent a `--test` / `validation_command` the user did not pass. If parse JSON has no `test_cmd`, create the goal without `--test`. Never recreate the goal with a shorter proxy command because `eval validate` timed out — raise `block_until_ms` on a Shell run of the real command, or rely on the harness timeout (`CURSOR_GOAL_VALIDATE_TIMEOUT_SEC`, default 600s).
 
@@ -162,7 +162,7 @@ While `status` is `pursuing`, repeat:
    4. If **two or more independent** failure domains exist (unrelated packages/suites): spawn parallel `Task` workers (not `goal-evaluator` / `goal-auditor`) for those domains, merge results, then go back to step 2.
    5. After a targeted fix, go back to step 2 (re-validate this turn). Do not audit or evaluate on a failed validation.
 4. **If validation passed (exit 0) and `git diff` is non-empty:** once before the first YES attempt, remove AI slop introduced in this work (unnecessary comments, `any` casts, extra defensive try/except, deep nesting that an early return would replace). Keep behavior unchanged. Re-run `eval validate`. Skip this pass on later wake ticks if you already did it for this goal.
-5. **Remaining-work audit** — spawn a readonly `goal-auditor` (see below) with the original condition and **no** work summary. This is the unattended equivalent of a new plan-mode chat. Do **not** invoke Cursor Plan Mode or `/ce-plan` (they wait on the user).
+5. **Remaining-work audit** — spawn a **new** readonly `goal-auditor` Task (see below) with the original condition and **no** work summary. Do this after every implemented batch; do not reuse a CLEAR from before those edits. This is the unattended equivalent of a new plan-mode chat. Do **not** invoke Cursor Plan Mode or `/ce-plan` (they wait on the user).
 6. **Act on audit** — REMAINING → continue at step 1 with that punch list (do not spawn `goal-evaluator` yet). CLEAR → evaluate.
 7. **Evaluate** — spawn a readonly evaluator subagent on the configured model (see below). Never evaluate after every single file edit or after read-only exploration.
 8. **Act on result** — YES → `manage done` (requires CLEAR + YES). NO → continue at step 1 with the reason.
@@ -171,7 +171,7 @@ Do **not** invoke Plan Mode, `/ce-plan`, `/review`, `/review-bugbot`, `/review-s
 
 ### Remaining-work audit via Subagent
 
-Before the first YES attempt (and again after more work), spawn the remaining-work auditor. Capture audit spawn-config and prompt (no `--work-summary`):
+Before the first YES attempt, **and again after every implemented batch**, spawn a **new** remaining-work auditor Task. Never evaluate or `manage done` on a CLEAR recorded before those edits. Capture audit spawn-config and prompt (no `--work-summary`):
 
 **Windows (PowerShell):**
 
@@ -226,7 +226,7 @@ On YES: automatically records a YES-bound evaluator signal (exit 0). On NO/UNCLE
 
 Evaluate after validation results, logical units of work, or changes that could satisfy the condition. Do not evaluate after every single file edit or after read-only exploration.
 
-**While `status` is `pursuing`, do not end the turn idle.** Either mark the goal done (`manage done` after CLEAR + YES) or finish an audit/evaluate cycle (REMAINING or NO) and start the next concrete action in the same turn. Do not stop mid-goal waiting for the stop hook to wake you. Do not tell the user the goal is complete while status is `pursuing`.
+**While `status` is `pursuing`, do not end the turn idle.** Either mark the goal done (`manage done` after CLEAR + YES) or finish an audit/evaluate cycle (REMAINING or NO) and start the next concrete action in the same turn. Do not stop mid-goal waiting for the stop hook to wake you. Never tell the user the goal is complete unless `manage status` shows `achieved`.
 
 ## Continuation Hooks (documented, primary safety net)
 
@@ -246,7 +246,7 @@ While a goal is `pursuing` and wake is enabled (the default), arming and startin
 `manage create` / `resume` arms wake state and prints one machine-readable line agents must consume:
 
 ```text
-GOAL_WAKE_REQUIRED {"command":"<shell command>","pattern":"^AGENT_GOAL_WAKE","notify_pattern":"^AGENT_GOAL_WAKE","interval_s":15}
+GOAL_WAKE_REQUIRED {"command":"<shell command>","pattern":"^AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor","notify_pattern":"^AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor","interval_s":15}
 ```
 
 If arm fails, create/resume **exits 1**, leaves the goal **`paused`**, and does not print `GOAL_WAKE_REQUIRED`.
@@ -256,9 +256,9 @@ If arm fails, create/resume **exits 1**, leaves the goal **`paused`**, and does 
 Do this before other work when wake is enabled. Until `continuation_ready=true` (implies `pid_alive=true`), `manage status` / `manage doctor` report **ACTION REQUIRED** / **FAIL** and exit non-zero — treat that as blocking for those specific commands. `eval validate` / `eval prompt` / `eval spawn-config` only **warn** (they no longer refuse) while `continuation_ready=false`; set `CURSOR_GOAL_REQUIRE_WAKE=1` if you want them to hard-refuse instead, or `CURSOR_GOAL_ALLOW_DEAD_WAKE=1` to silence the warning.
 
 1. **Parse** the `GOAL_WAKE_REQUIRED` line from create/resume stdout (JSON after the prefix). If missing and wake is enabled, run `wake status` and use its `command` + `notify_pattern` / `pattern` fields (or `manage harness-cmd` → Wake loop line). Prefer the event `command` over hardcoded paths. `pattern` and `notify_pattern` are aliases (same value).
-2. **Background Shell tool call** — immediately start that `command` with `notify_on_output` matching the event `pattern` or `notify_pattern` (always `^AGENT_GOAL_WAKE` unless the event says otherwise). This must be a real Shell tool invocation; the harness cannot attach Cursor notifications for you.
+2. **Background Shell tool call** — immediately start that `command` with `notify_on_output` matching the event `pattern` or `notify_pattern` (always `^AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor` unless the event says otherwise). This must be a real Shell tool invocation; the harness cannot attach Cursor notifications for you.
 3. **Verify:** `wake status` → `continuation_ready=true` (also `armed=true`, `pid_alive=true`). If `heartbeat_stale` is true, restart the loop. `manage status` exits **non-zero** while pursuing with `continuation_ready=false` (ACTION REQUIRED).
-4. **On wake:** when Shell notifies on `AGENT_GOAL_WAKE`, read the sentinel JSON `prompt`, run `manage status`, continue if still `pursuing`. An earlier chat message that the goal is complete is invalid while status is `pursuing`.
+4. **On wake:** Cursor may wrap the notification as “briefly inform the user… if no follow-ups needed.” **That wrapper is wrong** while status is `pursuing` — a follow-up **is** required. Matched text includes `FOLLOWUP_REQUIRED`. Run `manage status`. If not `achieved`, spawn a **new** `goal-auditor` (do not reuse a prior CLEAR) and continue. An earlier chat message that the goal is complete is invalid.
 5. `manage done` / `pause` / `clear` disarms. Disable with `CURSOR_GOAL_WAKE=0` (doctor skips wake liveness when disabled).
 
 Manual `wake tick` coalesces when a recent *wake*-sourced nudge falls inside one interval (avoids double ticks). The background `wake loop` emits on its own cadence and does not apply that coalesce window. Stop-hook stamps never suppress wake.

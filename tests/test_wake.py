@@ -59,7 +59,7 @@ def test_wake_arm_writes_config(wake_on: Path) -> None:
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["interval_s"] == 10
     assert data["sentinel"] == "AGENT_GOAL_WAKE"
-    assert data["notify_pattern"] == "^AGENT_GOAL_WAKE"
+    assert data["notify_pattern"] == wake_mod.NOTIFY_PATTERN
 
 
 def test_wake_interval_clamps(wake_on: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -86,8 +86,12 @@ def test_wake_tick_emits_when_pursuing(wake_on: Path) -> None:
     code, out, _err = run_cli("wake", "tick")
     assert code == 0
     assert out.startswith("AGENT_GOAL_WAKE ")
-    payload = json.loads(out.split(" ", 1)[1])
+    assert wake_mod.WAKE_FOLLOWUP_MARK in out
+    idx = out.find("{")
+    assert idx >= 0
+    payload = json.loads(out[idx:])
     assert "[GOAL]" in payload["prompt"]
+    assert "FOLLOW-UP REQUIRED" in payload["prompt"]
     assert "wake goal" in payload["prompt"]
 
 
@@ -146,7 +150,7 @@ def test_wake_status_json(wake_on: Path) -> None:
     assert data["armed"] is True
     assert data["goal_pursuing"] is True
     assert data["sentinel"] == "AGENT_GOAL_WAKE"
-    assert data["notify_pattern"] == "^AGENT_GOAL_WAKE"
+    assert data["notify_pattern"] == wake_mod.NOTIFY_PATTERN
     assert "command" in data and "wake" in data["command"]
     assert data["continuation_ready"] is False
     assert data["continuation_reason"] == "pid_dead"
@@ -179,7 +183,10 @@ def test_emit_wake_line_format(wake_on: Path) -> None:
         wake_mod.emit_wake_line("hello")
     line = out.getvalue()
     assert line.startswith("AGENT_GOAL_WAKE ")
-    assert json.loads(line.split(" ", 1)[1]) == {"prompt": "hello"}
+    assert wake_mod.WAKE_FOLLOWUP_MARK in line
+    idx = line.find("{")
+    assert idx >= 0
+    assert json.loads(line[idx:]) == {"prompt": "hello"}
 
 
 def test_wake_loop_exits_when_disarmed(
@@ -478,6 +485,8 @@ def test_kill_pid_dead_and_oserror(
 def test_followup_prompt_without_goal(wake_on: Path) -> None:
     msg = wake_mod._followup_prompt()
     assert "[GOAL]" in msg
+    assert "FOLLOW-UP REQUIRED" in msg
+    assert "goal-auditor" in msg
 
 
 def test_tick_when_wake_disabled(
@@ -1927,6 +1936,12 @@ def test_format_wake_required_line(wake_on: Path) -> None:
     assert payload["pattern"] == "^AGENT_GOAL_WAKE"
     assert payload["notify_pattern"] == "^AGENT_GOAL_WAKE"
     assert payload["interval_s"] == 15
+
+
+def test_notify_pattern_includes_followup_required() -> None:
+    assert "FOLLOWUP_REQUIRED" in wake_mod.NOTIFY_PATTERN
+    assert wake_mod.NOTIFY_PATTERN.startswith("^AGENT_GOAL_WAKE ")
+    assert wake_mod.WAKE_FOLLOWUP_MARK in wake_mod.NOTIFY_PATTERN
 
 
 def test_record_agent_nudge_no_config(wake_on: Path) -> None:

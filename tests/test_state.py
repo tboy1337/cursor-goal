@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -13,8 +14,12 @@ import pytest
 
 from cursor_goal.logging_config import get_logger
 from cursor_goal.state import (
+    NOGIT_TREE_FINGERPRINT,
     GoalState,
+    audit_signal_tree_stale,
     clear_eval_signal,
+    clear_protocol_signals,
+    compute_tree_fingerprint,
     data_dir,
     has_audit_signal,
     has_eval_signal,
@@ -299,6 +304,88 @@ def test_record_parse_audit_remaining_clears_yes(goal_home: Path) -> None:
 
 def test_has_audit_signal_no_goal(goal_home: Path) -> None:
     assert has_audit_signal() is False
+
+
+def test_record_parse_audit_stores_tree_fingerprint(goal_home: Path) -> None:
+    save_goal(
+        GoalState(
+            condition="c",
+            created_at="t",
+            status="pursuing",
+            active=True,
+        )
+    )
+    record_parse_audit("CLEAR", "nothing remains")
+    raw = json.loads((goal_home / "goal-audit-clear").read_text(encoding="utf-8"))
+    assert raw["verdict"] == "CLEAR"
+    assert isinstance(raw.get("tree_fingerprint"), str)
+    assert raw["tree_fingerprint"]
+    assert has_audit_signal() is True
+    assert audit_signal_tree_stale() is False
+
+
+def test_has_audit_signal_false_when_fingerprint_missing(goal_home: Path) -> None:
+    save_goal(
+        GoalState(
+            condition="c",
+            created_at="t",
+            status="pursuing",
+            active=True,
+        )
+    )
+    record_parse_audit("CLEAR", "nothing remains")
+    flag = goal_home / "goal-audit-clear"
+    raw = json.loads(flag.read_text(encoding="utf-8"))
+    del raw["tree_fingerprint"]
+    flag.write_text(json.dumps(raw), encoding="utf-8")
+    assert has_audit_signal() is False
+    assert audit_signal_tree_stale() is True
+
+
+def test_clear_protocol_signals_removes_yes_and_clear(goal_home: Path) -> None:
+    save_goal(
+        GoalState(
+            condition="c",
+            created_at="t",
+            status="pursuing",
+            active=True,
+        )
+    )
+    set_eval_signal()
+    record_parse_audit("CLEAR", "nothing remains")
+    assert has_eval_signal() is True
+    assert has_audit_signal() is True
+    clear_protocol_signals()
+    assert has_eval_signal() is False
+    assert has_audit_signal() is False
+
+
+def test_compute_tree_fingerprint_nogit(tmp_path: Path) -> None:
+    digest = compute_tree_fingerprint(cwd=str(tmp_path))
+    assert digest == NOGIT_TREE_FINGERPRINT
+
+
+def test_compute_tree_fingerprint_git_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("cursor_goal.state.shutil.which", lambda _name: None)
+    assert compute_tree_fingerprint(cwd=str(tmp_path)) == NOGIT_TREE_FINGERPRINT
+
+
+def test_compute_tree_fingerprint_git_repo(tmp_path: Path) -> None:
+    subprocess.run(
+        ["git", "init"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        timeout=30,
+    )
+    (tmp_path / "a.txt").write_text("x\n", encoding="utf-8")
+    first = compute_tree_fingerprint(cwd=str(tmp_path))
+    assert first != NOGIT_TREE_FINGERPRINT
+    (tmp_path / "b.txt").write_text("y\n", encoding="utf-8")
+    second = compute_tree_fingerprint(cwd=str(tmp_path))
+    assert second != first
 
 
 def test_eval_signal_rejects_missing_verdict(goal_home: Path) -> None:
