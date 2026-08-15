@@ -4,7 +4,7 @@ Checklist for cutting a tagged GitHub Release (`vX.Y.Z`).
 
 Current package version is **4.4.0**. The public GitHub tag for this release is **`v4.4.0`**. After tagging, README/install pins work with `git clone --branch v4.4.0`.
 
-## Manual Cursor IDE smoke (before tagging)
+## Manual Cursor IDE smoke (before pushing a version bump)
 
 Harness unit tests do not cover the IDE. After install, smoke in Cursor:
 
@@ -18,7 +18,7 @@ Non-IDE wake smoke: `python scripts/wake-smoke.py` (also run by `scripts/verify.
 
 ## Prerequisites
 
-- Working tree clean and CI green on `main`
+- Working tree clean
 - Python 3.12+ with `pip install -e ".[dev]"`
 
 ## Steps
@@ -43,7 +43,7 @@ Non-IDE wake smoke: `python scripts/wake-smoke.py` (also run by `scripts/verify.
    # or: python scripts/verify.py
    ```
 
-   On Windows before tagging (or rely on the release workflow Windows gate):
+   On Windows before pushing (or rely on the CI Windows jobs):
 
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-powershell-tests.ps1
@@ -52,15 +52,15 @@ Non-IDE wake smoke: `python scripts/wake-smoke.py` (also run by `scripts/verify.
 
 4. **Commit** the version bump, plugin sync, and docs pins.
 
-5. **Tag and push** (tag must equal `v` + package version exactly)
+5. **Push `main`** (do not also push a `vX.Y.Z` tag on the same bump unless you want the tag-triggered [Release workflow](../.github/workflows/release.yml) to race CI — both paths skip if the GitHub Release already exists, but the extra run is noisy)
 
    ```bash
-   git tag -a vX.Y.Z -m "cursor-goal vX.Y.Z"
    git push origin main
-   git push origin vX.Y.Z
    ```
 
-6. The [Release workflow](../.github/workflows/release.yml) runs the full pytest suite (with the 95% multi-metric coverage gate) on Linux, Windows, and macOS gates, plus Windows Pester/PSScriptAnalyzer and install smoke on all three OSes, then builds the sdist/wheel, writes `SHA256SUMS.txt`, generates a [Sigstore-signed build provenance attestation](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations) for the built artifacts, and finally publishes the GitHub Release (source install path; Teams marketplace imports the **git repo/tag**, not a plugin zip).
+6. [CI](../.github/workflows/ci.yml) compares this push’s `pyproject.toml` version to `github.event.before`. When the version changed, all CI jobs are green, and `vX.Y.Z` is not already a GitHub Release, the **Publish GitHub Release** job builds the sdist/wheel, writes `SHA256SUMS.txt`, generates a [Sigstore-signed build provenance attestation](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations), and runs `gh release create vX.Y.Z --target <sha>` (that creates the git tag so `git clone --branch vX.Y.Z` works). `GITHUB_TOKEN` cannot start a second workflow by pushing a tag, so publish happens in the same CI run.
+
+   **Fallback:** a human `git tag -a vX.Y.Z -m "cursor-goal vX.Y.Z"` + `git push origin vX.Y.Z` still runs [release.yml](../.github/workflows/release.yml) (full Linux/Windows/macOS gates, then the same publish steps). The tag must equal `v` + package version exactly.
 
    Verify a downloaded artifact's provenance after release:
 
@@ -68,9 +68,11 @@ Non-IDE wake smoke: `python scripts/wake-smoke.py` (also run by `scripts/verify.
    gh attestation verify cursor_goal-X.Y.Z-py3-none-any.whl --owner tboy1337
    ```
 
+Pushes to `testing`, pull requests, and commits that do not change the pyproject version do not publish. A forgotten `__init__.py` / pin bump still fails `check_version_sync.py` in CI, so there is no release.
+
 ## Do not
 
 - Edit `plugins/cursor-goal/**` or `.cursor-plugin/marketplace.json` by hand — always regenerate via `sync-plugin-tree.py`
 - Hand-edit `.cursor/skills/goal/scripts/stop_hook.cmd` expecting it to match the installer bake or marketplace variant — those are three intentional roles (see [install.md](install.md))
-- Push a tag that does not match `__version__` (the workflow fails intentionally)
-- Skip `verify.py` before tagging
+- Push a tag that does not match `__version__` (the tag-triggered workflow fails intentionally)
+- Skip `verify.py` before pushing a version bump

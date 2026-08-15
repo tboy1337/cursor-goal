@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -543,6 +544,127 @@ def test_check_version_sync_detects_readme_pin_drift(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="Conflicting README"):
         mod._read_tagged_clone_pin(bad, label="README")
+
+
+def _load_check_version_sync() -> ModuleType:
+    """Import scripts/check_version_sync.py as a module for helper tests."""
+    root = Path(__file__).resolve().parents[1]
+    script = root / "scripts" / "check_version_sync.py"
+    spec = importlib.util.spec_from_file_location("check_version_sync", script)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_parse_pyproject_version_text() -> None:
+    mod = _load_check_version_sync()
+    text = '[project]\nname = "cursor-goal"\nversion = "4.4.0"\n'
+    assert mod.parse_pyproject_version_text(text) == "4.4.0"
+    with pytest.raises(ValueError, match="Could not parse version"):
+        mod.parse_pyproject_version_text("[project]\nname = 'x'\n")
+
+
+def test_parse_bool_flag() -> None:
+    mod = _load_check_version_sync()
+    assert mod.parse_bool_flag("1") is True
+    assert mod.parse_bool_flag("true") is True
+    assert mod.parse_bool_flag("YES") is True
+    assert mod.parse_bool_flag("0") is False
+    assert mod.parse_bool_flag("false") is False
+    assert mod.parse_bool_flag("") is False
+    with pytest.raises(ValueError, match="invalid boolean"):
+        mod.parse_bool_flag("maybe")
+
+
+@pytest.mark.parametrize(
+    ("event_name", "ref", "current", "previous", "release_exists", "expected"),
+    [
+        ("push", "refs/heads/main", "4.4.0", "4.3.0", False, "release"),
+        ("push", "refs/heads/main", "4.4.0", "4.4.0", False, "unchanged"),
+        ("push", "refs/heads/main", "4.4.0", "4.3.0", True, "skip_exists"),
+        ("push", "refs/heads/testing", "4.4.0", "4.3.0", False, "unchanged"),
+        ("pull_request", "refs/heads/main", "4.4.0", "4.3.0", False, "unchanged"),
+        ("push", "refs/heads/main", "4.4.0", None, False, "unchanged"),
+        ("push", "refs/heads/main", "4.4.0", "", False, "unchanged"),
+        ("push", "refs/heads/main", "5.0.0", "4.4.0", False, "release"),
+    ],
+)
+def test_version_bump_decision_table(
+    event_name: str,
+    ref: str,
+    current: str,
+    previous: str | None,
+    release_exists: bool,
+    expected: str,
+) -> None:
+    mod = _load_check_version_sync()
+    result = mod.version_bump_decision(
+        current=current,
+        previous=previous,
+        release_exists=release_exists,
+        event_name=event_name,
+        ref=ref,
+    )
+    assert result["decision"] == expected
+    assert result["current"] == current
+    assert result["previous"] == (previous or "")
+    assert result["tag"] == f"v{current}"
+
+
+def test_version_bump_decision_rejects_non_semver() -> None:
+    mod = _load_check_version_sync()
+    with pytest.raises(ValueError, match="not X.Y.Z"):
+        mod.version_bump_decision(
+            current="4.4.0rc1",
+            previous="4.4.0",
+            release_exists=False,
+            event_name="push",
+            ref="refs/heads/main",
+        )
+
+
+def test_detect_bump_cli_writes_github_output(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[1]
+    script = root / "scripts" / "check_version_sync.py"
+    current = tmp_path / "current.toml"
+    previous = tmp_path / "previous.toml"
+    current.write_text('version = "4.5.0"\n', encoding="utf-8")
+    previous.write_text('version = "4.4.0"\n', encoding="utf-8")
+    github_output = tmp_path / "github_output"
+    env = {**os.environ, "GITHUB_OUTPUT": str(github_output)}
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--detect-bump",
+            "--current-file",
+            str(current),
+            "--previous-file",
+            str(previous),
+            "--event-name",
+            "push",
+            "--ref",
+            "refs/heads/main",
+            "--release-exists",
+            "0",
+        ],
+        cwd=str(root),
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads(completed.stdout.strip().splitlines()[-1])
+    assert payload["decision"] == "release"
+    assert payload["tag"] == "v4.5.0"
+    written = github_output.read_text(encoding="utf-8")
+    assert "decision=release\n" in written
+    assert "tag=v4.5.0\n" in written
+    assert "current=4.5.0\n" in written
+    assert "previous=4.4.0\n" in written
 
 
 def test_plugin_vendored_package_imports() -> None:

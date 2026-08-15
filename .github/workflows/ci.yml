@@ -5,14 +5,21 @@ on:
     branches: [main, testing]
   pull_request:
 
+# Publish job needs write; existing jobs pin contents:read (job perms cannot
+# exceed workflow-level, so write is declared here and restricted per job).
 permissions:
-  contents: read
+  contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
 
 jobs:
   harness:
     name: Python harness
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
     strategy:
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
@@ -65,6 +72,8 @@ jobs:
     name: macOS install smoke
     runs-on: macos-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -80,6 +89,8 @@ jobs:
     name: Windows pytest
     runs-on: windows-latest
     timeout-minutes: 25
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -108,6 +119,8 @@ jobs:
     name: macOS pytest
     runs-on: macos-latest
     timeout-minutes: 25
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -136,6 +149,8 @@ jobs:
     name: PowerShell scripts (${{ matrix.shell }})
     runs-on: windows-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -167,3 +182,150 @@ jobs:
       - name: Windows install smoke
         run: |
           & .\scripts\install-smoke.ps1
+
+  detect-version-bump:
+    name: Detect version bump
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      decision: ${{ steps.decide.outputs.decision }}
+      tag: ${{ steps.decide.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Compare pyproject version to previous tip
+        id: decide
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          GIT_REF: ${{ github.ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          PREV_ARGS=()
+          RELEASE_EXISTS=0
+          if [ "${EVENT_NAME}" = "push" ] && [ "${GIT_REF}" = "refs/heads/main" ]; then
+            if [ -n "${BEFORE:-}" ] && ! printf '%s' "${BEFORE}" | grep -Eq '^0+$'; then
+              if git fetch --depth=1 origin "${BEFORE}" \
+                && git cat-file -e "${BEFORE}:pyproject.toml"; then
+                PREV_FILE="${RUNNER_TEMP}/prev-pyproject.toml"
+                git show "${BEFORE}:pyproject.toml" > "${PREV_FILE}"
+                PREV_ARGS=(--previous-file "${PREV_FILE}")
+                echo "Loaded previous pyproject.toml from ${BEFORE}"
+              else
+                echo "Could not read pyproject.toml at ${BEFORE}; treating as no previous version"
+              fi
+            else
+              echo "No previous SHA (new branch or missing github.event.before)"
+            fi
+            PROBE_JSON="$(
+              GITHUB_OUTPUT= python scripts/check_version_sync.py --detect-bump \
+                --event-name "${EVENT_NAME}" \
+                --ref "${GIT_REF}" \
+                --release-exists 0 \
+                "${PREV_ARGS[@]}"
+            )"
+            CURRENT="$(
+              printf '%s\n' "${PROBE_JSON}" | tail -n 1 \
+                | python -c "import json,sys; print(json.load(sys.stdin)['current'])"
+            )"
+            TAG="v${CURRENT}"
+            set +e
+            VIEW_OUT="$(gh release view "${TAG}" 2>&1)"
+            VIEW_EC=$?
+            set -e
+            if [ "${VIEW_EC}" -eq 0 ]; then
+              RELEASE_EXISTS=1
+              echo "GitHub release ${TAG} already exists"
+            elif printf '%s' "${VIEW_OUT}" | grep -Eqi 'release not found|HTTP 404|Not Found'; then
+              echo "GitHub release ${TAG} does not exist"
+            else
+              printf '%s\n' "${VIEW_OUT}" >&2
+              exit "${VIEW_EC}"
+            fi
+          else
+            echo "Not a push to main (${EVENT_NAME} ${GIT_REF}); no release"
+          fi
+          python scripts/check_version_sync.py --detect-bump \
+            --event-name "${EVENT_NAME}" \
+            --ref "${GIT_REF}" \
+            --release-exists "${RELEASE_EXISTS}" \
+            "${PREV_ARGS[@]}"
+
+  publish-release:
+    name: Publish GitHub Release
+    needs:
+      - harness
+      - macos-install-smoke
+      - windows-harness
+      - macos-harness
+      - powershell
+      - detect-version-bump
+    if: needs.detect-version-bump.outputs.decision == 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install build tools
+        run: |
+          pip install -e ".[dev]"
+          pip install build
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Generate build provenance attestation
+        uses: actions/attest@v4
+        with:
+          subject-path: "dist/*.whl,dist/*.tar.gz"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.detect-version-bump.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists; skip"
+            exit 0
+          fi
+          NOTES="$(printf '%s\n' \
+            "## cursor-goal ${TAG}" \
+            "" \
+            "### Install for Cursor (required)" \
+            "1. Download the **source** archive or clone \`--branch ${TAG}\`" \
+            "2. Run \`./scripts/install-goal.sh\` or \`scripts/install-goal.ps1\`" \
+            "3. Or import this **git repository / tag** in Cursor Dashboard → Plugins (Teams marketplace) — there is no separate plugin zip artifact" \
+            "" \
+            "The attached \`.whl\` / sdist are for **development** (\`pip install\`) only — they do **not** register the Cursor skill, agents, or stop hook." \
+            "" \
+            "See [docs/install.md](https://github.com/tboy1337/cursor-goal/blob/${TAG}/docs/install.md)." \
+          )"
+          gh release create "${TAG}" \
+            --target "${GITHUB_SHA}" \
+            --title "cursor-goal ${TAG}" \
+            --notes "${NOTES}" \
+            dist/*
