@@ -2,7 +2,7 @@
 
 Operational limits of cursor-goal for real-world use. See also [troubleshooting](troubleshooting.md) and [SECURITY.md](../SECURITY.md).
 
-`/goal` is an OpenAI Codex feature (`codex-rs/ext/goal`). This package is a Cursor port of that loop, not a Claude Code skill. Differences that matter in practice: Cursor has no Codex-style hidden idle injection or per-token goal budget, so continuation is `stop` / `subagentStop` plus optional wake; completion is gated by a separate auditor + evaluator rather than a same-model self-audit.
+`/goal` is an OpenAI Codex feature (`codex-rs/ext/goal`). This package is a Cursor port of that loop. Differences that matter in practice: Cursor has no Codex-style hidden idle injection or per-token goal budget, so continuation is `stop` / `subagentStop` plus optional wake; completion is gated by a separate auditor + evaluator rather than a same-model self-audit.
 
 ## Continuation: documented hooks are primary, wake is a best-effort backup
 

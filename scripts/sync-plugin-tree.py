@@ -214,8 +214,7 @@ def write_plugin(root: Path) -> Path:
     readme = plugin_root / "README.md"
     readme.write_text(
         "# cursor-goal (Cursor plugin)\n\n"
-        "This plugin is a Cursor port of OpenAI Codex `/goal`, not a "
-        "Claude Code skill.\n\n"
+        "This plugin is a Cursor port of OpenAI Codex `/goal`.\n\n"
         "Teams/Enterprise: import this repository as a Team Marketplace "
         "(see repo `.cursor-plugin/marketplace.json`).\n\n"
         "Individuals: prefer `scripts/install-goal.sh` / `install-goal.ps1` "

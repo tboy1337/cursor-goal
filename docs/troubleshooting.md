@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Quick fixes for common install and continuation failures. cursor-goal is a Cursor port of OpenAI Codex `/goal`, not a Claude Code skill.
+Quick fixes for common install and continuation failures. cursor-goal is a Cursor port of OpenAI Codex `/goal`.
 
 Also run:
 

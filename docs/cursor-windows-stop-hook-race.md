@@ -6,7 +6,7 @@ Cursor’s hook executor can treat a hook process as finished **before** all std
 
 This is a **Cursor IDE bug**, not a cursor-goal logic bug. cursor-goal mitigates the race and provides a **wake watchdog** continuation path that does not depend on hook stdout.
 
-Codex `/goal` continues from inside the Codex runtime. This Cursor port cannot do that, so it uses hooks + wake instead. Analogies below are other products with similar *continuation* races — they are not the origin of this skill.
+Codex `/goal` continues from inside the Codex runtime. This Cursor port cannot do that, so it uses hooks + wake instead.
 
 ## Confirmed timeline
 
@@ -28,14 +28,10 @@ On Windows, an extra PowerShell bootstrap layer historically worsened buffering;
 
 ## Similar continuation races in other products
 
-These rows are about *how other harnesses fail to continue*, not about where `/goal` comes from. `/goal` is Codex; cursor-goal is the Cursor port.
-
 | Ecosystem | Problem | Durable solution |
 |-----------|---------|------------------|
 | Node.js / Electron | Child exits; stdout still in flight | Listen for `close`, not `exit` |
 | DesktopCommanderMCP | `pwsh.exe` AllocConsole steals stdout | Parent spawn: `windowsHide` + explicit `stdio` pipes |
-| Claude Code stop hooks | Transcript flush / Windows stdin races | Poll-until-stable; absolute paths; avoid PowerShell JSON pitfalls |
-| Claude Code ralph-loop | Unreliable stop continuation | Do not rely on stop alone |
 | Cursor `/loop` skill | Need wake without stop hook | Background shell + `notify_on_output` sentinel |
 
 Parent-side spawn fixes (windowsHide, wait-for-close) apply to **Cursor’s** process launcher, not to scripts we ship. Our durable approach mirrors Cursor `/loop`: an independent wake channel.

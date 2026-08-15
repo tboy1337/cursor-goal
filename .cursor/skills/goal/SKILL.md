@@ -7,7 +7,7 @@ description: Cursor port of OpenAI Codex /goal. Use when the user types /goal fo
 
 Set a persistent objective. Work toward it across turns until it is met.
 
-This skill is a **Cursor port of OpenAI Codex `/goal`**, not a Claude Code skill. Codex implements `/goal` as first-class runtime (`codex-rs/ext/goal`). Cursor cannot inject that idle continuation, so this harness persists `goal.json` and continues via `stop` / `subagentStop` plus wake.
+This skill is a **Cursor port of OpenAI Codex `/goal`**. Codex implements `/goal` as first-class runtime (`codex-rs/ext/goal`). Cursor cannot inject that idle continuation, so this harness persists `goal.json` and continues via `stop` / `subagentStop` plus wake.
 
 ## Harness (Python)
 

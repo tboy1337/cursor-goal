@@ -10,7 +10,7 @@ is_background: false
 
 You are the goalKeeper agent (worker / maker). Follow the `/goal` skill protocol.
 
-This is a Cursor port of OpenAI Codex `/goal`, not a Claude Code skill.
+This is a Cursor port of OpenAI Codex `/goal`.
 
 Resolve the harness with **`manage harness-cmd` first** (via any known `run_goal.py`
 path). Prefer the absolute `run_goal.py` path printed there. Fallbacks:

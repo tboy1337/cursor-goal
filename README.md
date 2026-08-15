@@ -9,7 +9,7 @@
 
 Autonomous `/goal` loop for Cursor IDE: persist an objective, work across turns, and stop only when the condition is actually true.
 
-**Origin:** `/goal` is an [OpenAI Codex](https://github.com/openai/codex) feature (`codex-rs/ext/goal`), not a Claude Code skill. This repo is a Cursor port of that loop. Codex continues from inside its runtime; Cursor cannot, so cursor-goal uses documented `stop` / `subagentStop` hooks plus a wake watchdog, and splits maker ≠ checker (remaining-work auditor + evaluator) instead of a same-model self-audit.
+**Origin:** `/goal` is an [OpenAI Codex](https://github.com/openai/codex) feature (`codex-rs/ext/goal`). This repo is a Cursor port of that loop. Codex continues from inside its runtime; Cursor cannot, so cursor-goal uses documented `stop` / `subagentStop` hooks plus a wake watchdog, and splits maker ≠ checker (remaining-work auditor + evaluator) instead of a same-model self-audit.
 
 **Primary loop:** in-turn subagent evaluation (worker ≠ evaluator model) via the Python harness.  
 **Continuation:** Cursor's documented `stop` and `subagentStop` hooks (`followup_message`) keep turns flowing, plus a best-effort wake watchdog (`AGENT_GOAL_WAKE`) that does not depend on hook stdout capture.
@@ -54,7 +54,7 @@ Three supported paths:
 | Path | Who | How |
 |------|-----|-----|
 | **Clone + installer** | Individuals | Clone `main` (or a GitHub Release source archive) → `scripts/install-goal.sh` / `scripts/install-goal.ps1` |
-| **Tagged release** | Individuals | `git clone --branch v4.4.1 …` then installer (see [docs/install.md](docs/install.md)). |
+| **Tagged release** | Individuals | `git clone --branch v4.4.2 …` then installer (see [docs/install.md](docs/install.md)). |
 | **Teams marketplace** | Teams/Enterprise | Import this repo in Cursor Dashboard → Plugins (see `.cursor-plugin/marketplace.json`) |
 
 **Agent install (explicit steps):**
