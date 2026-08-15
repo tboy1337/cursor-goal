@@ -63,13 +63,13 @@ def test_stop_continues_when_pursuing(goal_home: Path) -> None:
     assert "[GOAL]" in payload["followup_message"]
     # Live followup keeps a usable condition; disk store redacts separately.
     assert 'fix "quoted" goal' in payload["followup_message"]
-    assert "toward:" in payload["followup_message"]
+    assert "<untrusted_condition>" in payload["followup_message"]
     assert load_goal_json(goal_home)["turns_used"] == 1
     disk = json.loads(
         (goal_home / "last-stop-response.json").read_text(encoding="utf-8")
     )
     stored = disk["payload"]["followup_message"]
-    assert "toward: <redacted>" in stored
+    assert "<untrusted_condition> <redacted>" in stored
     assert 'fix "quoted" goal' not in stored
 
 
@@ -79,13 +79,14 @@ def test_stop_budget_limit(goal_home: Path) -> None:
     assert code == 0
     assert "BUDGET" in payload["followup_message"]
     assert "almost done" in payload["followup_message"]
+    assert "Do not spawn auditor" in payload["followup_message"]
     data = load_goal_json(goal_home)
     assert data["status"] == "budget-limited"
     assert data["active"] is False
     disk = json.loads(
         (goal_home / "last-stop-response.json").read_text(encoding="utf-8")
     )
-    assert "progress toward: <redacted>" in disk["payload"]["followup_message"]
+    assert "<untrusted_condition> <redacted>" in disk["payload"]["followup_message"]
     assert "almost done" not in disk["payload"]["followup_message"]
 
 
@@ -96,7 +97,8 @@ def test_stop_with_validation_command_reminds_in_turn(goal_home: Path) -> None:
     msg = response["followup_message"]
     assert "Run validation in-turn" in msg
     assert "echo hi" in msg
-    assert "Goal: secret-condition" in msg
+    assert "secret-condition" in msg
+    assert "<untrusted_condition>" in msg
     assert "PASSED" not in msg
     assert "FAILED" not in msg
 
@@ -127,6 +129,14 @@ def test_handle_stop_inactive_or_paused(goal_home: Path) -> None:
     run_cli("manage", "pause")
     assert handle_stop({"status": "completed"}) == {}
     run_cli("manage", "clear")
+    assert handle_stop({"status": "completed"}) == {}
+
+
+def test_handle_stop_blocked_is_silent(goal_home: Path) -> None:
+    from cursor_goal.state import update_goal_fields
+
+    run_cli("manage", "create", "g")
+    update_goal_fields(status="blocked", active=False)
     assert handle_stop({"status": "completed"}) == {}
 
 
@@ -269,6 +279,11 @@ def test_last_stop_redacts_toward_and_goal_conditions(
         (
             "[GOAL BUDGET] summarize progress toward: secret-customer-name",
             "progress toward: <redacted>",
+        ),
+        (
+            "[GOAL] data\n<untrusted_condition>\nsecret-customer-name\n"
+            "</untrusted_condition>",
+            "<untrusted_condition> <redacted>",
         ),
     )
     for message, expected_tail in cases:
@@ -744,6 +759,17 @@ def test_handle_subagent_stop_paused_goal(goal_home: Path) -> None:
     )
 
 
+def test_handle_subagent_stop_blocked_goal(goal_home: Path) -> None:
+    from cursor_goal.state import update_goal_fields
+
+    run_cli("manage", "create", "blocked subagent stop")
+    update_goal_fields(status="blocked", active=False)
+    assert (
+        handle_subagent_stop({"subagent_type": "goal-evaluator", "status": "completed"})
+        == {}
+    )
+
+
 def test_handle_subagent_stop_success(goal_home: Path) -> None:
     run_cli("manage", "create", 'evaluator "done" check')
     response = handle_subagent_stop(
@@ -751,6 +777,7 @@ def test_handle_subagent_stop_success(goal_home: Path) -> None:
     )
     assert "eval parse-result" in response["followup_message"]
     assert 'evaluator "done" check' in response["followup_message"]
+    assert "<untrusted_condition>" in response["followup_message"]
 
 
 def test_handle_subagent_stop_auditor_success(goal_home: Path) -> None:
@@ -761,6 +788,7 @@ def test_handle_subagent_stop_auditor_success(goal_home: Path) -> None:
     assert "eval parse-audit" in response["followup_message"]
     assert "remaining-work auditor finished" in response["followup_message"]
     assert "remaining-work audit" in response["followup_message"]
+    assert "<untrusted_condition>" in response["followup_message"]
 
 
 def test_subagent_stop_singleflight_second_is_silent(

@@ -9,6 +9,8 @@
 
 Autonomous `/goal` loop for Cursor IDE: persist an objective, work across turns, and stop only when the condition is actually true.
 
+**Origin:** `/goal` is an [OpenAI Codex](https://github.com/openai/codex) feature (`codex-rs/ext/goal`), not a Claude Code skill. This repo is a Cursor port of that loop. Codex continues from inside its runtime; Cursor cannot, so cursor-goal uses documented `stop` / `subagentStop` hooks plus a wake watchdog, and splits maker ≠ checker (remaining-work auditor + evaluator) instead of a same-model self-audit.
+
 **Primary loop:** in-turn subagent evaluation (worker ≠ evaluator model) via the Python harness.  
 **Continuation:** Cursor's documented `stop` and `subagentStop` hooks (`followup_message`) keep turns flowing, plus a best-effort wake watchdog (`AGENT_GOAL_WAKE`) that does not depend on hook stdout capture.
 
@@ -36,7 +38,7 @@ Every `/goal` uses the same automatic playbook — nothing extra to set:
 4. If validation passed and there is a git diff: once before the first YES attempt, strip AI slop without changing behavior, then re-validate.
 5. Spawn a **new** readonly `goal-auditor` (original condition, no work summary) after every implemented batch. Never evaluate or `manage done` on a CLEAR recorded before those edits. REMAINING → implement that list and return to step 2. CLEAR whose tree fingerprint still matches → spawn `goal-evaluator`. YES → `manage done`. NO → keep working.
 
-Do **not** invoke Plan Mode, `ce-plan`, Bugbot, `/review`, or thermo-nuclear review inside `/goal` (they wait on the user). The remaining-work auditor is the unattended equivalent of a fresh plan-mode chat, scoped to the original condition. Never claim complete in chat while `manage status` is `pursuing`.
+Do **not** invoke Plan Mode, `ce-plan`, Bugbot, `/review`, or thermo-nuclear review inside `/goal` (they wait on the user). The remaining-work auditor is the unattended equivalent of a fresh plan-mode chat, scoped to the original condition. Never claim complete in chat while `manage status` is `pursuing`. Keep the **full** original condition — do not shrink success to a smaller, easier, or already-green subset. Never `manage pause` unless the user said `/goal pause`; use `manage blocked` after the same impasse on 3 consecutive turns.
 
 ## Requirements
 
@@ -52,7 +54,7 @@ Three supported paths:
 | Path | Who | How |
 |------|-----|-----|
 | **Clone + installer** | Individuals | Clone `main` (or a GitHub Release source archive) → `scripts/install-goal.sh` / `scripts/install-goal.ps1` |
-| **Tagged release** | Individuals | `git clone --branch v4.3.0 …` then installer (see [docs/install.md](docs/install.md)). |
+| **Tagged release** | Individuals | `git clone --branch v4.4.0 …` then installer (see [docs/install.md](docs/install.md)). |
 | **Teams marketplace** | Teams/Enterprise | Import this repo in Cursor Dashboard → Plugins (see `.cursor-plugin/marketplace.json`) |
 
 **Agent install (explicit steps):**
@@ -187,12 +189,13 @@ py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" manage docto
 
 ## Usage
 
-Lifecycle: create a goal, then `status` / `pause` / `resume` / `clear` as needed.
+Lifecycle: create a goal, then `status` / `pause` / `resume` / `update` / `blocked` / `clear` as needed.
 
 ```text
 /goal all tests in test/auth pass and the lint step is clean
 /goal status
 /goal pause | resume | clear
+/goal blocked missing deploy key
 ```
 
 Flags / natural language:

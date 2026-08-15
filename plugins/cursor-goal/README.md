@@ -1,10 +1,12 @@
 # cursor-goal (Cursor plugin)
 
+This plugin is a Cursor port of OpenAI Codex `/goal`, not a Claude Code skill.
+
 Teams/Enterprise: import this repository as a Team Marketplace (see repo `.cursor-plugin/marketplace.json`).
 
 Individuals: prefer `scripts/install-goal.sh` / `install-goal.ps1` from a full clone or GitHub Release.
 
-Version: **4.3.0** (AGPL-3.0-only). License text ships as `COPYING` in this plugin tree. Teams/AGPL notes:
+Version: **4.4.0** (AGPL-3.0-only). License text ships as `COPYING` in this plugin tree. Teams/AGPL notes:
 [docs/teams-agpl.md](https://github.com/tboy1337/cursor-goal/blob/main/docs/teams-agpl.md).
 
 ## Windows marketplace expectations

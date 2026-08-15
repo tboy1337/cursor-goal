@@ -24,9 +24,13 @@ from cursor_goal.state import (
     has_audit_signal,
     has_eval_signal,
     load_goal,
+    record_block_attempt,
     record_parse_audit,
+    record_parse_result,
     save_goal,
     set_eval_signal,
+    take_condition_updated_pending,
+    update_goal_condition,
     update_goal_fields,
 )
 
@@ -171,6 +175,9 @@ def test_from_dict_defaults_and_rejects_unsupported_schema(goal_home: Path) -> N
     assert state.status == "pursuing"
     assert state.workdir == ""
     assert state.schema_version == 1
+    assert state.block_streak == 0
+    assert state.condition_updated_pending is False
+    assert state.last_block_reason == ""
 
     with pytest.raises(ValueError, match="unsupported schema_version"):
         GoalState.from_dict(
@@ -1259,3 +1266,165 @@ def test_goal_lock_same_thread_reentrant(goal_home: Path) -> None:
         with goal_lock():
             marker.write_text("ok", encoding="utf-8")
     assert marker.read_text(encoding="utf-8") == "ok"
+
+
+def test_from_dict_rejects_invalid_block_fields(goal_home: Path) -> None:
+    del goal_home
+    with pytest.raises(ValueError, match="block_streak"):
+        GoalState.from_dict(
+            {
+                "condition": "c",
+                "turn_budget": 20,
+                "turns_used": 0,
+                "schema_version": 1,
+                "status": "pursuing",
+                "active": True,
+                "block_streak": -1,
+            }
+        )
+    with pytest.raises(ValueError, match="block_streak"):
+        GoalState.from_dict(
+            {
+                "condition": "c",
+                "turn_budget": 20,
+                "turns_used": 0,
+                "schema_version": 1,
+                "status": "pursuing",
+                "active": True,
+                "block_streak": "nope",
+            }
+        )
+    with pytest.raises(ValueError, match="condition_updated_pending"):
+        GoalState.from_dict(
+            {
+                "condition": "c",
+                "turn_budget": 20,
+                "turns_used": 0,
+                "schema_version": 1,
+                "status": "pursuing",
+                "active": True,
+                "condition_updated_pending": "yes",
+            }
+        )
+
+
+def test_record_block_attempt_streak_and_same_turn(goal_home: Path) -> None:
+    save_goal(GoalState(condition="c", created_at="t", status="pursuing", active=True))
+    state, status = record_block_attempt("Missing API key")
+    assert status == "recorded"
+    assert state is not None
+    assert state.block_streak == 1
+    assert state.status == "pursuing"
+    # Same turn / same reason does not increment.
+    state2, status2 = record_block_attempt("missing api key")
+    assert status2 == "recorded"
+    assert state2 is not None
+    assert state2.block_streak == 1
+    update_goal_fields(turns_used=1)
+    state3, status3 = record_block_attempt("MISSING API KEY")
+    assert status3 == "recorded"
+    assert state3 is not None
+    assert state3.block_streak == 2
+    update_goal_fields(turns_used=2)
+    state4, status4 = record_block_attempt("missing api key")
+    assert status4 == "blocked"
+    assert state4 is not None
+    assert state4.status == "blocked"
+    assert state4.active is False
+    assert state4.block_streak == 3
+
+
+def test_record_block_attempt_different_reason_resets(goal_home: Path) -> None:
+    save_goal(GoalState(condition="c", created_at="t", status="pursuing", active=True))
+    record_block_attempt("missing secret")
+    update_goal_fields(turns_used=1)
+    state, status = record_block_attempt("permission denied")
+    assert status == "recorded"
+    assert state is not None
+    assert state.block_streak == 1
+    assert state.last_block_reason == "permission denied"
+
+
+def test_record_block_attempt_empty_and_not_pursuing(goal_home: Path) -> None:
+    assert record_block_attempt("waiting")[1] == "missing"
+    assert record_block_attempt("   ")[1] == "empty_reason"
+    save_goal(GoalState(condition="c", created_at="t", status="paused", active=False))
+    _state, status = record_block_attempt("waiting")
+    assert status == "not_pursuing"
+    assert record_block_attempt("waiting")[0] is not None
+
+
+def test_update_goal_condition_invalidates_signals(goal_home: Path) -> None:
+    assert update_goal_condition("x")[1] == "missing"
+    save_goal(
+        GoalState(
+            condition="old outcome",
+            created_at="same-id",
+            status="pursuing",
+            active=True,
+        )
+    )
+    record_parse_result("YES", "looks done")
+    record_parse_audit("CLEAR", "nothing remains")
+    assert has_eval_signal()
+    assert has_audit_signal()
+    state, status = update_goal_condition("new broader outcome")
+    assert status == "ok"
+    assert state is not None
+    assert state.condition == "new broader outcome"
+    assert state.created_at == "same-id"
+    assert state.condition_updated_pending is True
+    assert not has_eval_signal()
+    assert not has_audit_signal()
+    assert take_condition_updated_pending() is True
+    assert take_condition_updated_pending() is False
+    _, unchanged = update_goal_condition("new broader outcome")
+    assert unchanged == "unchanged"
+    _, empty = update_goal_condition("  ")
+    assert empty == "empty"
+    save_goal(
+        GoalState(
+            condition="done-cond",
+            created_at="t",
+            status="achieved",
+            active=False,
+        )
+    )
+    _, refused = update_goal_condition("another")
+    assert refused == "not_updatable"
+
+
+def test_from_dict_accepts_blocked_and_pending(goal_home: Path) -> None:
+    del goal_home
+    state = GoalState.from_dict(
+        {
+            "condition": "c",
+            "turn_budget": 20,
+            "turns_used": 1,
+            "schema_version": 1,
+            "status": "blocked",
+            "active": False,
+            "block_streak": 3,
+            "last_block_reason": "missing key",
+            "last_block_turn_key": "1:0",
+            "condition_updated_pending": True,
+        }
+    )
+    assert state.status == "blocked"
+    assert state.block_streak == 3
+    assert state.last_block_reason == "missing key"
+    assert state.condition_updated_pending is True
+
+
+def test_take_condition_updated_pending_no_goal_and_errors(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import state as state_mod
+
+    assert take_condition_updated_pending() is False
+
+    def boom(_mutator: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(state_mod, "mutate_goal", boom)
+    assert take_condition_updated_pending() is False

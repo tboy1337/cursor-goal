@@ -26,7 +26,9 @@ def test_eval_prompt_active_goal(goal_home: Path) -> None:
     run_cli("manage", "create", "all tests pass")
     code, out, _err = run_cli("eval", "prompt")
     assert code == 0
-    assert "Goal condition: all tests pass" in out
+    assert "all tests pass" in out
+    assert "<untrusted_condition>" in out
+    assert "Keep the full original condition" in out
 
 
 def test_eval_prompt_redacts_secretish_condition(goal_home: Path) -> None:
@@ -34,8 +36,8 @@ def test_eval_prompt_redacts_secretish_condition(goal_home: Path) -> None:
     code, out, _err = run_cli("eval", "prompt")
     assert code == 0
     assert "supersecret123" not in out
-    assert "<redacted>" in out
-    assert "Goal condition:" in out
+    assert "redacted" in out
+    assert "<untrusted_condition>" in out
 
 
 def test_eval_prompt_work_summary(goal_home: Path) -> None:
@@ -609,7 +611,8 @@ def test_eval_audit_prompt_has_no_work_summary(goal_home: Path) -> None:
     code, out, _err = run_cli("eval", "audit-prompt", "--work-summary", "did X")
     assert code == 0
     assert "did X" not in out
-    assert "Goal condition: production audit" in out
+    assert "production audit" in out
+    assert "<untrusted_condition>" in out
     assert "inspect" in out.lower()
     assert "CHANGELOG" in out
     assert "map the tree" in out.lower()

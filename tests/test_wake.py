@@ -93,6 +93,8 @@ def test_wake_tick_emits_when_pursuing(wake_on: Path) -> None:
     assert "[GOAL]" in payload["prompt"]
     assert "FOLLOW-UP REQUIRED" in payload["prompt"]
     assert "wake goal" in payload["prompt"]
+    assert "<untrusted_condition>" in payload["prompt"]
+    assert "Do not manage pause" in payload["prompt"]
 
 
 def test_wake_tick_silent_when_no_goal(wake_on: Path) -> None:
@@ -107,6 +109,16 @@ def test_wake_tick_disarms_when_paused(wake_on: Path) -> None:
     assert run_cli("manage", "create", "pause wake")[0] == 0
     assert run_cli("manage", "pause")[0] == 0
     assert not (wake_on / "wake.json").is_file()
+    code, out, _err = run_cli("wake", "tick")
+    assert code == 0
+    assert out == ""
+
+
+def test_wake_tick_silent_when_blocked(wake_on: Path) -> None:
+    from cursor_goal.state import update_goal_fields
+
+    assert run_cli("manage", "create", "blocked wake")[0] == 0
+    update_goal_fields(status="blocked", active=False)
     code, out, _err = run_cli("wake", "tick")
     assert code == 0
     assert out == ""
@@ -658,6 +670,7 @@ def test_wake_ticks_hit_budget(wake_on: Path) -> None:
     code, out, _err = run_cli("wake", "tick")
     assert code == 0
     assert "BUDGET" in out
+    assert "Do not spawn auditor" in out
     from tests.conftest import load_goal_json
 
     data = load_goal_json(wake_on)

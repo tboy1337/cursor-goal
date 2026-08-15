@@ -47,8 +47,13 @@ from cursor_goal.state import (
     refuse_if_acl_harden_failed,
     refuse_if_data_dir_insecure,
     snapshot_goal,
+    take_condition_updated_pending,
 )
-from cursor_goal.validation import redact_secrets
+from cursor_goal.validation import (
+    BUDGET_WRAPUP_RULE,
+    NO_AGENT_PAUSE_RULE,
+    condition_prompt_block,
+)
 from cursor_goal.wake_process import (  # noqa: F401 — re-exports for callers
     _clear_pid,
     _kill_pid,
@@ -205,12 +210,16 @@ def _followup_prompt() -> str:
         return (
             "[GOAL] FOLLOW-UP REQUIRED. Status is still pursuing — an earlier "
             "completion claim is invalid. Run `manage status`. If not achieved, "
-            "spawn a new goal-auditor (do not reuse a prior CLEAR)."
+            "spawn a new goal-auditor (do not reuse a prior CLEAR). "
+            f"{NO_AGENT_PAUSE_RULE}"
         )
     remaining = max(0, state.turn_budget - state.turns_used)
     wake_remaining = max(0, int(state.wake_budget) - int(state.wake_ticks))
     wake_ticks = int(getattr(state, "wake_ticks", 0) or 0)
-    safe_condition = redact_secrets(state.condition, max_chars=None)
+    updated = bool(state.condition_updated_pending)
+    if updated:
+        take_condition_updated_pending()
+    block = condition_prompt_block(state.condition, objective_updated=updated)
     return (
         f"[GOAL] FOLLOW-UP REQUIRED. Turn {state.turns_used}/{state.turn_budget} "
         f"({remaining} remaining, wake_ticks={wake_ticks}/"
@@ -219,7 +228,7 @@ def _followup_prompt() -> str:
         'status is pursuing. An earlier "this is complete" message is '
         "invalid. Run `manage status`. If not achieved, spawn a new "
         "goal-auditor (do not reuse a prior CLEAR) then continue working "
-        f"toward: {safe_condition}."
+        f"toward the full original condition. {NO_AGENT_PAUSE_RULE} {block}"
     )
 
 
@@ -526,10 +535,10 @@ def _emit_budget_limited_tick(result: WakeTickResult) -> int:
     if state is None:
         logger.error("Wake tick: budget_limited result missing state; refusing emit")
         return 1
-    safe_condition = redact_secrets(state.condition, max_chars=None)
+    block = condition_prompt_block(state.condition)
     emit_wake_line(
         f"[GOAL BUDGET] Wake tick limit ({state.wake_budget}) reached. "
-        f"Wrap up current work and summarize progress toward: {safe_condition}"
+        f"{BUDGET_WRAPUP_RULE} {block}"
     )
     disarm(kill_loop=True)
     return 0
@@ -851,10 +860,10 @@ def _emit_budget_limited_loop_step(result: WakeTickResult) -> int:
             file=sys.stderr,
         )
         return 1
-    safe_condition = redact_secrets(state.condition, max_chars=None)
+    block = condition_prompt_block(state.condition)
     emit_wake_line(
         f"[GOAL BUDGET] Wake tick limit ({state.wake_budget}) reached. "
-        f"Wrap up current work and summarize progress toward: {safe_condition}"
+        f"{BUDGET_WRAPUP_RULE} {block}"
     )
     disarm(kill_loop=False)
     return 0

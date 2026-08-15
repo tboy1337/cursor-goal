@@ -24,8 +24,14 @@ from cursor_goal.state import (
     refuse_if_acl_harden_failed,
     refuse_if_data_dir_insecure,
     snapshot_goal,
+    take_condition_updated_pending,
 )
-from cursor_goal.validation import redact_command, redact_secrets
+from cursor_goal.validation import (
+    BUDGET_WRAPUP_RULE,
+    NO_AGENT_PAUSE_RULE,
+    condition_prompt_block,
+    redact_command,
+)
 from cursor_goal.wake import disarm as wake_disarm
 from cursor_goal.wake import record_agent_nudge
 
@@ -53,7 +59,12 @@ STOP_DEDUPE_NAME = "stop-generation.json"
 LAST_SUBAGENT_STOP_RESPONSE_NAME = "last-subagent-stop-response.json"
 _FAIL_OPEN_CONTINUE_NAME = "stop-failopen-continues"
 MAX_FAIL_OPEN_CONTINUES = 3
-_FOLLOWUP_CONDITION_MARKERS = ("toward:", "Goal:", "progress toward:")
+_FOLLOWUP_CONDITION_MARKERS = (
+    "<untrusted_condition>",
+    "toward:",
+    "Goal:",
+    "progress toward:",
+)
 
 
 def _default_drain_ms() -> int:
@@ -340,6 +351,14 @@ def _release_singleflight(handle: IO[bytes] | None) -> None:
         pass
 
 
+def _condition_followup_block(state: GoalState) -> str:
+    """Untrusted condition + fidelity for live followups; consume update flag."""
+    updated = bool(state.condition_updated_pending)
+    if updated:
+        take_condition_updated_pending()
+    return condition_prompt_block(state.condition, objective_updated=updated)
+
+
 def _budget_limited_response(state: GoalState) -> dict[str, Any]:
     """Build the budget-exhausted followup, naming whichever budget tripped.
 
@@ -348,15 +367,14 @@ def _budget_limited_response(state: GoalState) -> dict[str, Any]:
     budget was the one that tripped is misleading to whoever reads the
     followup.
     """
-    safe_condition = redact_secrets(state.condition, max_chars=None)
     if state.turns_used >= state.turn_budget:
         budget_label = f"Turn limit ({state.turn_budget})"
     else:
         budget_label = f"Wake tick limit ({state.wake_budget})"
+    block = _condition_followup_block(state)
     return {
         "followup_message": (
-            f"[GOAL BUDGET] {budget_label} reached. "
-            f"Wrap up current work and summarize progress toward: {safe_condition}"
+            f"[GOAL BUDGET] {budget_label} reached. {BUDGET_WRAPUP_RULE}\n" f"{block}"
         )
     }
 
@@ -369,7 +387,7 @@ def _continue_followup(state: GoalState, remaining: int) -> dict[str, Any]:
     ``_redact_payload_for_disk`` inside ``emit``.
     """
     remaining = max(0, remaining)
-    safe_condition = redact_secrets(state.condition, max_chars=None)
+    block = _condition_followup_block(state)
     if state.validation_command:
         safe_cmd = redact_command(state.validation_command)
         raw = (
@@ -378,15 +396,16 @@ def _continue_followup(state: GoalState, remaining: int) -> dict[str, Any]:
             '"this is complete" message is invalid. Run `manage status` and '
             f"continue. Run validation in-turn if needed "
             f"({safe_cmd}), then remaining-work audit, then evaluate. "
-            f"Goal: {safe_condition}"
+            f"{NO_AGENT_PAUSE_RULE} {block}"
         )
     else:
         raw = (
             f"[GOAL] Turn {state.turns_used}/{state.turn_budget} "
             f"({remaining} remaining). Status is still pursuing — an earlier "
             '"this is complete" message is invalid. Run `manage status` and '
-            f"continue working toward: {safe_condition}. "
-            "Then remaining-work audit, then evaluate via subagent."
+            "continue working toward the full original condition. "
+            "Then remaining-work audit, then evaluate via subagent. "
+            f"{NO_AGENT_PAUSE_RULE} {block}"
         )
     return {"followup_message": raw}
 
@@ -454,21 +473,22 @@ def handle_subagent_stop(payload: dict[str, Any] | None) -> dict[str, Any]:
     state = snapshot_goal()
     if state is None or not state.active or state.status != "pursuing":
         return {}
-    safe_condition = redact_secrets(state.condition, max_chars=None)
+    block = _condition_followup_block(state)
     if subagent_type == AUDIT_SUBAGENT_TYPE:
         message = (
             "[GOAL] The remaining-work auditor finished. Run `eval parse-audit` "
             "on its response now — REMAINING: implement that list; CLEAR: spawn "
-            "goal-evaluator. Status is still pursuing. Goal: "
-            f"{safe_condition}"
+            "goal-evaluator. Status is still pursuing. "
+            f"{NO_AGENT_PAUSE_RULE} {block}"
         )
     else:
         message = (
             "[GOAL] The evaluator subagent finished. Run `eval parse-result` on "
             "its response now — YES: `manage done` only if a CLEAR audit signal "
-            "also exists; NO: continue working toward: "
-            f"{safe_condition}. Status is still pursuing; an earlier "
-            '"this is complete" message is invalid.'
+            "also exists; NO: continue working toward the full original "
+            "condition. Status is still pursuing; an earlier "
+            '"this is complete" message is invalid. '
+            f"{NO_AGENT_PAUSE_RULE} {block}"
         )
     return {"followup_message": message}
 

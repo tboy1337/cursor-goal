@@ -161,14 +161,14 @@ def write_plugin(root: Path) -> Path:
         "name": PLUGIN_NAME,
         "version": version,
         "description": (
-            "Autonomous /goal loop for Cursor IDE "
-            "(multi-model maker!=checker + stop-hook safety net)"
+            "Cursor port of OpenAI Codex /goal "
+            "(maker!=checker + stop-hook safety net)"
         ),
         "author": {"name": "tboy1337"},
         "homepage": "https://github.com/tboy1337/cursor-goal",
         "repository": "https://github.com/tboy1337/cursor-goal",
         "license": "AGPL-3.0-only",
-        "keywords": ["goal", "agent", "automation", "cursor"],
+        "keywords": ["goal", "agent", "automation", "cursor", "codex"],
         "skills": "./skills/",
         "agents": "./agents/",
         "hooks": "./hooks/hooks.json",
@@ -185,7 +185,7 @@ def write_plugin(root: Path) -> Path:
         "name": "cursor-goal-marketplace",
         "owner": {"name": "tboy1337"},
         "metadata": {
-            "description": "cursor-goal autonomous /goal loop plugin",
+            "description": "Cursor port of OpenAI Codex /goal",
             "version": version,
             "pluginRoot": "plugins",
         },
@@ -214,6 +214,8 @@ def write_plugin(root: Path) -> Path:
     readme = plugin_root / "README.md"
     readme.write_text(
         "# cursor-goal (Cursor plugin)\n\n"
+        "This plugin is a Cursor port of OpenAI Codex `/goal`, not a "
+        "Claude Code skill.\n\n"
         "Teams/Enterprise: import this repository as a Team Marketplace "
         "(see repo `.cursor-plugin/marketplace.json`).\n\n"
         "Individuals: prefer `scripts/install-goal.sh` / `install-goal.ps1` "

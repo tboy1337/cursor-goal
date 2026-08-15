@@ -4,8 +4,8 @@ requires = [ "setuptools>=77" ]
 
 [project]
 name = "cursor-goal"
-version = "4.3.0"
-description = "Autonomous /goal loop harness for Cursor IDE (multi-model maker≠checker)"
+version = "4.4.0"
+description = "Cursor IDE port of OpenAI Codex /goal (multi-model maker≠checker)"
 readme = "README.md"
 license = "AGPL-3.0-only"
 license-files = [ "COPYING" ]

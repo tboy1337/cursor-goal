@@ -9,7 +9,7 @@ from typing import Any
 
 from cursor_goal.logging_config import get_logger
 from cursor_goal.state import MAX_TURN_BUDGET, clamp_turn_budget, clamp_wake_budget
-from cursor_goal.validation import redact_command
+from cursor_goal.validation import redact_command, weak_condition_warning
 
 logger = get_logger("cursor_goal.parse")
 
@@ -191,6 +191,22 @@ def parse_raw(raw: str) -> dict[str, Any]:  # pylint: disable=too-many-branches
 
     text = re.sub(r"^/goal\s*", "", text, count=1)
 
+    blocked_parts = text.split(None, 1)
+    if blocked_parts and blocked_parts[0].lower() == "blocked":
+        reason = blocked_parts[1].strip() if len(blocked_parts) > 1 else ""
+        if not reason:
+            raise ValueError('Usage: /goal blocked "<reason>"')
+        blocked: dict[str, Any] = {
+            "subcommand": "blocked",
+            "action": "blocked",
+            "condition": None,
+            "test_cmd": None,
+            "budget": None,
+            "reason": reason,
+        }
+        logger.info("Parsed subcommand=blocked reason=%r", reason)
+        return blocked
+
     if text in SUBCOMMANDS:
         action = "clear" if text in CLEAR_ALIASES else text
         result: dict[str, Any] = {
@@ -230,6 +246,10 @@ def parse_raw(raw: str) -> dict[str, Any]:  # pylint: disable=too-many-branches
                 f"Wake budget must be <= {MAX_TURN_BUDGET}, got {wake_budget}"
             )
         wake_budget = clamp_wake_budget(wake_budget)
+
+    weak = weak_condition_warning(condition)
+    if weak:
+        warning = f"{warning}; {weak}" if warning else weak
 
     result = {
         "subcommand": None,

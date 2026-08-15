@@ -91,11 +91,13 @@ ALLOWED_STATUSES = frozenset(
     {
         "pursuing",
         "paused",
+        "blocked",
         "achieved",
         "budget-limited",
         "unknown",
     }
 )
+BLOCK_STREAK_REQUIRED = 3
 _UPDATABLE_FIELDS = frozenset(
     {
         "active",
@@ -114,6 +116,10 @@ _UPDATABLE_FIELDS = frozenset(
         "last_validation_exit_code",
         "last_eval_verdict",
         "last_audit_verdict",
+        "last_block_reason",
+        "block_streak",
+        "last_block_turn_key",
+        "condition_updated_pending",
     }
 )
 LAST_STOP_RESPONSE_NAME = "last-stop-response.json"
@@ -447,6 +453,35 @@ def _set_last_audit_verdict(state: GoalState, value: Any) -> None:
     )
 
 
+def _set_last_block_reason(state: GoalState, value: Any) -> None:
+    state.last_block_reason = _require_field_chars(
+        "last_block_reason", str(value or "")
+    )
+
+
+def _set_block_streak(state: GoalState, value: Any) -> None:
+    streak = int(value)
+    if streak < 0:
+        raise ValueError(f"block_streak must be >= 0, got {streak}")
+    state.block_streak = streak
+
+
+def _set_last_block_turn_key(state: GoalState, value: Any) -> None:
+    state.last_block_turn_key = _require_field_chars(
+        "last_block_turn_key", str(value or "")
+    )
+
+
+def _set_condition_updated_pending(state: GoalState, value: Any) -> None:
+    if isinstance(value, bool):
+        state.condition_updated_pending = value
+        return
+    raise ValueError(
+        "condition_updated_pending must be a JSON boolean, got "
+        f"{type(value).__name__}: {value!r}"
+    )
+
+
 _FIELD_SETTERS: dict[str, Callable[[GoalState, Any], None]] = {
     "active": _set_active,
     "condition": _set_condition,
@@ -464,6 +499,10 @@ _FIELD_SETTERS: dict[str, Callable[[GoalState, Any], None]] = {
     "last_validation_exit_code": _set_last_validation_exit_code,
     "last_eval_verdict": _set_last_eval_verdict,
     "last_audit_verdict": _set_last_audit_verdict,
+    "last_block_reason": _set_last_block_reason,
+    "block_streak": _set_block_streak,
+    "last_block_turn_key": _set_last_block_turn_key,
+    "condition_updated_pending": _set_condition_updated_pending,
 }
 
 
@@ -493,6 +532,10 @@ class GoalState:  # pylint: disable=too-many-instance-attributes
     last_validation_exit_code: int | None = None
     last_eval_verdict: str = ""
     last_audit_verdict: str = ""
+    last_block_reason: str = ""
+    block_streak: int = 0
+    last_block_turn_key: str = ""
+    condition_updated_pending: bool = False
     schema_version: int = SCHEMA_VERSION
 
     def to_dict(self) -> dict[str, Any]:
@@ -521,6 +564,21 @@ class GoalState:  # pylint: disable=too-many-instance-attributes
                 f"supported={sorted(SUPPORTED_SCHEMA_VERSIONS)} "
                 "(clear ~/.cursor-goal/data/goal.json or recreate the goal)"
             )
+        try:
+            block_streak = int(data.get("block_streak", 0) or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid block_streak: {exc}") from exc
+        if block_streak < 0:
+            raise ValueError(f"block_streak must be >= 0, got {block_streak}")
+        if "condition_updated_pending" not in data:
+            condition_updated_pending = False
+        else:
+            try:
+                condition_updated_pending = _parse_active(
+                    data.get("condition_updated_pending")
+                )
+            except ValueError as exc:
+                raise ValueError(f"invalid condition_updated_pending: {exc}") from exc
 
         wake_budget_raw = data.get("wake_budget")
         if wake_budget_raw is None or wake_budget_raw == "":
@@ -617,6 +675,15 @@ class GoalState:  # pylint: disable=too-many-instance-attributes
             last_audit_verdict=_clamp_field_chars(
                 "last_audit_verdict", str(data.get("last_audit_verdict") or "")
             ),
+            last_block_reason=_clamp_field_chars(
+                "last_block_reason", str(data.get("last_block_reason") or "")
+            ),
+            block_streak=block_streak,
+            last_block_turn_key=_clamp_field_chars(
+                "last_block_turn_key",
+                str(data.get("last_block_turn_key") or ""),
+            ),
+            condition_updated_pending=condition_updated_pending,
             schema_version=SCHEMA_VERSION,
         )
 
@@ -766,6 +833,140 @@ def clear_protocol_signals() -> None:
     with goal_lock():
         _clear_eval_signal_unlocked()
         _clear_audit_signal_unlocked()
+
+
+def normalize_block_reason(reason: str) -> str:
+    """Collapse whitespace and case so the same blocker matches across turns."""
+    return " ".join(reason.strip().lower().split())
+
+
+def block_turn_key(state: GoalState) -> str:
+    """Identify a pursuing turn for blocked-streak accounting."""
+    return f"{int(state.turns_used)}:{int(state.wake_ticks)}"
+
+
+def reset_block_streak(state: GoalState) -> None:
+    """Start a fresh blocked audit (resume from blocked/paused)."""
+    state.block_streak = 0
+    state.last_block_reason = ""
+    state.last_block_turn_key = ""
+
+
+def take_condition_updated_pending() -> bool:
+    """Consume the one-shot objective-updated flag. Returns the prior value."""
+    consumed = False
+
+    def mutator(state: GoalState) -> None:
+        nonlocal consumed
+        consumed = bool(state.condition_updated_pending)
+        state.condition_updated_pending = False
+
+    try:
+        updated = mutate_goal(mutator)
+    except (OSError, GoalLockTimeoutError) as exc:
+        logger.warning("Could not consume condition_updated_pending: %s", exc)
+        return False
+    if updated is None:
+        return False
+    return consumed
+
+
+def record_block_attempt(reason: str) -> tuple[GoalState | None, str]:
+    """Record a same-reason blocked attempt under lock.
+
+    Returns ``(state, status)`` where status is ``missing``, ``not_pursuing``,
+    ``empty_reason``, ``recorded`` (streak still below threshold), or
+    ``blocked`` (threshold reached; continuation stops).
+    """
+    normalized = normalize_block_reason(reason)
+    if not normalized:
+        return None, "empty_reason"
+    with goal_lock():
+        state = load_goal()
+        if state is None:
+            return None, "missing"
+        if state.status != "pursuing" or not state.active:
+            logger.info(
+                "record_block_attempt refused status=%s active=%s",
+                state.status,
+                state.active,
+            )
+            return state, "not_pursuing"
+        key = block_turn_key(state)
+        same_turn = (
+            state.last_block_turn_key == key and state.last_block_reason == normalized
+        )
+        if same_turn:
+            logger.info(
+                "record_block_attempt same turn key=%s streak=%s reason=%r",
+                key,
+                state.block_streak,
+                normalized,
+            )
+            return state, "recorded"
+        if state.last_block_reason == normalized:
+            state.block_streak = int(state.block_streak) + 1
+        else:
+            state.block_streak = 1
+            state.last_block_reason = _require_field_chars(
+                "last_block_reason", normalized
+            )
+        state.last_block_turn_key = _require_field_chars("last_block_turn_key", key)
+        state.last_reason = _require_field_chars("last_reason", reason.strip())
+        became_blocked = state.block_streak >= BLOCK_STREAK_REQUIRED
+        if became_blocked:
+            state.status = "blocked"
+            state.active = False
+            logger.info(
+                "Goal blocked after streak=%s reason=%r",
+                state.block_streak,
+                normalized,
+            )
+        else:
+            logger.info(
+                "Block streak=%s/%s reason=%r turn=%s",
+                state.block_streak,
+                BLOCK_STREAK_REQUIRED,
+                normalized,
+                key,
+            )
+        _save_goal_unlocked(state)
+        return state, "blocked" if became_blocked else "recorded"
+
+
+def update_goal_condition(condition: str) -> tuple[GoalState | None, str]:
+    """Change the condition in place. Same ``created_at``; invalidate CLEAR+YES.
+
+    Returns ``(state, status)`` where status is ``ok``, ``missing``,
+    ``unchanged``, or ``not_updatable``.
+    """
+    cleaned = condition.strip()
+    if not cleaned:
+        return None, "empty"
+    with goal_lock():
+        state = load_goal()
+        if state is None:
+            return None, "missing"
+        if state.status in {"achieved", "budget-limited"}:
+            logger.info("update_goal_condition refused status=%s", state.status)
+            return state, "not_updatable"
+        if state.condition == cleaned:
+            logger.info(
+                "update_goal_condition unchanged created_at=%s", state.created_at
+            )
+            return state, "unchanged"
+        state.condition = _require_field_chars("condition", cleaned)
+        state.condition_updated_pending = True
+        state.last_eval_verdict = ""
+        state.last_audit_verdict = ""
+        _clear_eval_signal_unlocked()
+        _clear_audit_signal_unlocked()
+        _save_goal_unlocked(state)
+        logger.info(
+            "Updated goal condition in place created_at=%s pending=true",
+            state.created_at,
+        )
+        return state, "ok"
 
 
 def _clear_eval_signal_unlocked() -> None:

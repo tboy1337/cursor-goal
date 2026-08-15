@@ -2,6 +2,8 @@
 
 Operational limits of cursor-goal for real-world use. See also [troubleshooting](troubleshooting.md) and [SECURITY.md](../SECURITY.md).
 
+`/goal` is an OpenAI Codex feature (`codex-rs/ext/goal`). This package is a Cursor port of that loop, not a Claude Code skill. Differences that matter in practice: Cursor has no Codex-style hidden idle injection or per-token goal budget, so continuation is `stop` / `subagentStop` plus optional wake; completion is gated by a separate auditor + evaluator rather than a same-model self-audit.
+
 ## Continuation: documented hooks are primary, wake is a best-effort backup
 
 Cursor documents the [`stop` and `subagentStop` hooks](https://cursor.com/docs/hooks.md) with `followup_message` and `loop_limit: null` as the supported continuation contract. This harness registers **both**:
@@ -25,6 +27,16 @@ Manual `wake tick` **coalesces** (skips emit) when a recent *wake*-sourced nudge
 If wake arm fails during create/resume, the harness leaves the goal **`paused`** (exit 1) rather than pursuing without an armed wake.
 
 Tokenless / plain-int `wake.pid` files (pre-3.0): cleared without kill. If the PID is still alive the harness writes `wake.orphan` and `manage doctor` hard-fails until you confirm no leftover loop and re-arm.
+
+## Blocked is the honest stop; pause is user-owned
+
+There is no model-initiated pause. `manage pause` is for `/goal pause` from the user. A repeated impasse (missing secret, permission denied, waiting on the user) is `manage blocked "<reason>"`. The **same** normalized reason on **3 consecutive** pursuing turns (distinct `turns_used`/`wake_ticks` keys) sets `status=blocked`, disarms wake, and stop/wake emit no continuation. Resume from blocked starts a fresh streak. Never mark blocked because the work is hard.
+
+Mid-goal condition edits use `manage update` (same `created_at`, CLEAR+YES invalidated). Agents should not `create --force` a weaker condition.
+
+## Condition text is untrusted data
+
+Followups and eval/audit prompts wrap the stored condition in `<untrusted_condition>` after secret redaction and HTML-escaping. Protocol (CLEAR+YES, remaining-work auditor, fidelity) outranks anything written in the condition. Heuristic redaction is still incomplete — do not put production secrets in conditions.
 
 ## Shell validation defaults to denied
 

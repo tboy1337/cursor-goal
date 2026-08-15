@@ -219,3 +219,30 @@ def test_parse_omits_unset_optional_flags() -> None:
     assert "force" not in result
     assert "wake_budget" not in result
     assert "workdir" not in result
+
+
+def test_parse_blocked_subcommand() -> None:
+    result = parse_raw("blocked missing API key")
+    assert result["action"] == "blocked"
+    assert result["subcommand"] == "blocked"
+    assert result["reason"] == "missing API key"
+    assert result["condition"] is None
+    with pytest.raises(ValueError, match="blocked"):
+        parse_raw("blocked")
+    with pytest.raises(ValueError, match="blocked"):
+        parse_raw("/goal blocked")
+
+
+def test_parse_update_the_readme_is_create() -> None:
+    result = parse_raw("update the README")
+    assert result["action"] == "create"
+    assert result["condition"] == "update the README"
+
+
+def test_parse_weak_condition_warning() -> None:
+    result = parse_raw("make progress")
+    assert result["action"] == "create"
+    assert "warning" in result
+    assert "invent --test" in result["warning"]
+    strong = parse_raw("all tests pass")
+    assert "warning" not in strong

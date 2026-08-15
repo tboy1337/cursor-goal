@@ -1,6 +1,8 @@
 # Troubleshooting
 
-Quick fixes for common install and continuation failures. Also run:
+Quick fixes for common install and continuation failures. cursor-goal is a Cursor port of OpenAI Codex `/goal`, not a Claude Code skill.
+
+Also run:
 
 ```bash
 # Unix / macOS / WSL

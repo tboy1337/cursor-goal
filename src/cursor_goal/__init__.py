@@ -1,5 +1,8 @@
-"""cursor-goal harness: parse, manage, evaluate, stop-hook, and wake automation."""
+"""cursor-goal harness: Cursor port of OpenAI Codex /goal.
+
+Parse, manage, evaluate, stop-hook, and wake automation for Cursor IDE.
+"""
 
 from __future__ import annotations
 
-__version__ = "4.3.0"
+__version__ = "4.4.0"

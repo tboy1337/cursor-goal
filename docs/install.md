@@ -1,5 +1,7 @@
 # Install cursor-goal
 
+cursor-goal is a **Cursor IDE port of OpenAI Codex `/goal`**, not a Claude Code skill. Install it into Cursor; do not expect Claude Code's skill layout or Codex's native idle injection.
+
 ## Requirements
 
 - **Python 3.12+** on `PATH` (`python3` / `python` / Windows `py -3`)
@@ -61,10 +63,10 @@ On upgrade, a previous skill tree is copied to `~/.cursor/skills/goal.bak.<UTC>`
 
 ### Install from a tagged release
 
-Package version **4.3.0** pins the clone branch below. Use it when tag `v4.3.0` exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If `git clone --branch` fails, clone `main` with the Quick install steps above ([release.md](release.md)).
+Package version **4.4.0** pins the clone branch below. Use it when tag `v4.4.0` exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If `git clone --branch` fails, clone `main` with the Quick install steps above ([release.md](release.md)).
 
 ```bash
-git clone --branch v4.3.0 https://github.com/tboy1337/cursor-goal.git
+git clone --branch v4.4.0 https://github.com/tboy1337/cursor-goal.git
 cd cursor-goal
 ./scripts/install-goal.sh   # or install-goal.ps1 on Windows
 ```

@@ -1,6 +1,6 @@
 # Platform Compatibility
 
-cursor-goal targets **Cursor IDE only**. The harness is a **Python 3.12+** package; agent protocol and stop-hook auto-continuation are Cursor-specific.
+cursor-goal targets **Cursor IDE only**. The harness is a **Python 3.12+** package; agent protocol and stop-hook auto-continuation are Cursor-specific. `/goal` itself is an OpenAI Codex feature; this package is the Cursor port, not a Claude Code skill.
 
 **Install:** `./scripts/install-goal.sh` or `.\scripts\install-goal.ps1` from a full clone (see [install.md](install.md)).
 

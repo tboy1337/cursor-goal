@@ -849,6 +849,8 @@ def test_manage_help_and_unknown(goal_home: Path) -> None:
     code, out, err = run_cli("manage", "nope")
     assert code == 1
     assert "Usage:" in out
+    assert "blocked" in out
+    assert "update" in out
     assert "unknown manage command" in err
 
 
@@ -1941,3 +1943,229 @@ def test_doctor_workdir_unusable_warning(
     code, out, _err = run_cli("manage", "doctor")
     assert code == 0
     assert "workdir gone" in out
+
+
+def test_manage_blocked_requires_three_turns(goal_home: Path) -> None:
+    from cursor_goal.state import update_goal_fields
+
+    assert run_cli("manage", "create", "ship it")[0] == 0
+    code, out, err = run_cli("manage", "blocked", "missing", "deploy", "key")
+    assert code == 1
+    assert "1/3" in out
+    data = load_goal_json(goal_home)
+    assert data["status"] == "pursuing"
+    assert data["block_streak"] == 1
+    # Same turn: streak stays 1.
+    assert run_cli("manage", "blocked", "missing deploy key")[0] == 1
+    assert load_goal_json(goal_home)["block_streak"] == 1
+    update_goal_fields(turns_used=1)
+    assert run_cli("manage", "blocked", "missing deploy key")[0] == 1
+    assert load_goal_json(goal_home)["block_streak"] == 2
+    update_goal_fields(turns_used=2)
+    code, out, _err = run_cli("manage", "blocked", "missing deploy key")
+    assert code == 0
+    data = load_goal_json(goal_home)
+    assert data["status"] == "blocked"
+    assert data["active"] is False
+    assert "Goal blocked" in out
+    code, status_out, _ = run_cli("manage", "status")
+    assert code == 0
+    assert "Block streak:" in status_out
+    # Resume resets streak.
+    assert run_cli("manage", "resume")[0] == 0
+    data = load_goal_json(goal_home)
+    assert data["status"] == "pursuing"
+    assert data["block_streak"] == 0
+    assert data["last_block_reason"] == ""
+
+
+def test_manage_blocked_errors(goal_home: Path) -> None:
+    assert run_cli("manage", "blocked")[0] == 1
+    assert run_cli("manage", "blocked", "waiting")[0] == 1
+    run_cli("manage", "create", "g")
+    run_cli("manage", "pause")
+    code, _out, err = run_cli("manage", "blocked", "waiting")
+    assert code == 1
+    assert "pursuing" in err.lower()
+
+
+def test_manage_update_invalidates_protocol(goal_home: Path) -> None:
+    from cursor_goal.stop import handle_stop
+
+    assert run_cli("manage", "create", "old outcome")[0] == 0
+    created = load_goal_json(goal_home)["created_at"]
+    run_cli("eval", "parse-audit", "CLEAR: nothing in-scope remains")
+    run_cli("eval", "parse-result", "YES: done")
+    assert (goal_home / "goal-eval-done").is_file()
+    assert (goal_home / "goal-audit-clear").is_file()
+    code, out, err = run_cli("manage", "update", "new broader outcome")
+    assert code == 0
+    assert "updated" in out.lower()
+    data = load_goal_json(goal_home)
+    assert data["condition"] == "new broader outcome"
+    assert data["created_at"] == created
+    assert data["condition_updated_pending"] is True
+    assert not (goal_home / "goal-eval-done").is_file()
+    assert not (goal_home / "goal-audit-clear").is_file()
+    response = handle_stop({"status": "completed"})
+    assert "Objective updated" in response["followup_message"]
+    assert "new broader outcome" in response["followup_message"]
+    assert load_goal_json(goal_home)["condition_updated_pending"] is False
+    assert run_cli("manage", "update", "new broader outcome")[0] == 0
+    assert run_cli("manage", "update")[0] == 1
+    run_cli("manage", "clear")
+    assert run_cli("manage", "update", "x")[0] == 1
+
+
+def test_manage_create_warns_on_weak_condition(goal_home: Path) -> None:
+    code, _out, err = run_cli("manage", "create", "make progress")
+    assert code == 0
+    assert "Warning" in err
+    assert "invent --test" in err
+
+
+def test_manage_update_error_paths(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+    from cursor_goal.state import (
+        MAX_FIELD_CHARS,
+        CorruptGoalError,
+        GoalLockTimeoutError,
+    )
+
+    monkeypatch.setattr(manage_mod, "_refuse_if_data_dir_unsafe", lambda: "unsafe")
+    assert run_cli("manage", "update", "x")[0] == 1
+    monkeypatch.setattr(manage_mod, "_refuse_if_data_dir_unsafe", lambda: None)
+
+    assert run_cli("manage", "create", "orig")[0] == 0
+    code, _out, err = run_cli("manage", "update", "x" * (MAX_FIELD_CHARS + 1))
+    assert code == 1
+    assert "exceeds" in err
+
+    monkeypatch.setattr(
+        manage_mod,
+        "snapshot_goal",
+        lambda **_k: (_ for _ in ()).throw(CorruptGoalError("bad json")),
+    )
+    code, _out, err = run_cli("manage", "update", "newer")
+    assert code == 1
+    assert "bad json" in err
+    monkeypatch.setattr(
+        manage_mod,
+        "snapshot_goal",
+        lambda **_k: None,
+    )
+    monkeypatch.setattr(
+        manage_mod,
+        "update_goal_condition",
+        lambda _c: (_ for _ in ()).throw(GoalLockTimeoutError("locked")),
+    )
+    code, _out, err = run_cli("manage", "update", "newer")
+    assert code == 1
+    assert "locked" in err
+    monkeypatch.setattr(
+        manage_mod,
+        "update_goal_condition",
+        lambda _c: (_ for _ in ()).throw(ValueError("too long")),
+    )
+    code, _out, err = run_cli("manage", "update", "newer")
+    assert code == 1
+    assert "too long" in err
+    monkeypatch.setattr(
+        manage_mod,
+        "update_goal_condition",
+        lambda _c: (None, "empty"),
+    )
+    assert run_cli("manage", "update", "newer")[0] == 1
+    from cursor_goal.state import GoalState
+
+    monkeypatch.setattr(
+        manage_mod,
+        "update_goal_condition",
+        lambda _c: (GoalState(status="achieved"), "not_updatable"),
+    )
+    code, _out, err = run_cli("manage", "update", "newer")
+    assert code == 1
+    assert "Cannot update" in err
+
+
+def test_manage_blocked_error_paths(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+    from cursor_goal.state import CorruptGoalError, GoalLockTimeoutError, GoalState
+
+    monkeypatch.setattr(manage_mod, "_refuse_if_data_dir_unsafe", lambda: "unsafe")
+    assert run_cli("manage", "blocked", "waiting")[0] == 1
+    monkeypatch.setattr(manage_mod, "_refuse_if_data_dir_unsafe", lambda: None)
+
+    monkeypatch.setattr(
+        manage_mod,
+        "snapshot_goal",
+        lambda **_k: (_ for _ in ()).throw(CorruptGoalError("bad json")),
+    )
+    code, _out, err = run_cli("manage", "blocked", "waiting")
+    assert code == 1
+    assert "bad json" in err
+    monkeypatch.setattr(manage_mod, "snapshot_goal", lambda **_k: None)
+    monkeypatch.setattr(
+        manage_mod,
+        "record_block_attempt",
+        lambda _r: (_ for _ in ()).throw(GoalLockTimeoutError("locked")),
+    )
+    code, _out, err = run_cli("manage", "blocked", "waiting")
+    assert code == 1
+    assert "locked" in err
+    monkeypatch.setattr(
+        manage_mod,
+        "record_block_attempt",
+        lambda _r: (_ for _ in ()).throw(ValueError("too long")),
+    )
+    code, _out, err = run_cli("manage", "blocked", "waiting")
+    assert code == 1
+    assert "too long" in err
+    monkeypatch.setattr(
+        manage_mod,
+        "record_block_attempt",
+        lambda _r: (None, "empty_reason"),
+    )
+    assert run_cli("manage", "blocked", "waiting")[0] == 1
+    monkeypatch.setattr(
+        manage_mod,
+        "record_block_attempt",
+        lambda _r: (None, "missing"),
+    )
+    code, out, _err = run_cli("manage", "blocked", "waiting")
+    assert code == 1
+    assert "No active goal" in out
+    monkeypatch.setattr(
+        manage_mod,
+        "record_block_attempt",
+        lambda _r: (GoalState(status="paused"), "not_pursuing"),
+    )
+    code, _out, err = run_cli("manage", "blocked", "waiting")
+    assert code == 1
+    assert "pursuing" in err.lower()
+    monkeypatch.setattr(
+        manage_mod,
+        "record_block_attempt",
+        lambda _r: (
+            GoalState(
+                status="blocked",
+                active=False,
+                block_streak=3,
+                last_block_reason="waiting",
+            ),
+            "blocked",
+        ),
+    )
+
+    def boom_disarm(*, kill_loop: bool = True) -> None:
+        del kill_loop
+        raise OSError("disarm failed")
+
+    monkeypatch.setattr(manage_mod, "wake_disarm", boom_disarm)
+    code, out, _err = run_cli("manage", "blocked", "waiting")
+    assert code == 0
+    assert "Goal blocked" in out

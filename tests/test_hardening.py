@@ -40,14 +40,25 @@ def test_apply_field_variants(goal_home: Path) -> None:
     _apply_field(state, "last_validation_exit_code", 3)
     _apply_field(state, "last_eval_verdict", None)
     _apply_field(state, "last_audit_verdict", None)
+    _apply_field(state, "last_block_reason", None)
+    _apply_field(state, "block_streak", 2)
+    _apply_field(state, "last_block_turn_key", "1:0")
+    _apply_field(state, "condition_updated_pending", True)
+    _apply_field(state, "status", "blocked")
     _apply_field(state, "active", False)
     assert state.active is False
+    assert state.condition_updated_pending is True
+    assert state.block_streak == 2
     with pytest.raises(ValueError, match="turns_used"):
         _apply_field(state, "turns_used", -1)
     with pytest.raises(ValueError, match="unknown"):
         _apply_field(state, "not_a_field", 1)
     with pytest.raises(ValueError, match="status"):
         _apply_field(state, "status", "bogus")
+    with pytest.raises(ValueError, match="block_streak"):
+        _apply_field(state, "block_streak", -1)
+    with pytest.raises(ValueError, match="condition_updated_pending"):
+        _apply_field(state, "condition_updated_pending", "yes")
 
 
 def test_load_goal_negative_turns(goal_home: Path) -> None:

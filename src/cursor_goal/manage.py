@@ -1,4 +1,4 @@
-"""Goal lifecycle: create, status, pause, resume, done, clear.
+"""Goal lifecycle: create, status, pause, resume, update, blocked, done, clear.
 
 Install / health diagnostics (``manage doctor``) live in
 :mod:`cursor_goal.doctor`; ``cmd_doctor`` (the CLI dispatch target) and the
@@ -22,6 +22,7 @@ from cursor_goal.doctor import _validation_mode, _wake_loop_shell_hint, cmd_doct
 from cursor_goal.logging_config import get_logger
 from cursor_goal.paths import harness_cmd_report
 from cursor_goal.state import (
+    BLOCK_STREAK_REQUIRED,
     MAX_FIELD_CHARS,
     MAX_TURN_BUDGET,
     CorruptGoalError,
@@ -36,15 +37,19 @@ from cursor_goal.state import (
     mutate_goal,
     normalize_workdir,
     now_iso,
+    record_block_attempt,
     refuse_if_acl_harden_failed,
     refuse_if_data_dir_insecure,
+    reset_block_streak,
     snapshot_goal,
+    update_goal_condition,
 )
 from cursor_goal.validation import (
     deny_shell_enabled,
     redact_command,
     redact_secrets,
     try_split_argv,
+    weak_condition_warning,
 )
 from cursor_goal.wake import NOTIFY_PATTERN
 from cursor_goal.wake import arm as wake_arm
@@ -381,6 +386,7 @@ def cmd_create(argv: list[str]) -> int:
     _print_created_goal_summary(
         args, state, turn_budget=turn_budget, wake_budget=wake_budget
     )
+    _print_weak_condition_warning(args.condition)
     # Status reflects real state: wake-on create stays paused until activate.
     wake_exit_code = _finalize_create_wake_state(wake_on=wake_on)
     if wake_exit_code is not None:
@@ -420,6 +426,15 @@ def cmd_status(_argv: list[str]) -> int:  # pylint: disable=too-many-branches
     print(f"  Active: {str(display_active).lower()}")
     print(f"  Status: {state.status}")
     print(f"  Condition: {redact_secrets(state.condition, max_chars=None)}")
+    if state.block_streak:
+        print(f"  Block streak: {state.block_streak} / {BLOCK_STREAK_REQUIRED}")
+        if state.last_block_reason:
+            print(
+                "  Last block reason: "
+                f"{redact_secrets(state.last_block_reason, max_chars=500)}"
+            )
+    if state.condition_updated_pending:
+        print("  Condition updated: pending (next followup will note it)")
     print(f"  Progress: {state.turns_used} / {state.turn_budget} turns")
     print(f"  Wake ticks: {state.wake_ticks} / {state.wake_budget}")
     print(f"  Schema: {state.schema_version}")
@@ -518,8 +533,11 @@ def cmd_pause(_argv: list[str]) -> int:
     return 0
 
 
+_RESUMABLE_STATUSES = frozenset({"paused", "blocked"})
+
+
 def _load_resumable_goal() -> GoalState | None:
-    """Load the current goal and confirm it is ``paused``.
+    """Load the current goal and confirm it is ``paused`` or ``blocked``.
 
     Prints a ``[goal] ...`` diagnostic and returns ``None`` for every
     failure mode; callers only need to check for ``None``.
@@ -532,8 +550,11 @@ def _load_resumable_goal() -> GoalState | None:
     if current is None:
         print("[goal] No goal to resume.")
         return None
-    if current.status != "paused":
-        print(f"[goal] Cannot resume: goal is '{current.status}', not 'paused'.")
+    if current.status not in _RESUMABLE_STATUSES:
+        print(
+            f"[goal] Cannot resume: goal is '{current.status}', "
+            "not 'paused' or 'blocked'."
+        )
         return None
     return current
 
@@ -554,8 +575,12 @@ def cmd_resume(_argv: list[str]) -> int:
         return _pause_after_arm_failure(arm_result.detail)
 
     def mutator(state: GoalState) -> None:
-        if state.status != "paused":
-            raise ValueError(f"Cannot resume: goal is '{state.status}', not 'paused'.")
+        if state.status not in _RESUMABLE_STATUSES:
+            raise ValueError(
+                f"Cannot resume: goal is '{state.status}', "
+                "not 'paused' or 'blocked'."
+            )
+        reset_block_streak(state)
         state.status = "pursuing"
         state.active = True
 
@@ -580,6 +605,142 @@ def cmd_resume(_argv: list[str]) -> int:
             "Tip: CURSOR_GOAL_LOG_FILE=1 for durable diagnostics."
         )
     return 0
+
+
+def _print_weak_condition_warning(condition: str) -> None:
+    """Warn on activity-only conditions; never invent --test."""
+    warning = weak_condition_warning(condition)
+    if warning is None:
+        return
+    print(f"[goal] Warning: {warning}", file=sys.stderr)
+
+
+def cmd_update(argv: list[str]) -> int:
+    """Change the condition in place without a new goal identity."""
+    unsafe = _refuse_if_data_dir_unsafe()
+    if unsafe is not None:
+        print(unsafe, file=sys.stderr)
+        return 1
+    condition = " ".join(argv).strip()
+    if not condition:
+        print(
+            '[goal] Error: Usage: cursor-goal manage update "<condition>"',
+            file=sys.stderr,
+        )
+        return 1
+    if len(condition) > MAX_FIELD_CHARS:
+        print(
+            f"[goal] Error: condition exceeds {MAX_FIELD_CHARS} character limit.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        snapshot_goal(raise_corrupt=True)
+    except CorruptGoalError as exc:
+        print(f"[goal] Error: {exc}", file=sys.stderr)
+        return 1
+    try:
+        state, status = update_goal_condition(condition)
+    except GoalLockTimeoutError as exc:
+        print(f"[goal] Error: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"[goal] Error: {exc}", file=sys.stderr)
+        return 1
+    if status == "missing":
+        print("[goal] No goal to update. Create one first.")
+        return 1
+    if status == "empty":
+        print("[goal] Error: condition must not be empty.", file=sys.stderr)
+        return 1
+    if status == "not_updatable":
+        print(
+            "[goal] Cannot update: goal is "
+            f"'{state.status if state else '?'}'. "
+            "Resume or create a new goal.",
+            file=sys.stderr,
+        )
+        return 1
+    if status == "unchanged":
+        print("[goal] Condition unchanged.")
+        return 0
+    if state is None:
+        print("[goal] No goal to update. Create one first.")
+        return 1
+    print(
+        "[goal] Goal condition updated (same identity). CLEAR+YES invalidated. "
+        f"Continuing toward: {redact_secrets(state.condition, max_chars=None)}"
+    )
+    _print_weak_condition_warning(state.condition)
+    return 0
+
+
+def cmd_blocked(argv: list[str]) -> int:
+    """Record a repeated impasse; block continuation after 3 same-reason turns."""
+    unsafe = _refuse_if_data_dir_unsafe()
+    if unsafe is not None:
+        print(unsafe, file=sys.stderr)
+        return 1
+    reason = " ".join(argv).strip()
+    if not reason:
+        print(
+            '[goal] Error: Usage: cursor-goal manage blocked "<reason>"',
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        snapshot_goal(raise_corrupt=True)
+    except CorruptGoalError as exc:
+        print(f"[goal] Error: {exc}", file=sys.stderr)
+        return 1
+    try:
+        state, status = record_block_attempt(reason)
+    except GoalLockTimeoutError as exc:
+        print(f"[goal] Error: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"[goal] Error: {exc}", file=sys.stderr)
+        return 1
+    if status == "empty_reason":
+        print("[goal] Error: block reason must not be empty.", file=sys.stderr)
+        return 1
+    if status == "missing":
+        print("[goal] No active goal to mark blocked.")
+        return 1
+    if status == "not_pursuing":
+        print(
+            "[goal] Cannot record blocked: goal is "
+            f"'{state.status if state else '?'}' (must be pursuing).",
+            file=sys.stderr,
+        )
+        return 1
+    if state is None:
+        print("[goal] No active goal to mark blocked.")
+        return 1
+    if status == "blocked":
+        try:
+            wake_disarm(kill_loop=True)
+        except OSError as exc:
+            logger.warning("Could not disarm wake after blocked: %s", exc)
+        print(
+            f"[goal] Goal blocked after {state.block_streak} consecutive turns: "
+            f"{redact_secrets(state.last_block_reason, max_chars=500)}"
+        )
+        print(
+            "[goal] Auto-continuation stopped. User: /goal resume after "
+            "resolving the blocker, or /goal clear."
+        )
+        return 0
+    print(
+        f"[goal] Block recorded ({state.block_streak}/{BLOCK_STREAK_REQUIRED}): "
+        f"{redact_secrets(state.last_block_reason, max_chars=500)}"
+    )
+    print(
+        "[goal] Same blocker must repeat on "
+        f"{BLOCK_STREAK_REQUIRED} consecutive pursuing turns "
+        "(distinct stop/wake ticks). Status remains pursuing."
+    )
+    return 1
 
 
 def cmd_done(argv: list[str]) -> int:
@@ -822,6 +983,8 @@ def cmd_manage(argv: list[str]) -> int:
         "status": cmd_status,
         "pause": cmd_pause,
         "resume": cmd_resume,
+        "update": cmd_update,
+        "blocked": cmd_blocked,
         "done": cmd_done,
         "clear": cmd_clear,
         "doctor": cmd_doctor,
@@ -845,8 +1008,10 @@ def _print_help() -> int:
     print("  status     Show current goal state")
     print("  doctor     Install / health diagnostics")
     print("  harness-cmd  Print resolved run_goal.py / wake loop invocation")
-    print("  pause      Pause auto-continuation")
-    print("  resume     Resume a paused goal")
+    print("  pause      Pause auto-continuation (user /goal pause only)")
+    print("  resume     Resume a paused or blocked goal")
+    print('  update "<condition>"  Change condition in place (invalidates CLEAR+YES)')
+    print('  blocked "<reason>"    Record an impasse; blocks after 3 same-reason turns')
     print("  done       Mark goal as achieved (requires YES + CLEAR signals)")
     print("  clear      Remove goal entirely")
     return 0

@@ -1,7 +1,7 @@
 {
   "name": "cursor-goal",
-  "version": "4.3.0",
-  "description": "Autonomous /goal loop for Cursor IDE (multi-model maker!=checker + stop-hook safety net)",
+  "version": "4.4.0",
+  "description": "Cursor port of OpenAI Codex /goal (maker!=checker + stop-hook safety net)",
   "author": {
     "name": "tboy1337"
   },
@@ -12,7 +12,8 @@
     "goal",
     "agent",
     "automation",
-    "cursor"
+    "cursor",
+    "codex"
   ],
   "skills": "./skills/",
   "agents": "./agents/",
