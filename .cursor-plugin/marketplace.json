@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Cursor port of OpenAI Codex /goal",
-    "version": "4.4.2",
+    "version": "4.5.0",
     "pluginRoot": "plugins"
   },
   "plugins": [
@@ -13,7 +13,7 @@
       "name": "cursor-goal",
       "source": "cursor-goal",
       "description": "Cursor port of OpenAI Codex /goal (maker!=checker + stop-hook safety net)",
-      "version": "4.4.2",
+      "version": "4.5.0",
       "license": "AGPL-3.0-only",
       "keywords": [
         "goal",

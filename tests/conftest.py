@@ -78,3 +78,34 @@ def run_cli_stdin(stdin_text: str, *args: str) -> tuple[int, str, str]:
 
 def load_goal_json(data_dir: Path) -> dict:
     return json.loads((data_dir / "goal.json").read_text(encoding="utf-8"))
+
+
+def write_explored_tree(root: Path) -> list[Path]:
+    """Create six files in three directories for broad CLEAR evidence."""
+    rels = [
+        Path("src") / "a.py",
+        Path("src") / "b.py",
+        Path("ci") / "c.yml",
+        Path("ci") / "d.yml",
+        Path("docs") / "e.md",
+        Path("docs") / "f.md",
+    ]
+    files: list[Path] = []
+    for rel in rels:
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x\n", encoding="utf-8")
+        files.append(path)
+    return files
+
+
+def explored_clear_text(
+    files: list[Path],
+    *,
+    root: Path,
+    reason: str = "nothing remains",
+) -> str:
+    """Auditor body with EXPLORED cites plus a CLEAR verdict line."""
+    rels = [path.relative_to(root).as_posix() for path in files]
+    listed = "\n".join(f"- {rel}" for rel in rels)
+    return f"EXPLORED:\n{listed}\nCLEAR: {reason}\n"

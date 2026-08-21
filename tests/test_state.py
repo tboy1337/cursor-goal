@@ -16,11 +16,13 @@ from cursor_goal.logging_config import get_logger
 from cursor_goal.state import (
     NOGIT_TREE_FINGERPRINT,
     GoalState,
+    audit_confirm_signal_tree_stale,
     audit_signal_tree_stale,
     clear_eval_signal,
     clear_protocol_signals,
     compute_tree_fingerprint,
     data_dir,
+    has_audit_confirm_signal,
     has_audit_signal,
     has_eval_signal,
     load_goal,
@@ -362,9 +364,22 @@ def test_clear_protocol_signals_removes_yes_and_clear(goal_home: Path) -> None:
     record_parse_audit("CLEAR", "nothing remains")
     assert has_eval_signal() is True
     assert has_audit_signal() is True
+    record_parse_audit(
+        "CLEAR",
+        "confirm independent",
+        confirm=True,
+        response_text="EXPLORED:\nCLEAR: confirm independent\n",
+    )
+    assert has_audit_confirm_signal() is True
     clear_protocol_signals()
     assert has_eval_signal() is False
     assert has_audit_signal() is False
+    assert has_audit_confirm_signal() is False
+
+
+def test_has_audit_confirm_signal_no_goal(goal_home: Path) -> None:
+    assert has_audit_confirm_signal() is False
+    assert audit_confirm_signal_tree_stale() is False
 
 
 def test_compute_tree_fingerprint_nogit(tmp_path: Path) -> None:

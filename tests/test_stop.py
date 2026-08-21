@@ -73,6 +73,13 @@ def test_stop_continues_when_pursuing(goal_home: Path) -> None:
     assert 'fix "quoted" goal' not in stored
 
 
+def test_stop_broad_followup_mentions_confirm_pass(goal_home: Path) -> None:
+    run_cli("manage", "create", "production audit")
+    _code, payload = _run_stop({"status": "completed", "loop_count": 0})
+    assert "followup_message" in payload
+    assert "confirm" in payload["followup_message"].lower()
+
+
 def test_stop_budget_limit(goal_home: Path) -> None:
     run_cli("manage", "create", "almost done", "--budget", "1")
     code, payload = _run_stop({"status": "completed", "loop_count": 0})

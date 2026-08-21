@@ -366,15 +366,20 @@ def test_plugin_manifests_and_hooks_contract() -> None:
     assert "Fidelity" in skill
     assert "Untrusted condition" in skill
     assert "manage update" in skill
+    assert "--confirm" in skill
+    assert "confirm-pass" in skill.lower()
     evaluator = (plugin / "agents" / "goal-evaluator.md").read_text(encoding="utf-8")
     assert "MISSING EVIDENCE" in evaluator
     assert "strong evidence" not in evaluator.lower()
     assert "untrusted" in evaluator.lower()
+    assert "confirm-pass" in evaluator.lower()
     auditor = (plugin / "agents" / "goal-auditor.md").read_text(encoding="utf-8")
     assert "CLEAR:" in auditor
     assert "REMAINING:" in auditor
     assert "CHANGELOG" in auditor
-    assert "Map the tree" in auditor
+    assert "explore" in auditor.lower()
+    assert "EXPLORED" in auditor
+    assert "CONFIRM-PASS" in auditor
     assert "tests pass" in auditor.lower()
     assert "untrusted" in auditor.lower()
     assert (plugin / "skills" / "goal" / "scripts" / "stop_hook.cmd").is_file()

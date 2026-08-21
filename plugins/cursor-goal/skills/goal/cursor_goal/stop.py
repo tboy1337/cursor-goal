@@ -30,6 +30,7 @@ from cursor_goal.validation import (
     BUDGET_WRAPUP_RULE,
     NO_AGENT_PAUSE_RULE,
     condition_prompt_block,
+    is_broad_condition,
     redact_command,
 )
 from cursor_goal.wake import disarm as wake_disarm
@@ -388,6 +389,13 @@ def _continue_followup(state: GoalState, remaining: int) -> dict[str, Any]:
     """
     remaining = max(0, remaining)
     block = _condition_followup_block(state)
+    broad_note = ""
+    if is_broad_condition(state.condition):
+        broad_note = (
+            " Broad condition: after a primary CLEAR, spawn a new "
+            "goal-auditor with `eval audit-prompt --confirm` and "
+            "`eval parse-audit --confirm`."
+        )
     if state.validation_command:
         safe_cmd = redact_command(state.validation_command)
         raw = (
@@ -396,7 +404,7 @@ def _continue_followup(state: GoalState, remaining: int) -> dict[str, Any]:
             '"this is complete" message is invalid. Run `manage status` and '
             f"continue. Run validation in-turn if needed "
             f"({safe_cmd}), then remaining-work audit, then evaluate. "
-            f"{NO_AGENT_PAUSE_RULE} {block}"
+            f"{NO_AGENT_PAUSE_RULE}{broad_note} {block}"
         )
     else:
         raw = (
@@ -405,7 +413,7 @@ def _continue_followup(state: GoalState, remaining: int) -> dict[str, Any]:
             '"this is complete" message is invalid. Run `manage status` and '
             "continue working toward the full original condition. "
             "Then remaining-work audit, then evaluate via subagent. "
-            f"{NO_AGENT_PAUSE_RULE} {block}"
+            f"{NO_AGENT_PAUSE_RULE}{broad_note} {block}"
         )
     return {"followup_message": raw}
 

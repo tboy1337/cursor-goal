@@ -12,6 +12,7 @@ import pytest
 
 from cursor_goal.evaluate import (
     MISSING_AUDIT_CLEAR,
+    MISSING_AUDIT_CONFIRM,
     MISSING_VALIDATION_EVIDENCE,
     _emit_prompt,
     parse_audit_text,
@@ -19,7 +20,7 @@ from cursor_goal.evaluate import (
     validation_evidence_missing,
 )
 from cursor_goal.state import GoalState, load_goal, save_goal
-from tests.conftest import run_cli
+from tests.conftest import explored_clear_text, run_cli, write_explored_tree
 
 
 def test_eval_prompt_active_goal(goal_home: Path) -> None:
@@ -347,6 +348,34 @@ def test_eval_validate_clears_clear_and_yes(goal_home: Path) -> None:
     assert MISSING_AUDIT_CLEAR in prompt
 
 
+def test_eval_validate_clears_confirm_flag(goal_home: Path, tmp_path: Path) -> None:
+    work = tmp_path / "proj"
+    files = write_explored_tree(work)
+    cmd = f'{sys.executable} -c "print(1)"'
+    assert (
+        run_cli(
+            "manage",
+            "create",
+            "production audit",
+            "--test",
+            cmd,
+            "--workdir",
+            str(work),
+        )[0]
+        == 0
+    )
+    primary = explored_clear_text(files, root=work, reason="primary")
+    confirm = explored_clear_text(files, root=work, reason="confirm")
+    assert run_cli("eval", "parse-result", "YES: ready")[0] == 0
+    assert run_cli("eval", "parse-audit", primary)[0] == 0
+    assert run_cli("eval", "parse-audit", "--confirm", confirm)[0] == 0
+    assert (goal_home / "goal-audit-confirm").is_file()
+    assert run_cli("eval", "validate")[0] == 0
+    assert not (goal_home / "goal-audit-clear").exists()
+    assert not (goal_home / "goal-audit-confirm").exists()
+    assert not (goal_home / "goal-eval-done").exists()
+
+
 def test_eval_validate_requires_command(goal_home: Path) -> None:
     run_cli("manage", "create", "g")
     code, _out, err = run_cli("eval", "validate")
@@ -571,16 +600,17 @@ def test_eval_prompt_rejects_validation_as_sufficient(goal_home: Path) -> None:
 
 
 def test_eval_prompt_shows_clear_audit(goal_home: Path) -> None:
-    run_cli("manage", "create", "production audit")
+    run_cli("manage", "create", "all tests pass")
     assert run_cli("eval", "parse-audit", "CLEAR: nothing remains")[0] == 0
     code, out, _err = run_cli("eval", "prompt")
     assert code == 0
     assert "Remaining-work audit: CLEAR this cycle" in out
     assert MISSING_AUDIT_CLEAR not in out
+    assert MISSING_AUDIT_CONFIRM not in out
 
 
 def test_eval_prompt_stale_audit_when_fingerprint_drifts(goal_home: Path) -> None:
-    run_cli("manage", "create", "production audit")
+    run_cli("manage", "create", "all tests pass")
     assert run_cli("eval", "parse-audit", "CLEAR: nothing remains")[0] == 0
     flag = goal_home / "goal-audit-clear"
     raw = json.loads(flag.read_text(encoding="utf-8"))
@@ -594,7 +624,7 @@ def test_eval_prompt_stale_audit_when_fingerprint_drifts(goal_home: Path) -> Non
 
 
 def test_eval_prompt_missing_fingerprint_is_stale(goal_home: Path) -> None:
-    run_cli("manage", "create", "production audit")
+    run_cli("manage", "create", "all tests pass")
     assert run_cli("eval", "parse-audit", "CLEAR: nothing remains")[0] == 0
     flag = goal_home / "goal-audit-clear"
     raw = json.loads(flag.read_text(encoding="utf-8"))
@@ -615,10 +645,21 @@ def test_eval_audit_prompt_has_no_work_summary(goal_home: Path) -> None:
     assert "<untrusted_condition>" in out
     assert "inspect" in out.lower()
     assert "CHANGELOG" in out
-    assert "map the tree" in out.lower()
-    assert "tests pass" in out.lower()
+    assert "explore" in out.lower()
+    assert "EXPLORED" in out
     assert "CLEAR:" in out
     assert "REMAINING:" in out
+    assert "CONFIRM-PASS" not in out
+
+
+def test_eval_audit_prompt_narrow_does_not_require_explore(goal_home: Path) -> None:
+    run_cli("manage", "create", "all tests pass")
+    code, out, _err = run_cli("eval", "audit-prompt")
+    assert code == 0
+    assert "tests pass" in out.lower()
+    assert "CONFIRM-PASS" not in out
+    assert "Task explore" not in out
+    assert "invent extra hardening" in out
 
 
 def test_eval_audit_spawn_config(goal_home: Path) -> None:
@@ -736,3 +777,236 @@ def test_eval_audit_spawn_config_refuses_dead_wake(
     code, _out, err = run_cli("eval", "audit-spawn-config")
     assert code == 1
     assert "wake" in err.lower()
+
+
+def test_eval_audit_prompt_confirm_banner(goal_home: Path) -> None:
+    run_cli("manage", "create", "production audit")
+    code, out, _err = run_cli(
+        "eval", "audit-prompt", "--confirm", "--work-summary", "did X"
+    )
+    assert code == 0
+    assert "CONFIRM-PASS" in out
+    assert "did X" not in out
+    assert "EXPLORED" in out
+
+
+def test_eval_help_lists_confirm_flags(goal_home: Path) -> None:
+    code, out, _err = run_cli("eval", "help")
+    assert code == 0
+    assert "--confirm" in out
+
+
+def test_eval_parse_audit_broad_clear_without_explored_is_unclear(
+    goal_home: Path, tmp_path: Path
+) -> None:
+    work = tmp_path / "proj"
+    write_explored_tree(work)
+    assert (
+        run_cli("manage", "create", "production audit", "--workdir", str(work))[0] == 0
+    )
+    code, out, _err = run_cli("eval", "parse-audit", "CLEAR: nothing remains")
+    assert code == 1
+    assert "VERDICT=UNCLEAR" in out
+    assert "EXPLORED" in out
+    assert not (goal_home / "goal-audit-clear").exists()
+
+
+def test_eval_parse_audit_broad_clear_fake_paths_rejected(
+    goal_home: Path, tmp_path: Path
+) -> None:
+    work = tmp_path / "proj"
+    write_explored_tree(work)
+    assert (
+        run_cli("manage", "create", "production audit", "--workdir", str(work))[0] == 0
+    )
+    fake = "\n".join(f"- missing/dir{i}.py" for i in range(6))
+    body = f"EXPLORED:\n{fake}\nCLEAR: nothing remains\n"
+    code, out, _err = run_cli("eval", "parse-audit", body)
+    assert code == 1
+    assert "VERDICT=UNCLEAR" in out
+    assert not (goal_home / "goal-audit-clear").exists()
+
+
+def test_eval_parse_audit_broad_clear_with_explored(
+    goal_home: Path, tmp_path: Path
+) -> None:
+    work = tmp_path / "proj"
+    files = write_explored_tree(work)
+    assert (
+        run_cli("manage", "create", "production audit", "--workdir", str(work))[0] == 0
+    )
+    body = explored_clear_text(files, root=work)
+    code, out, _err = run_cli("eval", "parse-audit", body)
+    assert code == 0
+    assert "VERDICT=CLEAR" in out
+    assert (goal_home / "goal-audit-clear").is_file()
+    assert not (goal_home / "goal-audit-confirm").exists()
+    _code, prompt, _err = run_cli("eval", "prompt")
+    assert MISSING_AUDIT_CONFIRM in prompt
+    assert "confirm-pass is not CLEAR" in prompt
+
+
+def test_eval_parse_audit_auto_confirm_second_distinct_clear(
+    goal_home: Path, tmp_path: Path
+) -> None:
+    work = tmp_path / "proj"
+    files = write_explored_tree(work)
+    assert (
+        run_cli("manage", "create", "production audit", "--workdir", str(work))[0] == 0
+    )
+    primary = explored_clear_text(files, root=work, reason="primary pass")
+    confirm = explored_clear_text(files, root=work, reason="confirm pass found nothing")
+    assert run_cli("eval", "parse-audit", primary)[0] == 0
+    code, out, _err = run_cli("eval", "parse-audit", confirm)
+    assert code == 0
+    assert "confirm-pass" in out
+    assert (goal_home / "goal-audit-confirm").is_file()
+    _code, prompt, _err = run_cli("eval", "prompt")
+    assert "primary + confirm-pass" in prompt
+    assert MISSING_AUDIT_CONFIRM not in prompt
+
+
+def test_eval_parse_audit_confirm_copy_paste_rejected(
+    goal_home: Path, tmp_path: Path
+) -> None:
+    work = tmp_path / "proj"
+    files = write_explored_tree(work)
+    assert (
+        run_cli("manage", "create", "production audit", "--workdir", str(work))[0] == 0
+    )
+    body = explored_clear_text(files, root=work, reason="same text")
+    assert run_cli("eval", "parse-audit", body)[0] == 0
+    code, _out, err = run_cli("eval", "parse-audit", "--confirm", body)
+    assert code == 1
+    assert "copy-paste" in err.lower()
+    assert not (goal_home / "goal-audit-confirm").exists()
+
+
+def test_eval_parse_audit_confirm_without_primary_rejected(
+    goal_home: Path, tmp_path: Path
+) -> None:
+    work = tmp_path / "proj"
+    files = write_explored_tree(work)
+    assert (
+        run_cli("manage", "create", "production audit", "--workdir", str(work))[0] == 0
+    )
+    body = explored_clear_text(files, root=work, reason="confirm only")
+    code, _out, err = run_cli("eval", "parse-audit", "--confirm", body)
+    assert code == 1
+    assert "primary" in err.lower()
+
+
+def test_eval_parse_audit_idempotent_primary_reparse(
+    goal_home: Path, tmp_path: Path
+) -> None:
+    work = tmp_path / "proj"
+    files = write_explored_tree(work)
+    assert (
+        run_cli("manage", "create", "production audit", "--workdir", str(work))[0] == 0
+    )
+    body = explored_clear_text(files, root=work, reason="primary")
+    assert run_cli("eval", "parse-audit", body)[0] == 0
+    code, out, _err = run_cli("eval", "parse-audit", body)
+    assert code == 0
+    assert "already recorded" in out
+    assert not (goal_home / "goal-audit-confirm").exists()
+
+
+def test_eval_parse_audit_broad_one_directory_rejected(
+    goal_home: Path, tmp_path: Path
+) -> None:
+    work = tmp_path / "proj"
+    files: list[Path] = []
+    for index in range(6):
+        path = work / "src" / f"f{index}.py"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x\n", encoding="utf-8")
+        files.append(path)
+    assert (
+        run_cli("manage", "create", "production audit", "--workdir", str(work))[0] == 0
+    )
+    body = explored_clear_text(files, root=work)
+    code, out, _err = run_cli("eval", "parse-audit", body)
+    assert code == 1
+    assert "VERDICT=UNCLEAR" in out
+    assert "directories" in out.lower()
+
+
+def test_eval_parse_audit_inline_explored_clear(
+    goal_home: Path, tmp_path: Path
+) -> None:
+    work = tmp_path / "proj"
+    files = write_explored_tree(work)
+    assert (
+        run_cli("manage", "create", "production audit", "--workdir", str(work))[0] == 0
+    )
+    rels = " ".join(path.relative_to(work).as_posix() for path in files)
+    body = f"**EXPLORED:** {rels}\nCLEAR: inline cites\n"
+    code, out, _err = run_cli("eval", "parse-audit", body)
+    assert code == 0
+    assert "VERDICT=CLEAR" in out
+
+
+def test_eval_prompt_confirm_stale_when_fingerprint_drifts(
+    goal_home: Path, tmp_path: Path
+) -> None:
+    work = tmp_path / "proj"
+    files = write_explored_tree(work)
+    assert (
+        run_cli("manage", "create", "production audit", "--workdir", str(work))[0] == 0
+    )
+    primary = explored_clear_text(files, root=work, reason="primary")
+    confirm = explored_clear_text(files, root=work, reason="confirm")
+    assert run_cli("eval", "parse-audit", primary)[0] == 0
+    assert run_cli("eval", "parse-audit", "--confirm", confirm)[0] == 0
+    flag = goal_home / "goal-audit-confirm"
+    raw = json.loads(flag.read_text(encoding="utf-8"))
+    raw["tree_fingerprint"] = "not-the-current-tree"
+    flag.write_text(json.dumps(raw), encoding="utf-8")
+    code, out, _err = run_cli("eval", "prompt")
+    assert code == 0
+    assert "stale" in out.lower()
+    assert MISSING_AUDIT_CONFIRM in out
+
+
+def test_eval_parse_audit_confirm_rejects_stale_primary(
+    goal_home: Path, tmp_path: Path
+) -> None:
+    work = tmp_path / "proj"
+    files = write_explored_tree(work)
+    assert (
+        run_cli("manage", "create", "production audit", "--workdir", str(work))[0] == 0
+    )
+    primary = explored_clear_text(files, root=work, reason="primary")
+    confirm = explored_clear_text(files, root=work, reason="confirm later")
+    assert run_cli("eval", "parse-audit", primary)[0] == 0
+    flag = goal_home / "goal-audit-clear"
+    raw = json.loads(flag.read_text(encoding="utf-8"))
+    raw["tree_fingerprint"] = "not-the-current-tree"
+    flag.write_text(json.dumps(raw), encoding="utf-8")
+    code, _out, err = run_cli("eval", "parse-audit", "--confirm", confirm)
+    assert code == 1
+    assert "stale" in err.lower()
+
+
+def test_eval_parse_audit_usage_and_corrupt_goal(goal_home: Path) -> None:
+    code, _out, err = run_cli("eval", "parse-audit")
+    assert code == 1
+    assert "Usage" in err or "Error" in err
+    run_cli("manage", "create", "all tests pass")
+    (goal_home / "goal.json").write_text("{not-json", encoding="utf-8")
+    code2, _out2, err2 = run_cli("eval", "parse-audit", "CLEAR: x")
+    assert code2 == 1
+    assert "corrupt" in err2.lower() or "Error" in err2
+
+
+def test_extract_explored_block_helpers() -> None:
+    from cursor_goal.evaluate import extract_explored_block
+
+    assert extract_explored_block("looks fine") is None
+    inline = extract_explored_block("EXPLORED: src/a.py\nCLEAR: done")
+    assert inline is not None
+    assert "src/a.py" in inline
+    marked = extract_explored_block("**EXPLORED:** docs/e.md\nVERDICT: ignore")
+    assert marked is not None
+    assert "docs/e.md" in marked

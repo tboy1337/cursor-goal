@@ -8,6 +8,8 @@ functions are intentionally *not* re-exported — import ``cursor_goal.doctor``
 directly (including in tests) to call them.
 """
 
+# pylint: disable=too-many-lines
+
 from __future__ import annotations
 
 import os
@@ -33,6 +35,7 @@ from cursor_goal.state import (
     clear_goal_files,
     create_goal_atomic,
     default_wake_budget,
+    has_audit_confirm_signal,
     mark_goal_achieved,
     mutate_goal,
     normalize_workdir,
@@ -46,6 +49,7 @@ from cursor_goal.state import (
 )
 from cursor_goal.validation import (
     deny_shell_enabled,
+    is_broad_condition,
     redact_command,
     redact_secrets,
     try_split_argv,
@@ -490,6 +494,12 @@ def cmd_status(_argv: list[str]) -> int:  # pylint: disable=too-many-branches
         print(f"  Last verdict: {state.last_eval_verdict}")
     if state.last_audit_verdict:
         print(f"  Last audit: {state.last_audit_verdict}")
+    if is_broad_condition(state.condition):
+        print("  Audit scope: broad (confirm-pass required)")
+        confirm_line = "CLEAR" if has_audit_confirm_signal() else "missing"
+        print(f"  Confirm audit: {confirm_line}")
+    else:
+        print("  Audit scope: narrow")
     print(f"  Created: {state.created_at}")
     if display_active and wake_enabled() and not ready:
         return 1
@@ -811,6 +821,21 @@ def cmd_done(argv: list[str]) -> int:
         )
         print("[goal] Then retry: cursor-goal manage done", file=sys.stderr)
         return 1
+    if status == "rejected_audit_confirm":
+        print(
+            "[goal] REJECTED: No confirm-pass CLEAR remaining-work audit "
+            "signal for this cycle. Broad goals require "
+            "eval audit-prompt --confirm then eval parse-audit --confirm.",
+            file=sys.stderr,
+        )
+        print(
+            "[goal] Run: cursor-goal eval parse-audit --confirm --stdin "
+            "after spawning a new goal-auditor with eval audit-prompt "
+            "--confirm.",
+            file=sys.stderr,
+        )
+        print("[goal] Then retry: cursor-goal manage done", file=sys.stderr)
+        return 1
     if status == "forced":
         print(
             "[goal] --force flag set, proceeding anyway "
@@ -1012,6 +1037,9 @@ def _print_help() -> int:
     print("  resume     Resume a paused or blocked goal")
     print('  update "<condition>"  Change condition in place (invalidates CLEAR+YES)')
     print('  blocked "<reason>"    Record an impasse; blocks after 3 same-reason turns')
-    print("  done       Mark goal as achieved (requires YES + CLEAR signals)")
+    print(
+        "  done       Mark goal as achieved "
+        "(requires YES + CLEAR; broad also needs confirm-pass)"
+    )
     print("  clear      Remove goal entirely")
     return 0

@@ -62,7 +62,14 @@ When a `validation_command` is set but has never been run, `eval prompt` tells t
 
 ## Remaining-work audit is in the loop; Plan Mode UI is not
 
-`/goal` spawns a readonly `goal-auditor` subagent (empty context, original condition, no work summary) as the unattended equivalent of a fresh plan-mode chat. For a production-audit-style condition the auditor must actually explore (tree, schema vs runtime, CI/installers, fail-open). For a “tests pass” condition it stays narrow. `manage done` requires that CLEAR signal plus evaluator YES (unless `--force`), and rejects if the working tree changed after CLEAR (spawn a new auditor). `eval validate` clears both CLEAR and YES so a later pass cannot reuse a stale audit. The auditor is scoped to the original condition: it must not invent extra polish for a “tests pass” goal.
+`/goal` spawns a readonly `goal-auditor` subagent (empty context, original condition, no work summary) as the unattended equivalent of a fresh plan-mode chat. A new context window alone is not enough: Plan Mode finds remaining work because it runs parallel `explore` agents and writes a punch list. The auditor is instructed to do the same (spawn `explore` Tasks at `thoroughness: very thorough`, then targeted reads).
+
+Conditions are classified as **narrow** (equivalent to a test, lint, build, or other validation command) or **broad** (open-ended remaining-work that is not reducible to that command). Narrow goals keep a single CLEAR plus evaluator YES. Broad goals additionally:
+
+- Reject `CLEAR` unless the auditor response includes an `EXPLORED:` block citing at least six **existing** files spanning more than one directory (a one-line `CLEAR: nothing remains` cannot finish the goal).
+- Require a second independent **confirm-pass** CLEAR (`eval audit-prompt --confirm` / `eval parse-audit --confirm`, or a later distinct CLEAR on the same tree so `subagentStop` still works). Copy-pasting the primary CLEAR is rejected. `manage done` returns `rejected_audit_confirm` until both flags match the current tree.
+
+`eval validate` clears YES, primary CLEAR, and confirm-pass so a later pass cannot reuse a stale audit. The auditor is scoped to the original condition: it must not invent extra polish for a “tests pass” goal.
 
 `/goal` still does **not** invoke the Cursor Plan Mode UI, `ce-plan`, `/review`, `/review-bugbot`, `/review-security`, or thermo-nuclear review. Those wait on the user (which stalls unattended continuation) or add a second checker that can refuse a goal whose condition is already met.
 

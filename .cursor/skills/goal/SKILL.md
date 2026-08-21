@@ -49,7 +49,7 @@ py -3 -u "$env:CURSOR_PLUGIN_ROOT\skills\goal\scripts\run_goal.py" <command> ...
 |---------|---------|
 | `parse "<input>"` | Parse `/goal` input → JSON |
 | `manage create\|status\|doctor\|harness-cmd\|pause\|resume\|update\|blocked\|done\|clear` | Goal state lifecycle |
-| `eval validate\|spawn-config\|prompt\|parse-result\|parse-audit\|audit-prompt\|audit-spawn-config\|signal\|check` | Evaluator / remaining-work auditor harness |
+| `eval validate\|spawn-config\|prompt\|parse-result\|parse-audit\|audit-prompt\|audit-spawn-config\|signal\|check` | Evaluator / remaining-work auditor harness (`audit-prompt --confirm` / `parse-audit --confirm` for broad goals) |
 | `stop` | Stop **and** subagentStop hook (stdin JSON → stdout JSON; dispatches on payload shape) |
 | `wake arm\|tick\|disarm\|status\|loop` | Wake watchdog (shell notify sentinel) |
 
@@ -177,12 +177,12 @@ While `status` is `pursuing`, repeat:
    4. If **two or more independent** failure domains exist (unrelated packages/suites): spawn parallel `Task` workers (not `goal-evaluator` / `goal-auditor`) for those domains, merge results, then go back to step 2.
    5. After a targeted fix, go back to step 2 (re-validate this turn). Do not audit or evaluate on a failed validation.
 4. **If validation passed (exit 0) and `git diff` is non-empty:** once before the first YES attempt, remove AI slop introduced in this work (unnecessary comments, `any` casts, extra defensive try/except, deep nesting that an early return would replace). Keep behavior unchanged. Re-run `eval validate`. Skip this pass on later wake ticks if you already did it for this goal.
-5. **Remaining-work audit** — spawn a **new** readonly `goal-auditor` Task (see below) with the original condition and **no** work summary. Do this after every implemented batch; do not reuse a CLEAR from before those edits. This is the unattended equivalent of a new plan-mode chat. Do **not** invoke Cursor Plan Mode or `/ce-plan` (they wait on the user).
-6. **Act on audit** — REMAINING → continue at step 1 with that punch list (do not spawn `goal-evaluator` yet). CLEAR → evaluate.
+5. **Remaining-work audit** — spawn a **new** readonly `goal-auditor` Task (see below) with the original condition and **no** work summary. Do this after every implemented batch; do not reuse a CLEAR from before those edits. This is the unattended equivalent of a new plan-mode chat. Do **not** invoke Cursor Plan Mode or `/ce-plan` (they wait on the user). For **broad** conditions (not equivalent to a test/validation command): first spawn parallel `Task` `explore` subagents (`thoroughness: very thorough`) covering tree/CI/installers/schema-docs/fail-open/tests; implement in-scope hits; then spawn the auditor. A one-line `CLEAR` without an `EXPLORED:` block citing real files is rejected.
+6. **Act on audit** — REMAINING → continue at step 1 with that punch list (do not spawn `goal-evaluator` yet). CLEAR → for **narrow** goals, evaluate. For **broad** goals, spawn a **new** `goal-auditor` with `eval audit-prompt --confirm` and `eval parse-audit --confirm`; only then evaluate (both CLEARs required).
 7. **Evaluate** — spawn a readonly evaluator subagent on the configured model (see below). Never evaluate after every single file edit or after read-only exploration.
-8. **Act on result** — YES → `manage done` (requires CLEAR + YES). NO → continue at step 1 with the reason.
+8. **Act on result** — YES → `manage done` (requires CLEAR + YES; broad goals also need confirm-pass CLEAR). NO → continue at step 1 with the reason.
 
-Do **not** invoke Plan Mode, `/ce-plan`, `/review`, `/review-bugbot`, `/review-security`, or thermo-nuclear review inside this loop. They stall unattended continuation. The remaining-work auditor *is* the plan-mode-quality pass; it is scoped to the original condition (not a second quality bar for a "tests pass" goal).
+Do **not** invoke Plan Mode, `/ce-plan`, `/review`, `/review-bugbot`, `/review-security`, or thermo-nuclear review inside this loop. They stall unattended continuation. The remaining-work auditor *is* the plan-mode-quality pass (explore Tasks + harness-gated EXPLORED cites; confirm-pass on broad goals). It is scoped to the original condition (not a second quality bar for a "tests pass" goal).
 
 ### Remaining-work audit via Subagent
 
@@ -201,7 +201,11 @@ Parse with `eval parse-audit --stdin` (same stdin/`@file` rules as parse-result)
 
 **If REMAINING** (exit 1): implement that punch list; do not spawn `goal-evaluator` yet.
 
-**If CLEAR** (exit 0): proceed to evaluation below. `manage done` rejects without this CLEAR signal.
+**If CLEAR** (exit 0) on a **narrow** condition: proceed to evaluation below. `manage done` rejects without this CLEAR signal.
+
+**If CLEAR** on a **broad** condition: spawn a **new** `goal-auditor` using `eval audit-prompt --confirm` (CONFIRM-PASS). Parse with `eval parse-audit --confirm --stdin`. Copy-pasting the primary CLEAR is rejected. `manage done` rejects without both primary and confirm-pass CLEARs on the current tree. The harness also rejects a broad CLEAR that lacks an `EXPLORED:` block citing at least six existing files in more than one directory.
+
+For broad conditions, the worker itself must spawn parallel `explore` Tasks (`thoroughness: very thorough`) covering tree, CI/installers, schema/docs vs runtime, fail-open/path confinement, and tests **before** the first auditor spawn for that batch. Do not pass those notes into the auditor (still no work summary).
 
 ### Evaluation via Subagent
 
@@ -231,7 +235,7 @@ Alternatively: `eval parse-result @path\to\file.txt` or (short output only) `eva
 
 On YES: automatically records a YES-bound evaluator signal (exit 0). On NO/UNCLEAR: exit 1.
 
-**If YES** (exit 0): run `manage done` (also requires a CLEAR audit signal this cycle).
+**If YES** (exit 0): run `manage done` (also requires a CLEAR audit signal this cycle; broad goals also require confirm-pass CLEAR).
 
 **If NO** (exit 1): read REASON, continue working, audit again after more progress.
 

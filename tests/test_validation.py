@@ -486,3 +486,20 @@ def test_weak_condition_warning_exact_phrases() -> None:
     assert weak_condition_warning("all tests pass") is None
     assert weak_condition_warning("keep investigating until tests pass") is None
     assert weak_condition_warning("") is None
+
+
+def test_is_broad_condition_production_audit_vs_tests() -> None:
+    from cursor_goal.validation import is_broad_condition
+
+    user_prompt = (
+        "Do a full, detailed and comprehensive production audit of the "
+        "project and fix all errors and issues and make sure the software "
+        "is ready for the real world."
+    )
+    assert is_broad_condition(user_prompt) is True
+    assert is_broad_condition("production audit") is True
+    assert is_broad_condition("ship-ready release") is True
+    assert is_broad_condition("production-ready installers") is True
+    assert is_broad_condition("all tests pass") is False
+    assert is_broad_condition("fix the login bug") is False
+    assert is_broad_condition("") is False

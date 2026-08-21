@@ -208,6 +208,42 @@ def weak_condition_warning(condition: str) -> str | None:
     )
 
 
+# Open-ended remaining-work conditions need plan-mode-shaped exploration
+# plus a confirm-pass CLEAR. Narrow goals (a test/lint/build command)
+# stay on the single-CLEAR path. This is a keyword heuristic, not a second
+# quality bar beyond what the condition already asks for.
+_BROAD_CONDITION = re.compile(
+    r"(?is)(?:"
+    r"production\s*[- ]?\s*audit"
+    r"|ready\s+for\s+the\s+real\s*[- ]?\s*world"
+    r"|real[- ]world"
+    r"|fix\s+all\s+(?:errors|issues)"
+    r"|\bcomprehensive\b"
+    r"|ship[- ]ready"
+    r"|production[- ]ready"
+    r")"
+)
+
+
+def is_broad_condition(condition: str) -> bool:
+    """True when *condition* is open-ended remaining-work, not a test command.
+
+    Narrow conditions such as ``all tests pass`` return False so they keep
+    today's single remaining-work CLEAR plus evaluator YES protocol.
+    """
+    text = (condition or "").strip()
+    if not text:
+        logger.debug("is_broad_condition empty -> False")
+        return False
+    matched = bool(_BROAD_CONDITION.search(text))
+    logger.info(
+        "is_broad_condition matched=%s chars=%s",
+        matched,
+        len(text),
+    )
+    return matched
+
+
 _ENV_ALLOWLIST_EXACT = frozenset(
     {
         "PATH",

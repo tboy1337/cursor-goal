@@ -10,6 +10,8 @@ Lower-level path_trust internals this module never calls itself (e.g.
 :mod:`cursor_goal.path_trust` directly for those.
 """
 
+# pylint: disable=too-many-lines
+
 from __future__ import annotations
 
 import hashlib
@@ -43,6 +45,7 @@ from cursor_goal.path_trust import (
     refuse_if_acl_harden_failed,
     refuse_if_data_dir_insecure,
 )
+from cursor_goal.validation import is_broad_condition
 from cursor_goal.win_acl import ACL_HARDEN_FAILURES as _ACL_HARDEN_FAILURES
 from cursor_goal.win_acl import HARDENED_PATHS as _HARDENED_PATHS
 from cursor_goal.win_acl import harden_windows_acl as _harden_windows_acl
@@ -75,6 +78,7 @@ __all__ = (
 
 EVAL_FLAG_NAME = "goal-eval-done"
 AUDIT_FLAG_NAME = "goal-audit-clear"
+AUDIT_CONFIRM_FLAG_NAME = "goal-audit-confirm"
 # Documented fallback when git is missing or cwd is not a repo. Drift
 # detection requires git; matching ``nogit`` fingerprints do not reject done.
 NOGIT_TREE_FINGERPRINT = "nogit"
@@ -165,6 +169,19 @@ def eval_flag_path() -> Path:
 
 def audit_flag_path() -> Path:
     return data_dir() / AUDIT_FLAG_NAME
+
+
+def audit_confirm_flag_path() -> Path:
+    return data_dir() / AUDIT_CONFIRM_FLAG_NAME
+
+
+def _audit_response_hash(response_text: str) -> str:
+    """SHA-256 of the full auditor response used to bind confirm-pass."""
+    digest = hashlib.sha256((response_text or "").encode("utf-8")).hexdigest()
+    logger.debug(
+        "audit response_hash=%s chars=%s", digest[:16], len(response_text or "")
+    )
+    return digest
 
 
 def compute_tree_fingerprint(*, cwd: str | None = None) -> str:
@@ -803,7 +820,10 @@ def clear_last_stop_response() -> None:
 
 
 def clear_goal_files() -> bool:
-    """Remove goal.json and eval/audit signals under lock. Returns True if goal existed."""
+    """Remove goal.json and eval/audit signals under lock.
+
+    Returns True if a goal file existed.
+    """
     with goal_lock():
         path = goal_path()
         existed = path.is_file()
@@ -815,6 +835,9 @@ def clear_goal_files() -> bool:
         audit_flag = audit_flag_path()
         if audit_flag.exists():
             audit_flag.unlink()
+        confirm_flag = audit_confirm_flag_path()
+        if confirm_flag.exists():
+            confirm_flag.unlink()
         clear_last_stop_response()
         if existed:
             logger.info("Cleared goal and evaluator/audit signals")
@@ -976,12 +999,54 @@ def _clear_eval_signal_unlocked() -> None:
         logger.info("Cleared evaluator signal")
 
 
+def _done_protocol_rejection(
+    *,
+    require_signal: bool,
+    signaled: bool,
+    audit_ok: bool,
+    fingerprint_ok: bool,
+    broad: bool,
+    confirm_ok: bool,
+    confirm_fp_ok: bool,
+) -> str | None:
+    """Return a ``manage done`` rejection status, or None if gates pass."""
+    if not require_signal:
+        return None
+    if not signaled:
+        return "rejected"
+    if not audit_ok:
+        return "rejected_audit"
+    if not fingerprint_ok:
+        return "rejected_audit_stale"
+    if broad and not confirm_ok:
+        return "rejected_audit_confirm"
+    if broad and not confirm_fp_ok:
+        return "rejected_audit_stale"
+    return None
+
+
+def _forced_done_status(
+    *,
+    signaled: bool,
+    audit_ok: bool,
+    fingerprint_ok: bool,
+    broad: bool,
+    confirm_ok: bool,
+    confirm_fp_ok: bool,
+) -> str:
+    """Status when ``manage done --force`` bypasses protocol gates."""
+    complete = signaled and audit_ok and fingerprint_ok
+    if complete and broad and not (confirm_ok and confirm_fp_ok):
+        return "forced"
+    return "ok" if complete else "forced"
+
+
 def mark_goal_achieved(*, require_signal: bool = True) -> tuple[GoalState | None, str]:
     """Mark goal achieved under lock.
 
     Returns ``(state, status)`` where status is ``ok``, ``missing``,
     ``rejected``, ``rejected_audit``, ``rejected_audit_stale``,
-    ``not_pursuing``, or ``forced``.
+    ``rejected_audit_confirm``, ``not_pursuing``, or ``forced``.
     """
     with goal_lock():
         state = load_goal()
@@ -998,20 +1063,44 @@ def mark_goal_achieved(*, require_signal: bool = True) -> tuple[GoalState | None
         signaled = _has_eval_signal_unlocked(state)
         audit_ok = _has_audit_signal_unlocked(state)
         fingerprint_ok = _audit_fingerprint_matches_unlocked(state)
+        confirm_ok = _has_audit_confirm_signal_unlocked(state)
+        confirm_fp_ok = _audit_confirm_fingerprint_matches_unlocked(state)
+        broad = is_broad_condition(state.condition)
+        logger.info(
+            "mark_goal_achieved require=%s yes=%s audit=%s fp=%s "
+            "broad=%s confirm=%s confirm_fp=%s",
+            require_signal,
+            signaled,
+            audit_ok,
+            fingerprint_ok,
+            broad,
+            confirm_ok,
+            confirm_fp_ok,
+        )
+        rejected = _done_protocol_rejection(
+            require_signal=require_signal,
+            signaled=signaled,
+            audit_ok=audit_ok,
+            fingerprint_ok=fingerprint_ok,
+            broad=broad,
+            confirm_ok=confirm_ok,
+            confirm_fp_ok=confirm_fp_ok,
+        )
+        if rejected is not None:
+            return state, rejected
+        _clear_eval_signal_unlocked()
+        _clear_audit_signal_unlocked()
         if require_signal:
-            if not signaled:
-                return state, "rejected"
-            if not audit_ok:
-                return state, "rejected_audit"
-            if not fingerprint_ok:
-                return state, "rejected_audit_stale"
-            _clear_eval_signal_unlocked()
-            _clear_audit_signal_unlocked()
             status = "ok"
         else:
-            _clear_eval_signal_unlocked()
-            _clear_audit_signal_unlocked()
-            status = "ok" if signaled and audit_ok and fingerprint_ok else "forced"
+            status = _forced_done_status(
+                signaled=signaled,
+                audit_ok=audit_ok,
+                fingerprint_ok=fingerprint_ok,
+                broad=broad,
+                confirm_ok=confirm_ok,
+                confirm_fp_ok=confirm_fp_ok,
+            )
         state.status = "achieved"
         state.active = False
         _save_goal_unlocked(state)
@@ -1073,9 +1162,19 @@ def _clear_audit_signal_unlocked() -> None:
     if flag.exists():
         flag.unlink()
         logger.info("Cleared remaining-work audit signal")
+    _clear_audit_confirm_signal_unlocked()
 
 
-def _write_audit_signal_unlocked(state: GoalState, *, reason: str) -> None:
+def _clear_audit_confirm_signal_unlocked() -> None:
+    flag = audit_confirm_flag_path()
+    if flag.exists():
+        flag.unlink()
+        logger.info("Cleared remaining-work confirm audit signal")
+
+
+def _write_audit_signal_unlocked(
+    state: GoalState, *, reason: str, response_text: str = ""
+) -> None:
     """Atomically write CLEAR-bound audit signal for *state* (caller holds lock)."""
     data_dir()
     flag = audit_flag_path()
@@ -1086,6 +1185,8 @@ def _write_audit_signal_unlocked(state: GoalState, *, reason: str) -> None:
         "verdict": "CLEAR",
         "reason": reason,
         "tree_fingerprint": fingerprint,
+        "response_hash": _audit_response_hash(response_text),
+        "kind": "primary",
     }
     atomic_write_text(
         flag,
@@ -1093,6 +1194,51 @@ def _write_audit_signal_unlocked(state: GoalState, *, reason: str) -> None:
     )
     logger.info(
         "Recorded remaining-work audit signal hash=%s fingerprint=%s",
+        payload["condition_hash"],
+        fingerprint[:16],
+    )
+
+
+def _write_audit_confirm_signal_unlocked(
+    state: GoalState, *, reason: str, response_text: str
+) -> None:
+    """Write confirm-pass CLEAR; require a distinct primary CLEAR on this tree."""
+    if not _has_audit_signal_unlocked(state):
+        raise ValueError(
+            "Cannot record confirm CLEAR without a primary CLEAR remaining-work "
+            "audit signal"
+        )
+    if not _audit_fingerprint_matches_unlocked(state):
+        raise ValueError(
+            "Cannot record confirm CLEAR: primary remaining-work audit is stale "
+            "(working tree changed)"
+        )
+    digest = _audit_response_hash(response_text)
+    primary = _read_audit_flag_unlocked() or {}
+    prior = str(primary.get("response_hash") or "")
+    if prior and prior == digest:
+        raise ValueError(
+            "Confirm CLEAR response matches the primary CLEAR (copy-paste). "
+            "Spawn a new goal-auditor with eval audit-prompt --confirm."
+        )
+    data_dir()
+    flag = audit_confirm_flag_path()
+    fingerprint = compute_tree_fingerprint(cwd=_fingerprint_cwd_for_state(state))
+    payload = {
+        "condition_hash": state.content_hash(),
+        "created_at": now_iso(),
+        "verdict": "CLEAR",
+        "reason": reason,
+        "tree_fingerprint": fingerprint,
+        "response_hash": digest,
+        "kind": "confirm",
+    }
+    atomic_write_text(
+        flag,
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+    )
+    logger.info(
+        "Recorded remaining-work confirm audit signal hash=%s fingerprint=%s",
         payload["condition_hash"],
         fingerprint[:16],
     )
@@ -1109,6 +1255,17 @@ def has_audit_signal() -> bool:
         ) and _audit_fingerprint_matches_unlocked(state)
 
 
+def has_audit_confirm_signal() -> bool:
+    """Return True when a confirm-pass CLEAR matches the current tree."""
+    with goal_lock():
+        state = load_goal()
+        if state is None:
+            return False
+        return _has_audit_confirm_signal_unlocked(
+            state
+        ) and _audit_confirm_fingerprint_matches_unlocked(state)
+
+
 def audit_signal_tree_stale() -> bool:
     """Return True when CLEAR is bound but the working tree changed after it."""
     with goal_lock():
@@ -1120,12 +1277,32 @@ def audit_signal_tree_stale() -> bool:
         return not _audit_fingerprint_matches_unlocked(state)
 
 
+def audit_confirm_signal_tree_stale() -> bool:
+    """Return True when confirm CLEAR is bound but the tree changed after it."""
+    with goal_lock():
+        state = load_goal()
+        if state is None:
+            return False
+        if not _has_audit_confirm_signal_unlocked(state):
+            return False
+        return not _audit_confirm_fingerprint_matches_unlocked(state)
+
+
 def _has_audit_signal_unlocked(state: GoalState) -> bool:
     return _has_bound_signal_unlocked(
         audit_flag_path(),
         state,
         expected_verdict="CLEAR",
         label="Audit",
+    )
+
+
+def _has_audit_confirm_signal_unlocked(state: GoalState) -> bool:
+    return _has_bound_signal_unlocked(
+        audit_confirm_flag_path(),
+        state,
+        expected_verdict="CLEAR",
+        label="Audit-confirm",
     )
 
 
@@ -1158,6 +1335,41 @@ def _audit_fingerprint_matches_unlocked(state: GoalState) -> bool:
     if stored != current:
         logger.info(
             "Audit tree fingerprint mismatch stored=%s current=%s",
+            stored[:16],
+            current[:16],
+        )
+        return False
+    return True
+
+
+def _read_audit_confirm_flag_unlocked() -> dict[str, Any] | None:
+    flag = audit_confirm_flag_path()
+    if not flag.is_file():
+        return None
+    try:
+        raw = json.loads(flag.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    return raw
+
+
+def _audit_confirm_fingerprint_matches_unlocked(state: GoalState) -> bool:
+    """True when the confirm CLEAR flag's tree fingerprint matches *state*."""
+    raw = _read_audit_confirm_flag_unlocked()
+    if raw is None:
+        return False
+    stored = str(raw.get("tree_fingerprint") or "")
+    if not stored:
+        logger.warning(
+            "Audit confirm CLEAR missing tree_fingerprint; treating as stale"
+        )
+        return False
+    current = compute_tree_fingerprint(cwd=_fingerprint_cwd_for_state(state))
+    if stored != current:
+        logger.info(
+            "Audit confirm tree fingerprint mismatch stored=%s current=%s",
             stored[:16],
             current[:16],
         )
@@ -1273,12 +1485,21 @@ def record_parse_result(verdict: str, reason: str) -> GoalState | None:
         return state
 
 
-def record_parse_audit(verdict: str, reason: str) -> GoalState | None:
+def record_parse_audit(
+    verdict: str,
+    reason: str,
+    *,
+    confirm: bool = False,
+    response_text: str = "",
+) -> GoalState | None:
     """Persist remaining-work audit verdict and CLEAR signal under one lock.
 
     Returns the updated goal, or None if no goal was present.
-    Raises ``ValueError`` when CLEAR is recorded for a non-pursuing goal.
-    A non-CLEAR verdict also clears the YES evaluator signal.
+    Raises ``ValueError`` when CLEAR is recorded for a non-pursuing goal,
+    when confirm CLEAR lacks a primary CLEAR, or when confirm copies the
+    primary response hash.
+    A non-CLEAR verdict also clears the YES evaluator signal and both
+    remaining-work flags.
     """
     with goal_lock():
         state = load_goal()
@@ -1294,9 +1515,23 @@ def record_parse_audit(verdict: str, reason: str) -> GoalState | None:
             "last_audit_verdict", str(verdict or "")
         )
         if verdict == "CLEAR":
-            _write_audit_signal_unlocked(state, reason=reason)
+            if confirm:
+                _write_audit_confirm_signal_unlocked(
+                    state, reason=reason, response_text=response_text
+                )
+            else:
+                _clear_audit_confirm_signal_unlocked()
+                _write_audit_signal_unlocked(
+                    state, reason=reason, response_text=response_text
+                )
         else:
             _clear_audit_signal_unlocked()
             _clear_eval_signal_unlocked()
         _save_goal_unlocked(state)
+        logger.info(
+            "record_parse_audit verdict=%s confirm=%s response_chars=%s",
+            verdict,
+            confirm,
+            len(response_text or ""),
+        )
         return state

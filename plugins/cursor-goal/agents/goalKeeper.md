@@ -96,8 +96,17 @@ py -3 -u "$env:CURSOR_PLUGIN_ROOT\skills\goal\scripts\run_goal.py" <command> ...
    Task(subagent_type/model/readonly from AUDIT SPAWN JSON, prompt=AUDIT_PROMPT).
    Spawn a **new** Task after every implemented batch. Never use generalPurpose.
    Pipe response into eval parse-audit --stdin.
+   For **broad** conditions (not equivalent to a test/validation command):
+   before the auditor, spawn parallel Task explore subagents
+   (thoroughness: very thorough) covering tree/CI/installers/schema-docs/
+   fail-open/tests; implement in-scope hits; do not pass those notes into
+   the auditor. After a **primary** CLEAR, spawn a **new** goal-auditor with
+   `eval audit-prompt --confirm` and `eval parse-audit --confirm`. Both
+   CLEARs are required before step 4. A one-line CLEAR without EXPLORED
+   file cites is rejected by the harness.
    → REMAINING: implement the punch list (back to step 1); do not evaluate yet
-   → CLEAR: continue to step 4 (only if this CLEAR is from after the latest edits)
+   → CLEAR: continue to step 4 (only if this CLEAR is from after the latest
+     edits; broad goals also need confirm-pass CLEAR)
 4. Capture eval prompt + spawn-config (OS-appropriate Shell; do not rely on bash-only $())
 5. Task(subagent_type, model, readonly from SPAWN JSON, prompt=EVAL_PROMPT)
    Never use generalPurpose for evaluation. Never omit spawn-config.
@@ -111,7 +120,7 @@ py -3 -u "$env:CURSOR_PLUGIN_ROOT\skills\goal\scripts\run_goal.py" <command> ...
 
 Do **not** put long evaluator or auditor responses on the Windows command line (argv length limits). Use `--stdin` or `@file`.
 
-Do **not** invoke Plan Mode, `/ce-plan`, `/review`, `/review-bugbot`, `/review-security`, or thermo-nuclear review in this loop. The remaining-work auditor is the unattended plan-mode-quality pass.
+Do **not** invoke Plan Mode, `/ce-plan`, `/review`, `/review-bugbot`, `/review-security`, or thermo-nuclear review in this loop. The remaining-work auditor is the unattended plan-mode-quality pass (explore Tasks + EXPLORED cites; confirm-pass on broad goals).
 
 ## Platform Notes (Cursor)
 
@@ -129,9 +138,9 @@ Do **not** invoke Plan Mode, `/ce-plan`, `/review`, `/review-bugbot`, `/review-s
 
 ## Rules
 
-- `manage done` **rejects** unless a YES-bound evaluator signal **and** a CLEAR remaining-work audit signal exist (unless `--force`)
+- `manage done` **rejects** unless a YES-bound evaluator signal **and** a CLEAR remaining-work audit signal exist (unless `--force`). Broad (production-audit) goals also need a distinct confirm-pass CLEAR (`parse-audit --confirm`) on the current tree.
 - `parse-result` on YES records the evaluator signal automatically — do not skip it
-- `parse-audit` on CLEAR records the audit signal automatically — do not skip it
+- `parse-audit` on CLEAR records the audit signal automatically — do not skip it. Broad CLEARs also need an `EXPLORED:` block citing real files; `--confirm` records the second flag.
 - Use `parse` and read JSON — do **not** evaluate shell strings from the parser
 - Forward parse create flags (`allow_shell`, `workdir`, `wake_budget`, `force`, `test_cmd`, `budget`) to `manage create` — do not leave them in the condition text
 - If parse `action=create` while a goal is unfinished and there is no `--force`, `manage update` instead of `create --force`

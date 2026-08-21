@@ -10,7 +10,12 @@ from pathlib import Path
 import pytest
 
 import cursor_goal.wake as wake_mod
-from tests.conftest import load_goal_json, run_cli
+from tests.conftest import (
+    explored_clear_text,
+    load_goal_json,
+    run_cli,
+    write_explored_tree,
+)
 
 
 def test_manage_create(goal_home: Path) -> None:
@@ -814,6 +819,74 @@ def test_manage_done_force(goal_home: Path) -> None:
     code, _out, _err = run_cli("manage", "done", "--force")
     assert code == 0
     assert load_goal_json(goal_home)["status"] == "achieved"
+
+
+def test_manage_done_force_broad_without_confirm(
+    goal_home: Path, tmp_path: Path
+) -> None:
+    work = tmp_path / "proj"
+    files = write_explored_tree(work)
+    assert (
+        run_cli("manage", "create", "production audit", "--workdir", str(work))[0] == 0
+    )
+    assert run_cli("eval", "parse-result", "YES: ready")[0] == 0
+    body = explored_clear_text(files, root=work, reason="primary")
+    assert run_cli("eval", "parse-audit", body)[0] == 0
+    code, _out, err = run_cli("manage", "done", "--force")
+    assert code == 0
+    assert "force" in err.lower()
+    assert load_goal_json(goal_home)["status"] == "achieved"
+
+
+def test_manage_done_broad_rejected_without_confirm(
+    goal_home: Path, tmp_path: Path
+) -> None:
+    work = tmp_path / "proj"
+    files = write_explored_tree(work)
+    assert (
+        run_cli("manage", "create", "production audit", "--workdir", str(work))[0] == 0
+    )
+    assert run_cli("eval", "parse-result", "YES: ready")[0] == 0
+    body = explored_clear_text(files, root=work, reason="primary")
+    assert run_cli("eval", "parse-audit", body)[0] == 0
+    code, _out, err = run_cli("manage", "done")
+    assert code == 1
+    assert "REJECTED" in err
+    assert "confirm-pass" in err.lower()
+    assert load_goal_json(goal_home)["status"] == "pursuing"
+
+
+def test_manage_done_broad_with_primary_and_confirm(
+    goal_home: Path, tmp_path: Path
+) -> None:
+    work = tmp_path / "proj"
+    files = write_explored_tree(work)
+    assert (
+        run_cli("manage", "create", "production audit", "--workdir", str(work))[0] == 0
+    )
+    assert run_cli("eval", "parse-result", "YES: ready")[0] == 0
+    primary = explored_clear_text(files, root=work, reason="primary")
+    confirm = explored_clear_text(files, root=work, reason="confirm independent")
+    assert run_cli("eval", "parse-audit", primary)[0] == 0
+    assert run_cli("eval", "parse-audit", "--confirm", confirm)[0] == 0
+    code, out, _err = run_cli("manage", "done")
+    assert code == 0
+    assert "Goal achieved" in out
+    assert load_goal_json(goal_home)["status"] == "achieved"
+    assert not (goal_home / "goal-audit-clear").exists()
+    assert not (goal_home / "goal-audit-confirm").exists()
+
+
+def test_manage_status_shows_broad_audit_scope(goal_home: Path, tmp_path: Path) -> None:
+    work = tmp_path / "proj"
+    write_explored_tree(work)
+    assert (
+        run_cli("manage", "create", "production audit", "--workdir", str(work))[0] == 0
+    )
+    code, out, _err = run_cli("manage", "status")
+    assert code == 0
+    assert "Audit scope: broad (confirm-pass required)" in out
+    assert "Confirm audit: missing" in out
 
 
 def test_manage_pause_resume(goal_home: Path) -> None:

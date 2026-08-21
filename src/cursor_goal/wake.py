@@ -53,6 +53,7 @@ from cursor_goal.validation import (
     BUDGET_WRAPUP_RULE,
     NO_AGENT_PAUSE_RULE,
     condition_prompt_block,
+    is_broad_condition,
 )
 from cursor_goal.wake_process import (  # noqa: F401 — re-exports for callers
     _clear_pid,
@@ -220,6 +221,13 @@ def _followup_prompt() -> str:
     if updated:
         take_condition_updated_pending()
     block = condition_prompt_block(state.condition, objective_updated=updated)
+    broad_note = ""
+    if is_broad_condition(state.condition):
+        broad_note = (
+            " Broad condition: after a primary CLEAR, spawn a new "
+            "goal-auditor with eval audit-prompt --confirm and "
+            "eval parse-audit --confirm."
+        )
     return (
         f"[GOAL] FOLLOW-UP REQUIRED. Turn {state.turns_used}/{state.turn_budget} "
         f"({remaining} remaining, wake_ticks={wake_ticks}/"
@@ -228,7 +236,8 @@ def _followup_prompt() -> str:
         'status is pursuing. An earlier "this is complete" message is '
         "invalid. Run `manage status`. If not achieved, spawn a new "
         "goal-auditor (do not reuse a prior CLEAR) then continue working "
-        f"toward the full original condition. {NO_AGENT_PAUSE_RULE} {block}"
+        f"toward the full original condition.{broad_note} "
+        f"{NO_AGENT_PAUSE_RULE} {block}"
     )
 
 
