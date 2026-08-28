@@ -890,7 +890,14 @@ def _read_parse_result_text(
         if path is None:
             return None
         return _read_bytes_capped(path)
-    return filtered[0]
+    payload = filtered[0]
+    if len(payload.encode("utf-8")) > MAX_PARSE_RESULT_BYTES:
+        print(
+            f"[goal-eval] Error: argument exceeds {MAX_PARSE_RESULT_BYTES} bytes",
+            file=sys.stderr,
+        )
+        return None
+    return payload
 
 
 def cmd_parse_result(argv: list[str]) -> int:
@@ -1027,6 +1034,11 @@ def cmd_eval(argv: list[str]) -> int:
     if handler is None:
         print(f"[goal-eval] Error: unknown eval command: {command}", file=sys.stderr)
         _print_help()
+        return 1
+    unsafe = _refuse_if_data_dir_unsafe()
+    if unsafe is not None:
+        logger.warning("eval %s refused: data dir unsafe", command)
+        print(unsafe.replace("[goal]", "[goal-eval]"), file=sys.stderr)
         return 1
     return handler(rest)
 

@@ -29,6 +29,13 @@ function Write-GoalErr {
     Write-Host "[install-goal] $Message" -ForegroundColor Red
 }
 
+function Get-GoalPsLiteral {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory = $true)][string]$Value)
+    return "'" + ($Value.Replace("'", "''")) + "'"
+}
+
 function Write-Utf8NoBomFile {
     [CmdletBinding()]
     param(
@@ -632,8 +639,19 @@ print(__version__)
     }
     if ($LASTEXITCODE -ne 0) {
         Write-GoalErr "manage doctor FAILED (exit $LASTEXITCODE) - install files were written, but the harness is not healthy."
+        Write-Host "Doctor failure does not roll back (unlike a hook-merge failure)."
         Write-Host ("Fix FAIL lines above, then re-run: {0} -u {1} manage doctor" -f $Python.Exe, (Join-Path $installDir "scripts\run_goal.py"))
         Write-Host ("Or uninstall and retry: powershell -NoProfile -ExecutionPolicy Bypass -File {0}" -f (Join-Path $PSScriptRoot "uninstall-goal.ps1"))
+        if (Test-Path -LiteralPath $manifestPath) {
+            Write-Host ("Previous snapshot (manual restore, not automatic): {0}" -f $manifestPath)
+            Write-Host (
+                "  `$env:PYTHONPATH={0}; & {1} -m cursor_goal.install_backup --home {2} restore --manifest {3}" -f `
+                    (Get-GoalPsLiteral $installDir),
+                    (Get-GoalPsLiteral $Python.Exe),
+                    (Get-GoalPsLiteral $HomeDir),
+                    (Get-GoalPsLiteral $manifestPath)
+            )
+        }
         return 1
     }
     Write-Host ""

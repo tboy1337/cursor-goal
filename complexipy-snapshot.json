@@ -1,0 +1,126 @@
+[
+  {
+    "path": "src/cursor_goal/cli.py",
+    "file_name": "cli.py",
+    "functions": [
+      {
+        "name": "main",
+        "complexity": 19
+      }
+    ]
+  },
+  {
+    "path": "src/cursor_goal/doctor.py",
+    "file_name": "doctor.py",
+    "functions": [
+      {
+        "name": "_collect_marketplace_hook_files",
+        "complexity": 16
+      },
+      {
+        "name": "_doctor_check_windows_python",
+        "complexity": 17
+      },
+      {
+        "name": "_doctor_check_pursuing",
+        "complexity": 27
+      }
+    ]
+  },
+  {
+    "path": "src/cursor_goal/fs_lock.py",
+    "file_name": "fs_lock.py",
+    "functions": [
+      {
+        "name": "lock_acquire",
+        "complexity": 22
+      }
+    ]
+  },
+  {
+    "path": "src/cursor_goal/manage.py",
+    "file_name": "manage.py",
+    "functions": [
+      {
+        "name": "_parse_create_argv",
+        "complexity": 26
+      },
+      {
+        "name": "cmd_status",
+        "complexity": 43
+      }
+    ]
+  },
+  {
+    "path": "src/cursor_goal/parse.py",
+    "file_name": "parse.py",
+    "functions": [
+      {
+        "name": "parse_raw",
+        "complexity": 31
+      }
+    ]
+  },
+  {
+    "path": "src/cursor_goal/path_trust.py",
+    "file_name": "path_trust.py",
+    "functions": [
+      {
+        "name": "data_dir_is_insecure",
+        "complexity": 16
+      }
+    ]
+  },
+  {
+    "path": "src/cursor_goal/state.py",
+    "file_name": "state.py",
+    "functions": [
+      {
+        "name": "load_goal",
+        "complexity": 16
+      },
+      {
+        "name": "GoalState::from_dict",
+        "complexity": 36
+      }
+    ]
+  },
+  {
+    "path": "src/cursor_goal/stop.py",
+    "file_name": "stop.py",
+    "functions": [
+      {
+        "name": "handle_stop",
+        "complexity": 17
+      }
+    ]
+  },
+  {
+    "path": "src/cursor_goal/wake.py",
+    "file_name": "wake.py",
+    "functions": [
+      {
+        "name": "cmd_wake",
+        "complexity": 23
+      },
+      {
+        "name": "continuation_readiness",
+        "complexity": 25
+      }
+    ]
+  },
+  {
+    "path": "src/cursor_goal/wake_process.py",
+    "file_name": "wake_process.py",
+    "functions": [
+      {
+        "name": "_read_pid_record",
+        "complexity": 25
+      },
+      {
+        "name": "_kill_pid",
+        "complexity": 28
+      }
+    ]
+  }
+]

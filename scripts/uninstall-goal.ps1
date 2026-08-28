@@ -34,6 +34,20 @@ function Test-GoalManagedAgentFile {
     return $content -like "*${script:AgentProvenanceMarker}*"
 }
 
+function New-GoalUninstallHelperPath {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $true)][string]$HomeDir,
+        [Parameter(Mandatory = $true)][string]$Prefix
+    )
+    $tmpDir = Join-Path $HomeDir ".cursor-goal\tmp"
+    if ($PSCmdlet.ShouldProcess($tmpDir, "Create uninstall helper directory")) {
+        New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+    }
+    return (Join-Path $tmpDir ($Prefix + [guid]::NewGuid().ToString('N') + ".py"))
+}
+
 function Write-UninstallUtf8NoBom {
     [CmdletBinding()]
     param(
@@ -108,7 +122,7 @@ function Invoke-GoalUninstall {
                 $pyArgs = @()
             }
             if ($py) {
-                $tmpPy = Join-Path ([IO.Path]::GetTempPath()) ("cg-unhooks-" + [guid]::NewGuid().ToString('N') + ".py")
+                $tmpPy = New-GoalUninstallHelperPath -HomeDir $HomeDir -Prefix "cg-unhooks-"
                 $script = @'
 import sys
 from pathlib import Path
@@ -151,7 +165,7 @@ print("hooks cleaned")
                 $pyArgs = @()
             }
             if ($py) {
-                $tmpPy = Join-Path ([IO.Path]::GetTempPath()) ("cg-unhooks2-" + [guid]::NewGuid().ToString('N') + ".py")
+                $tmpPy = New-GoalUninstallHelperPath -HomeDir $HomeDir -Prefix "cg-unhooks2-"
                 $script = @'
 import json
 import os

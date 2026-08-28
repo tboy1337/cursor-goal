@@ -838,14 +838,18 @@ def test_from_dict_clamps_oversized_condition() -> None:
     assert len(state.workdir) == MAX_FIELD_CHARS
 
 
-def test_workdir_field_setter() -> None:
+def test_workdir_field_setter(tmp_path: Path) -> None:
     from cursor_goal.state import GoalState, _apply_field
 
+    work = tmp_path / "project"
+    work.mkdir()
     state = GoalState()
-    _apply_field(state, "workdir", "/tmp/project")
-    assert state.workdir == "/tmp/project"
+    _apply_field(state, "workdir", str(work))
+    assert Path(state.workdir).resolve() == work.resolve()
     _apply_field(state, "workdir", None)
     assert state.workdir == ""
+    with pytest.raises(ValueError, match="missing"):
+        _apply_field(state, "workdir", str(tmp_path / "gone"))
 
 
 def test_data_dir_is_insecure_none_with_link(

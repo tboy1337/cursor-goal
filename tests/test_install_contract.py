@@ -133,6 +133,68 @@ def test_write_hooks_file_atomic_utf8(tmp_path: Path) -> None:
     assert leftovers == []
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Unix file mode 0600")
+def test_write_hooks_file_unix_private_mode(tmp_path: Path) -> None:
+    path = tmp_path / "hooks.json"
+    write_hooks_file(path, {"version": 1, "hooks": {"stop": []}})
+    assert (path.stat().st_mode & 0o777) == 0o600
+
+
+def test_write_hooks_file_chmod_best_effort(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import hooks_config as hooks_mod
+
+    monkeypatch.setattr(hooks_mod.os, "name", "posix")
+    seen: list[int] = []
+
+    def fake_chmod(_path: object, mode: int) -> None:
+        seen.append(mode)
+
+    monkeypatch.setattr(hooks_mod.os, "chmod", fake_chmod)
+    path = tmp_path / "hooks.json"
+    write_hooks_file(path, {"version": 1, "hooks": {"stop": []}})
+    assert path.is_file()
+    assert seen.count(0o600) >= 2
+
+
+def test_write_hooks_file_tmp_chmod_oserror_aborts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import hooks_config as hooks_mod
+
+    monkeypatch.setattr(hooks_mod.os, "name", "posix")
+
+    def boom(_path: object, _mode: int) -> None:
+        raise OSError("chmod denied")
+
+    monkeypatch.setattr(hooks_mod.os, "chmod", boom)
+    path = tmp_path / "hooks.json"
+    with pytest.raises(OSError, match="chmod denied"):
+        write_hooks_file(path, {"version": 1, "hooks": {"stop": []}})
+    assert not path.exists()
+    assert list(tmp_path.glob("hooks.json.*.tmp")) == []
+
+
+def test_write_hooks_file_dest_chmod_oserror_still_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import hooks_config as hooks_mod
+
+    monkeypatch.setattr(hooks_mod.os, "name", "posix")
+    calls = {"n": 0}
+
+    def chmod_dest_fails(_path: object, _mode: int) -> None:
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise OSError("dest chmod denied")
+
+    monkeypatch.setattr(hooks_mod.os, "chmod", chmod_dest_fails)
+    path = tmp_path / "hooks.json"
+    write_hooks_file(path, {"version": 1, "hooks": {"stop": []}})
+    assert path.is_file()
+
+
 def test_normalize_stop_object_and_garbage() -> None:
     from cursor_goal.hooks_config import normalize_stop_hooks
 

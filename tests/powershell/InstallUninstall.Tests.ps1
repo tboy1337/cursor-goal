@@ -13,6 +13,16 @@ AfterAll {
     Remove-Item Env:CURSOR_GOAL_SKIP_MAIN -ErrorAction SilentlyContinue
 }
 
+Describe 'Get-GoalPsLiteral' {
+    It 'wraps values as PowerShell single-quoted literals' {
+        Get-GoalPsLiteral -Value 'C:\Python\python.exe' | Should -Be "'C:\Python\python.exe'"
+    }
+
+    It 'escapes embedded single quotes' {
+        Get-GoalPsLiteral -Value "C:\Users\O'Brien" | Should -Be "'C:\Users\O''Brien'"
+    }
+}
+
 Describe 'Find-GoalPython' {
     It 'returns a Python 3.12+ interpreter on this machine' {
         $py = Find-GoalPython
@@ -295,6 +305,13 @@ Describe 'Invoke-GoalInstall' {
         $hooks.hooks.stop[0].command | Should -Match 'stop_hook\.cmd'
         # Absolute path (drive letter or UNC)
         $hooks.hooks.stop[0].command | Should -Match '(?i)([a-z]:\\|\\\\)'
+        @($hooks.hooks.subagentStop).Count | Should -Be 2
+        $subPairs = @{}
+        @($hooks.hooks.subagentStop) | ForEach-Object {
+            $subPairs[$_._cursor_goal] = $_.matcher
+        }
+        $subPairs['cursor_goal_subagent_stop_hook'] | Should -Be 'goal-evaluator'
+        $subPairs['cursor_goal_subagent_audit_stop_hook'] | Should -Be 'goal-auditor'
         $cmdBody = Get-Content -Raw (Join-Path $installDir 'scripts\stop_hook.cmd')
         $cmdBody | Should -Match 'PYTHONUNBUFFERED'
         $cmdBody | Should -Match 'stop_hook\.py'

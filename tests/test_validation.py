@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from cursor_goal.validation import (
     DEFAULT_TIMEOUT_SEC,
@@ -16,6 +18,7 @@ from cursor_goal.validation import (
     MIN_TIMEOUT_SEC,
     _stream_to_text,
     redact_command,
+    redact_secrets,
     resolve_validation_timeout_sec,
     run_validation,
     try_split_argv,
@@ -503,3 +506,10 @@ def test_is_broad_condition_production_audit_vs_tests() -> None:
     assert is_broad_condition("all tests pass") is False
     assert is_broad_condition("fix the login bug") is False
     assert is_broad_condition("") is False
+
+
+@given(st.text(max_size=400))
+@settings(max_examples=40, deadline=None)
+def test_redact_secrets_never_raises(text: str) -> None:
+    out = redact_secrets(text)
+    assert isinstance(out, str)

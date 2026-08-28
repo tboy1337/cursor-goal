@@ -199,6 +199,19 @@ def build_steps(
 
     steps.append(("mypy", [py, "-m", "mypy", MYPY_TARGET]))
     steps.append(("pylint", [py, "-m", "pylint", PYLINT_TARGET]))
+    complexipy = shutil.which("complexipy")
+    if complexipy is None:
+        LOG.error('complexipy not on PATH; install with: pip install -e ".[dev]"')
+        steps.append(
+            ("complexipy", [py, "-c", "raise SystemExit('complexipy missing')"])
+        )
+    else:
+        steps.append(
+            (
+                "complexipy",
+                [complexipy, MYPY_TARGET, "-mx", "15", "--quiet"],
+            )
+        )
     steps.append(
         (
             "bandit",
@@ -334,7 +347,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Run the local verification pipeline: isort, black, pyproject-fmt, "
-            "mypy, pylint, bandit, pip-audit, pytest (+ multi-metric coverage), "
+            "mypy, pylint, complexipy, bandit, pip-audit, pytest (+ multi-metric coverage), "
             "shellcheck, and on Windows PSScriptAnalyzer/Pester."
         )
     )

@@ -55,6 +55,8 @@ jobs:
         run: mypy src/cursor_goal
       - name: Pylint
         run: pylint src/cursor_goal
+      - name: Complexipy
+        run: complexipy src/cursor_goal -mx 15 --quiet
       - name: ShellCheck
         run: |
           shellcheck --severity=warning scripts/*.sh

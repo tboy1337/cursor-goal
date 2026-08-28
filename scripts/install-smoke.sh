@@ -84,6 +84,12 @@ assert entry.get("_cursor_goal") == "cursor_goal_stop_hook", entry
 assert entry.get("loop_limit") is None, entry
 assert "-u" in entry.get("command", ""), entry
 print("[install-smoke] Hook marker/loop_limit/-u OK")
+sub = data["hooks"]["subagentStop"]
+assert isinstance(sub, list) and len(sub) == 2, sub
+pairs = {item.get("_cursor_goal"): item.get("matcher") for item in sub}
+assert pairs.get("cursor_goal_subagent_stop_hook") == "goal-evaluator", pairs
+assert pairs.get("cursor_goal_subagent_audit_stop_hook") == "goal-auditor", pairs
+print("[install-smoke] subagentStop markers/matchers OK")
 PY
 
 VERSION_FILE="$HOME/.cursor/skills/cursor-goal/VERSION"

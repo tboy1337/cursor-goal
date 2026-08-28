@@ -40,7 +40,7 @@ cd cursor-goal
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-goal.ps1
 ```
 
-Pin a release with `git clone --branch v5.1.3` instead of `main` when you want that tag. Teams/Enterprise can import this repository as a marketplace plugin (see `.cursor-plugin/marketplace.json` and [docs/teams-agpl.md](docs/teams-agpl.md)).
+Pin a release with `git clone --branch v5.1.4` instead of `main` when you want that tag. Teams/Enterprise can import this repository as a marketplace plugin (see `.cursor-plugin/marketplace.json` and [docs/teams-agpl.md](docs/teams-agpl.md)).
 
 After a successful install:
 
@@ -167,7 +167,7 @@ py -3 scripts/verify.py
 py -3 scripts/verify.py --fix   # isort/black, then verify
 ```
 
-`verify.py` runs format checks, mypy, pylint, pytest (coverage ≥95%), ShellCheck, and on Windows PSScriptAnalyzer/Pester. IDE regression material lives in [`testing/`](testing/README.md).
+`verify.py` runs format checks, mypy, pylint, complexipy, pytest (coverage ≥95%), ShellCheck, and on Windows PSScriptAnalyzer/Pester. IDE regression material lives in [`testing/`](testing/README.md).
 
 ## License
 

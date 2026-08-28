@@ -151,8 +151,9 @@ install_skill_files() {
     cp "${SOURCE_SKILL}/scripts/wake_loop.sh" "${INSTALL_DIR}/scripts/wake_loop.sh"
     chmod +x "${INSTALL_DIR}/scripts/wake_loop.sh" || true
   fi
-  # Do not copy wake_loop.cmd onto Unix installs (Windows-only launcher).
-  rm -f "${INSTALL_DIR}/scripts/wake_loop.cmd"
+  # Do not copy Windows-only launchers onto Unix installs.
+  rm -f "${INSTALL_DIR}/scripts/wake_loop.cmd" \
+        "${INSTALL_DIR}/scripts/stop_hook.cmd"
 
   "$PYTHON_BIN" - "$INSTALL_DIR" <<'PY'
 import sys
@@ -227,9 +228,13 @@ print_summary() {
   if ! "$PYTHON_BIN" -u "$INSTALL_DIR/scripts/run_goal.py" manage doctor; then
     echo ""
     echo -e "${RED}manage doctor FAILED — install files were written, but the harness is not healthy.${NC}"
-    echo "Fix the FAIL lines above, then re-run doctor or uninstall and retry:"
+    echo "Doctor failure does not roll back (unlike a hook-merge failure). Fix the FAIL lines above, then re-run doctor or uninstall and retry:"
     echo "  $(shell_quote "$PYTHON_BIN") -u $(shell_quote "$INSTALL_DIR/scripts/run_goal.py") manage doctor"
     echo "  $(shell_quote "$SCRIPT_DIR/uninstall-goal.sh")"
+    if [ -n "${BACKUP_MANIFEST:-}" ] && [ -f "$BACKUP_MANIFEST" ]; then
+      echo "Previous snapshot (manual restore, not automatic): $BACKUP_MANIFEST"
+      echo "  PYTHONPATH=$(shell_quote "$INSTALL_DIR") $(shell_quote "$PYTHON_BIN") -m cursor_goal.install_backup --home $(shell_quote "$HOME") restore --manifest $(shell_quote "$BACKUP_MANIFEST")"
+    fi
     exit 1
   fi
   echo ""

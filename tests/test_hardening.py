@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from pytest_mock import MockerFixture
 
 from cursor_goal import win_acl
 from cursor_goal.hooks_config import write_hooks_file
@@ -190,6 +191,7 @@ def test_eval_validate_refuses_insecure(
     code, _out, err = run_cli("eval", "validate")
     assert code == 1
     assert "writable" in err
+    assert evaluate_mod.cmd_validate([]) == 1
 
 
 def test_eval_signal_refuses_insecure(
@@ -206,6 +208,7 @@ def test_eval_signal_refuses_insecure(
     code, _out, err = run_cli("eval", "signal", "--force")
     assert code == 1
     assert "writable" in err
+    assert evaluate_mod.cmd_signal(["--force"]) == 1
 
 
 def test_eval_parse_result_refuses_insecure(
@@ -222,6 +225,82 @@ def test_eval_parse_result_refuses_insecure(
     code, _out, err = run_cli("eval", "parse-result", "YES: ok")
     assert code == 1
     assert "writable" in err
+    assert evaluate_mod.cmd_parse_result(["YES: ok"]) == 1
+
+
+def test_eval_parse_audit_refuses_insecure(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import evaluate as evaluate_mod
+
+    run_cli("manage", "create", "g")
+    monkeypatch.setattr(
+        evaluate_mod,
+        "refuse_if_data_dir_insecure",
+        lambda: "[goal] Error: data directory is group/world-writable (/tmp)",
+    )
+    code, _out, err = run_cli("eval", "parse-audit", "CLEAR: ok")
+    assert code == 1
+    assert "writable" in err
+    assert evaluate_mod.cmd_parse_audit(["CLEAR: ok"]) == 1
+
+
+@pytest.mark.parametrize(
+    "eval_args",
+    [
+        ("prompt",),
+        ("audit-prompt",),
+        ("check",),
+        ("spawn-config",),
+        ("audit-spawn-config",),
+    ],
+)
+def test_eval_read_paths_refuse_insecure(
+    goal_home: Path, mocker: MockerFixture, eval_args: tuple[str, ...]
+) -> None:
+    from cursor_goal import evaluate as evaluate_mod
+
+    run_cli("manage", "create", "g")
+    mocker.patch.object(
+        evaluate_mod,
+        "refuse_if_data_dir_insecure",
+        return_value="[goal] Error: data directory is group/world-writable (/tmp)",
+    )
+    code, _out, err = run_cli("eval", *eval_args)
+    assert code == 1
+    assert "writable" in err
+
+
+def test_eval_help_skips_insecure_refuse(
+    goal_home: Path, mocker: MockerFixture
+) -> None:
+    from cursor_goal import evaluate as evaluate_mod
+
+    mocker.patch.object(
+        evaluate_mod,
+        "refuse_if_data_dir_insecure",
+        return_value="[goal] Error: data directory is group/world-writable (/tmp)",
+    )
+    code, out, err = run_cli("eval", "help")
+    assert code == 0
+    assert "Usage:" in out
+    assert "writable" not in err
+
+
+def test_eval_unknown_command_before_refuse(
+    goal_home: Path, mocker: MockerFixture
+) -> None:
+    from cursor_goal import evaluate as evaluate_mod
+
+    mocker.patch.object(
+        evaluate_mod,
+        "refuse_if_data_dir_insecure",
+        return_value="[goal] Error: data directory is group/world-writable (/tmp)",
+    )
+    code, _out, err = run_cli("eval", "not-a-command")
+    assert code == 1
+    assert "unknown" in err.lower()
+    assert "writable" not in err
 
 
 def test_eval_validate_timeout(
@@ -308,6 +387,28 @@ def test_parse_result_oversize_file(goal_home: Path) -> None:
     path.write_text("y" * 100, encoding="utf-8")
     with patch.object(evaluate_mod, "MAX_PARSE_RESULT_BYTES", 8):
         assert evaluate_mod.cmd_parse_result([f"@{path}"]) == 1
+
+
+def test_parse_result_oversize_argv(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import evaluate as evaluate_mod
+
+    monkeypatch.setattr(evaluate_mod, "MAX_PARSE_RESULT_BYTES", 8)
+    code, _out, err = run_cli("eval", "parse-result", "x" * 20)
+    assert code == 1
+    assert "exceeds" in err
+
+
+def test_parse_audit_oversize_argv(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import evaluate as evaluate_mod
+
+    monkeypatch.setattr(evaluate_mod, "MAX_PARSE_RESULT_BYTES", 8)
+    code, _out, err = run_cli("eval", "parse-audit", "x" * 20)
+    assert code == 1
+    assert "exceeds" in err
 
 
 def test_eval_validate_no_goal(goal_home: Path) -> None:
@@ -1010,6 +1111,48 @@ def test_assert_workdir_usable_missing(tmp_path: Path) -> None:
     missing = tmp_path / "gone"
     with pytest.raises(ValueError, match="missing"):
         state_mod.assert_workdir_usable(str(missing))
+
+
+def test_set_workdir_rejects_symlink_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import path_trust as path_trust_mod
+
+    work = tmp_path / "wd"
+    work.mkdir()
+    monkeypatch.setattr(path_trust_mod, "path_has_symlink_or_reparse", lambda _p: True)
+    state = GoalState(condition="c", created_at="t", status="pursuing")
+    with pytest.raises(ValueError, match="symlink|junction|reparse"):
+        _apply_field(state, "workdir", str(work))
+
+
+def test_set_workdir_rejects_symlink(tmp_path: Path) -> None:
+    target = tmp_path / "real-wd"
+    target.mkdir()
+    link = tmp_path / "link-wd"
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"Cannot create symlinks without elevated privileges: {exc}")
+    state = GoalState(condition="c", created_at="t", status="pursuing")
+    with pytest.raises(ValueError, match="symlink|junction|reparse"):
+        _apply_field(state, "workdir", str(link))
+
+
+def test_set_workdir_accepts_real_dir(tmp_path: Path) -> None:
+    work = tmp_path / "wd"
+    work.mkdir()
+    state = GoalState(condition="c", created_at="t", status="pursuing")
+    _apply_field(state, "workdir", str(work))
+    assert Path(state.workdir).resolve() == work.resolve()
+
+
+def test_set_workdir_empty_clears() -> None:
+    state = GoalState(
+        condition="c", created_at="t", status="pursuing", workdir="/tmp/old"
+    )
+    _apply_field(state, "workdir", "")
+    assert state.workdir == ""
 
 
 def test_eval_validate_lock_timeout_on_snapshot(

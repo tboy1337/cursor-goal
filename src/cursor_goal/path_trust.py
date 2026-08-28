@@ -16,8 +16,6 @@ from pathlib import Path
 
 from cursor_goal.logging_config import get_logger
 from cursor_goal.native_path import native_path, path_str_is_absolute
-from cursor_goal.win_acl import ACL_HARDEN_FAILURES as _ACL_HARDEN_FAILURES
-from cursor_goal.win_acl import HARDENED_PATHS as _HARDENED_PATHS
 from cursor_goal.win_acl import failure_reason as _acl_failure_reason
 from cursor_goal.win_acl import harden_windows_acl as _harden_windows_acl
 

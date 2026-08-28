@@ -12,6 +12,10 @@ _py_ok() {
 }
 
 if [[ -n "${CURSOR_GOAL_PYTHON:-}" ]]; then
+  if [[ "${CURSOR_GOAL_PYTHON}" != /* ]]; then
+    echo "[cursor-goal] CURSOR_GOAL_PYTHON must be an absolute path" >&2
+    exit 1
+  fi
   if _py_ok "${CURSOR_GOAL_PYTHON}"; then
     exec "${CURSOR_GOAL_PYTHON}" -u "${RUN_GOAL}" wake loop "$@"
   fi

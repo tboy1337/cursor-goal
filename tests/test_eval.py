@@ -9,6 +9,8 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from cursor_goal.evaluate import (
     MISSING_AUDIT_CLEAR,
@@ -1022,3 +1024,11 @@ def test_extract_explored_block_helpers() -> None:
     marked = extract_explored_block("**EXPLORED:** docs/e.md\nVERDICT: ignore")
     assert marked is not None
     assert "docs/e.md" in marked
+
+
+@given(st.text(max_size=400))
+@settings(max_examples=40, deadline=None)
+def test_parse_result_text_never_raises(text: str) -> None:
+    verdict, reason = parse_result_text(text)
+    assert verdict in {"YES", "NO", "UNCLEAR"}
+    assert isinstance(reason, str)

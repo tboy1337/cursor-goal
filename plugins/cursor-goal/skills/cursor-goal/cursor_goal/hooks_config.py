@@ -185,13 +185,29 @@ def remove_audit_subagent_stop_hooks(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def write_hooks_file(path: Path, data: dict[str, Any]) -> None:
-    """Atomically write hooks.json as UTF-8 without BOM."""
+    """Atomically write hooks.json as UTF-8 without BOM.
+
+    On Unix, the written file is chmod ``0o600`` (best-effort) so other local
+    users cannot read hook commands. Windows relies on the user's profile ACL;
+    Cursor must be able to read ``~/.cursor/hooks.json``.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
     tmp = path.with_name(f"{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
     try:
         tmp.write_text(payload, encoding="utf-8")
+        if os.name != "nt":
+            try:
+                os.chmod(tmp, 0o600)
+            except OSError as exc:
+                logger.warning("Could not chmod hooks temp %s: %s", tmp, exc)
+                raise
         tmp.replace(path)
+        if os.name != "nt":
+            try:
+                os.chmod(path, 0o600)
+            except OSError as exc:
+                logger.debug("Could not chmod hooks.json %s: %s", path, exc)
     except Exception:
         if tmp.exists():
             try:

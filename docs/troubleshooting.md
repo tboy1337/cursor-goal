@@ -86,7 +86,7 @@ Relative or bare `python` values are rejected. Values with cmd metacharacters (`
 
 ## Git Bash refused on Windows
 
-`scripts/install-goal.sh` refuses when it detects native Windows Cursor paths — use PowerShell `scripts/install-goal.ps1` so `stop_hook.cmd` is correct.
+`scripts/install-goal.sh` refuses Git Bash / MSYS / Cygwin entirely (`uname -s` matching `MINGW*`, `MSYS*`, or `CYGWIN*`). Use PowerShell `scripts/install-goal.ps1` so `stop_hook.cmd` is written and the Windows drain delay is applied.
 
 ## Shell-mode validation warning
 

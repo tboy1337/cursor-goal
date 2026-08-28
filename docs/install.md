@@ -60,16 +60,16 @@ Override the resolved skill root (where `scripts/run_goal.py` is expected) with 
 
 Override evaluator model with `CURSOR_GOAL_EVAL_MODEL` (default `composer-2.5`; must be `inherit` or a real [Cursor model ID](https://cursor.com/docs/subagents.md#model-configuration) — `fast` is not one). See [platform-compatibility.md](platform-compatibility.md).
 
-On upgrade, the previous skill tree (including a leftover `~/.cursor/skills/goal` from v4) is copied to `~/.cursor-goal/backups/` and the old user `goal` skill is **deleted**. Keep count is **1**. If hook merge fails after files are copied, the installer restores from that backup automatically when a manifest exists. Sibling `~/.cursor/skills/goal.bak.*` folders from older installers are migrated off the skills root so they do not appear in Customize → Skills.
+On upgrade, the previous skill tree (including a leftover `~/.cursor/skills/goal` from v4) is copied to `~/.cursor-goal/backups/` and the old user `goal` skill is **deleted**. Keep count is **1**. If hook merge fails after files are copied, the installer restores from that backup automatically when a manifest exists. If `manage doctor` fails after a successful copy, the installer does **not** roll back — fix the FAIL lines and re-run doctor, or restore from the printed `~/.cursor-goal/backups/.last-install-manifest.json` snapshot. Sibling `~/.cursor/skills/goal.bak.*` folders from older installers are migrated off the skills root so they do not appear in Customize → Skills.
 
 `pip install -e .` provides the `cursor-goal` console script for contributors; it does **not** install the Cursor skill, agents, or hooks. Use the scripts above for Cursor.
 
 ### Install from a tagged release
 
-Package version **5.1.3** pins the clone branch below. Use it when tag `v5.1.3` exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If `git clone --branch` fails, clone `main` with the Quick install steps above ([release.md](release.md)).
+Package version **5.1.4** pins the clone branch below. Use it when tag `v5.1.4` exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If `git clone --branch` fails, clone `main` with the Quick install steps above ([release.md](release.md)).
 
 ```bash
-git clone --branch v5.1.3 https://github.com/tboy1337/cursor-goal.git
+git clone --branch v5.1.4 https://github.com/tboy1337/cursor-goal.git
 cd cursor-goal
 ./scripts/install-goal.sh   # or install-goal.ps1 on Windows
 ```

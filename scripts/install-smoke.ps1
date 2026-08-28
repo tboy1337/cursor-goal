@@ -82,6 +82,21 @@ try {
         throw "Hook command should reference stop_hook.cmd: $cmd"
     }
     Write-Host "[install-smoke] Hook command: $cmd"
+    $subStop = @($hooks.hooks.subagentStop)
+    if ($subStop.Count -ne 2) {
+        throw "Expected 2 subagentStop entries, got $($subStop.Count)"
+    }
+    $subPairs = @{}
+    foreach ($item in $subStop) {
+        $subPairs[[string]$item._cursor_goal] = [string]$item.matcher
+    }
+    if ($subPairs["cursor_goal_subagent_stop_hook"] -ne "goal-evaluator") {
+        throw "cursor_goal_subagent_stop_hook must pair with matcher goal-evaluator"
+    }
+    if ($subPairs["cursor_goal_subagent_audit_stop_hook"] -ne "goal-auditor") {
+        throw "cursor_goal_subagent_audit_stop_hook must pair with matcher goal-auditor"
+    }
+    Write-Host "[install-smoke] subagentStop markers/matchers OK"
     Write-Host ("[install-smoke] VERSION={0}" -f ((Get-Content -LiteralPath $versionFile -Raw).Trim()))
 
     $py = Find-GoalPython

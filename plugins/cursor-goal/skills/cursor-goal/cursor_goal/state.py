@@ -462,7 +462,10 @@ def _parse_workdir(value: Any) -> str:
 
 
 def _set_workdir(state: GoalState, value: Any) -> None:
-    state.workdir = _parse_workdir(value)
+    parsed = _parse_workdir(value)
+    if parsed:
+        parsed = assert_workdir_usable(parsed)
+    state.workdir = parsed
 
 
 def _set_status(state: GoalState, value: Any) -> None:
