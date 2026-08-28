@@ -66,10 +66,10 @@ On upgrade, the previous skill tree (including a leftover `~/.cursor/skills/goal
 
 ### Install from a tagged release
 
-Package version **5.1.4** pins the clone branch below. Use it when tag `v5.1.4` exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If `git clone --branch` fails, clone `main` with the Quick install steps above ([release.md](release.md)).
+Package version **5.1.5** pins the clone branch below. Use it when tag `v5.1.5` exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If `git clone --branch` fails, clone `main` with the Quick install steps above ([release.md](release.md)).
 
 ```bash
-git clone --branch v5.1.4 https://github.com/tboy1337/cursor-goal.git
+git clone --branch v5.1.5 https://github.com/tboy1337/cursor-goal.git
 cd cursor-goal
 ./scripts/install-goal.sh   # or install-goal.ps1 on Windows
 ```

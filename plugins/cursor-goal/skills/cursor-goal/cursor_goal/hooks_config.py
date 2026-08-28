@@ -184,30 +184,48 @@ def remove_audit_subagent_stop_hooks(data: dict[str, Any]) -> dict[str, Any]:
     return _remove_marked_entries(data, SUBAGENT_STOP_EVENT, AUDIT_SUBAGENT_STOP_MARKER)
 
 
+def _write_unix_private_tmp(tmp: Path, payload: str) -> None:
+    """Create *tmp* at mode ``0o600`` before writing hook JSON.
+
+    ``os.open(..., 0o600)`` is still umask-masked, so chmod the empty fd
+    immediately and only then write the payload. ``rename`` keeps that mode.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    fd = os.open(tmp, flags, 0o600)
+    transferred = False
+    try:
+        os.chmod(tmp, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            transferred = True
+            handle.write(payload)
+    except OSError as exc:
+        logger.warning("Could not write private hooks temp %s: %s", tmp, exc)
+        raise
+    finally:
+        if not transferred:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
 def write_hooks_file(path: Path, data: dict[str, Any]) -> None:
     """Atomically write hooks.json as UTF-8 without BOM.
 
-    On Unix, the written file is chmod ``0o600`` (best-effort) so other local
-    users cannot read hook commands. Windows relies on the user's profile ACL;
-    Cursor must be able to read ``~/.cursor/hooks.json``.
+    On Unix, the temp file is created private (``0o600``) before the payload
+    is written so other local users cannot read hook commands. Windows relies
+    on the user's profile ACL; Cursor must be able to read
+    ``~/.cursor/hooks.json``.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
     tmp = path.with_name(f"{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
     try:
-        tmp.write_text(payload, encoding="utf-8")
         if os.name != "nt":
-            try:
-                os.chmod(tmp, 0o600)
-            except OSError as exc:
-                logger.warning("Could not chmod hooks temp %s: %s", tmp, exc)
-                raise
+            _write_unix_private_tmp(tmp, payload)
+        else:
+            tmp.write_text(payload, encoding="utf-8")
         tmp.replace(path)
-        if os.name != "nt":
-            try:
-                os.chmod(path, 0o600)
-            except OSError as exc:
-                logger.debug("Could not chmod hooks.json %s: %s", path, exc)
     except Exception:
         if tmp.exists():
             try:

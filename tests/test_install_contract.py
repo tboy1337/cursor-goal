@@ -14,6 +14,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from pytest_mock import MockerFixture
 
 from cursor_goal import __version__
 from cursor_goal.hooks_config import (
@@ -140,7 +141,7 @@ def test_write_hooks_file_unix_private_mode(tmp_path: Path) -> None:
     assert (path.stat().st_mode & 0o777) == 0o600
 
 
-def test_write_hooks_file_chmod_best_effort(
+def test_write_hooks_file_chmod_tmp_before_payload(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from cursor_goal import hooks_config as hooks_mod
@@ -155,7 +156,7 @@ def test_write_hooks_file_chmod_best_effort(
     path = tmp_path / "hooks.json"
     write_hooks_file(path, {"version": 1, "hooks": {"stop": []}})
     assert path.is_file()
-    assert seen.count(0o600) >= 2
+    assert seen == [0o600]
 
 
 def test_write_hooks_file_tmp_chmod_oserror_aborts(
@@ -176,23 +177,22 @@ def test_write_hooks_file_tmp_chmod_oserror_aborts(
     assert list(tmp_path.glob("hooks.json.*.tmp")) == []
 
 
-def test_write_hooks_file_dest_chmod_oserror_still_writes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_write_hooks_file_unix_opens_tmp_exclusive_private(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
 ) -> None:
     from cursor_goal import hooks_config as hooks_mod
 
     monkeypatch.setattr(hooks_mod.os, "name", "posix")
-    calls = {"n": 0}
-
-    def chmod_dest_fails(_path: object, _mode: int) -> None:
-        calls["n"] += 1
-        if calls["n"] >= 2:
-            raise OSError("dest chmod denied")
-
-    monkeypatch.setattr(hooks_mod.os, "chmod", chmod_dest_fails)
+    spy_open = mocker.spy(hooks_mod.os, "open")
     path = tmp_path / "hooks.json"
     write_hooks_file(path, {"version": 1, "hooks": {"stop": []}})
     assert path.is_file()
+    assert spy_open.call_count == 1
+    _path, flags, mode = spy_open.call_args.args
+    assert flags & os.O_CREAT
+    assert flags & os.O_EXCL
+    assert flags & os.O_WRONLY
+    assert mode == 0o600
 
 
 def test_normalize_stop_object_and_garbage() -> None:
