@@ -45,7 +45,7 @@ After a successful install, **restart Cursor** (or reload hooks) so `hooks.json`
 | `~/.cursor/skills/cursor-goal/scripts/stop_hook.py` | Cursor stop hook |
 | `~/.cursor/skills/cursor-goal/scripts/stop_hook.cmd` | Windows stop launcher (classic install: absolute Python baked by `install-goal.ps1`) |
 | `~/.cursor/skills/cursor-goal/scripts/wake_loop.cmd` | Windows wake launcher (classic install: absolute Python baked, same as stop) |
-| `~/.cursor/skills/cursor-goal/scripts/wake_loop.sh` | Unix/macOS wake launcher (**required** while pursuing; agents may also call `run_goal.py wake loop` directly) |
+| `~/.cursor/skills/cursor-goal/scripts/wake_loop.sh` | Unix/macOS wake launcher (best-effort supplement while pursuing; `manage doctor` / `manage status` still hard-fail if wake is enabled and not ready — see [known-limitations.md](known-limitations.md)). Agents may also call `run_goal.py wake loop` directly |
 | `~/.cursor/skills/cursor-goal/VERSION` | Installed package version stamp |
 | `~/.cursor/agents/goalKeeper.md` | Worker agent (`model: inherit`) |
 | `~/.cursor/agents/goal-evaluator.md` | Readonly evaluator (`model: composer-2.5` default) |
@@ -66,10 +66,10 @@ On upgrade, the previous skill tree (including a leftover `~/.cursor/skills/goal
 
 ### Install from a tagged release
 
-Package version **5.1.9** pins the clone branch below. Use it when tag `v5.1.9` exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If `git clone --branch` fails, clone `main` with the Quick install steps above ([release.md](release.md)).
+Package version **5.1.10** pins the clone branch below. Use it when tag `v5.1.10` exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If `git clone --branch` fails, clone `main` with the Quick install steps above ([release.md](release.md)).
 
 ```bash
-git clone --branch v5.1.9 https://github.com/tboy1337/cursor-goal.git
+git clone --branch v5.1.10 https://github.com/tboy1337/cursor-goal.git
 cd cursor-goal
 ./scripts/install-goal.sh   # or install-goal.ps1 on Windows
 ```
@@ -100,6 +100,8 @@ Expected status: `[goal] No active goal.`
 Expected spawn-config: JSON with `"subagent_type":"goal-evaluator"` and `"model":"composer-2.5"` (unless overridden).  
 Expected audit-spawn-config: JSON with `"subagent_type":"goal-auditor"` and `"model":"inherit"`.  
 Doctor should print `Doctor: OK`. A successful installer run already did this; re-run doctor when diagnosing stalls.
+
+These paths are the **classic** install (`~/.cursor/skills/cursor-goal`). Teams marketplace installs should print the live harness with `manage harness-cmd` instead of assuming that home path. Do not stack classic installer hooks with marketplace hooks.
 
 Then in Agent chat: `/cursor-goal status`
 
@@ -163,9 +165,12 @@ License remains **AGPL-3.0-only** for both distribution paths.
 
 ## Contributor install
 
+The ship gate is `scripts/verify.py`, not pytest alone.
+
 ```bash
 pip install -e ".[dev]"
-pytest tests -q
-# or: py -3 scripts/verify.py
+python3 scripts/verify.py          # Unix / macOS / WSL
+# py -3 scripts/verify.py         # Windows
+# pytest tests -q                 # unit tests only; skips format, lint, security, smoke
 cursor-goal manage status
 ```

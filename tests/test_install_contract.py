@@ -560,6 +560,57 @@ def test_verify_isort_invocation_and_utf8_child_env() -> None:
     env = mod._child_env()
     assert env["PYTHONUTF8"] == "1"
     assert env["PYTHONIOENCODING"] == "utf-8"
+    fmt = mod.pyproject_fmt_invocation(sys.executable)
+    assert fmt
+    fmt_name = Path(fmt[0]).name.lower()
+    assert "pyproject-fmt" in fmt_name or fmt[:3] == [
+        sys.executable,
+        "-m",
+        "pyproject_fmt",
+    ]
+
+
+def test_verify_checks_dev_tools_without_importing_them() -> None:
+    """Presence checks must use find_spec so bandit/pyproject_fmt are not executed."""
+    root = Path(__file__).resolve().parents[1]
+    verify = (root / "scripts" / "verify.py").read_text(encoding="utf-8")
+    assert "importlib.util.find_spec" in verify
+    assert "__import__(mod" not in verify
+    script = root / "scripts" / "verify.py"
+    spec = importlib.util.spec_from_file_location(
+        "cursor_goal_verify_find_spec", script
+    )
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["cursor_goal_verify_find_spec"] = mod
+    spec.loader.exec_module(mod)
+    assert mod.missing_dev_modules(["pytest"]) == []
+    absent = "cursor_goal_verify_no_such_module_9f3a"
+    assert absent in mod.missing_dev_modules([absent])
+
+
+def test_verify_help_lists_full_ship_gate() -> None:
+    root = Path(__file__).resolve().parents[1]
+    script = root / "scripts" / "verify.py"
+    completed = subprocess.run(
+        [sys.executable, str(script), "--help"],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    out = completed.stdout.lower()
+    for token in (
+        "wake-smoke",
+        "install-smoke",
+        "version-sync",
+        "plugin-tree-sync",
+        "bandit",
+        "pip-audit",
+        "complexipy",
+    ):
+        assert token in out, token
 
 
 def test_pip_audit_scopes_to_this_project_not_the_environment() -> None:
@@ -574,6 +625,37 @@ def test_pip_audit_scopes_to_this_project_not_the_environment() -> None:
     rel = (root / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
     assert ci.count("pip-audit -r scripts/pip-audit-requirements.txt") == 3
     assert rel.count("pip-audit -r scripts/pip-audit-requirements.txt") == 3
+
+
+def test_release_and_ci_run_complexipy_and_wake_smoke() -> None:
+    """Tag-triggered release must not skip gates that CI ubuntu/harness already run."""
+    root = Path(__file__).resolve().parents[1]
+    ci = (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    rel = (root / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    assert "complexipy src/cursor_goal -mx 15 --quiet" in ci
+    assert "complexipy src/cursor_goal -mx 15 --quiet" in rel
+    assert rel.count("python scripts/wake-smoke.py") == 3
+
+
+def test_dev_extra_does_not_list_unused_autopep8() -> None:
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "pyproject.toml").read_text(encoding="utf-8")
+    assert "autopep8" not in text
+
+
+def test_contributor_docs_use_portable_python_for_verify() -> None:
+    root = Path(__file__).resolve().parents[1]
+    install = (root / "docs" / "install.md").read_text(encoding="utf-8")
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    assert "python3 scripts/verify.py" in install
+    assert "python3 scripts/verify.py" in readme
+
+
+def test_platform_compat_parse_result_path_documents_allow_cwd() -> None:
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "docs" / "platform-compatibility.md").read_text(encoding="utf-8")
+    assert "--allow-cwd" in text
+    assert "only accepts paths under the goal data directory" in text
 
 
 def test_compare_file_ignores_crlf_vs_lf(tmp_path: Path) -> None:

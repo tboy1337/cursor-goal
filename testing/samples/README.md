@@ -35,6 +35,8 @@ Use the extraction script or manually export from Cursor.
 
 ## Running Checks
 
+Optional transcript scoring only — not pytest and not `scripts/verify.py`:
+
 ```bash
 cd testing && ../scripts/run-tests.sh
 ```

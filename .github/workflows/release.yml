@@ -76,6 +76,9 @@ jobs:
       - name: Pylint
         run: pylint src/cursor_goal
 
+      - name: Complexipy
+        run: complexipy src/cursor_goal -mx 15 --quiet
+
       - name: ShellCheck
         run: |
           shellcheck --severity=warning scripts/*.sh
@@ -141,6 +144,10 @@ jobs:
       - name: Coverage metrics (>=95% statement/branch/function/combined)
         run: python scripts/check_coverage_metrics.py --threshold 95
 
+      - name: Wake smoke
+        shell: bash
+        run: python scripts/wake-smoke.py
+
       - name: Install PSScriptAnalyzer and Pester 5
         shell: pwsh
         run: |
@@ -191,6 +198,10 @@ jobs:
 
       - name: Coverage metrics (>=95% statement/branch/function/combined)
         run: python scripts/check_coverage_metrics.py --threshold 95
+
+      - name: Wake smoke
+        shell: bash
+        run: python scripts/wake-smoke.py
 
       - name: macOS install smoke
         run: bash scripts/install-smoke.sh

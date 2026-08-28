@@ -9,12 +9,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 TESTING_DIR="${REPO_ROOT}/testing"
 
-echo "=== cursor-goal Test Suite ==="
+echo "=== cursor-goal sample transcript checks (not pytest / not verify.py) ==="
 echo ""
 
 SAMPLES_DIR="${TESTING_DIR}/samples"
 if [ ! -d "$SAMPLES_DIR" ]; then
     echo "No sample transcripts found in ${SAMPLES_DIR}"
+    echo "This script scores optional captured transcripts; it is not the ship gate."
+    echo "Ship gate: python3 scripts/verify.py (Windows: py -3 scripts/verify.py)"
     echo "Run workloads in Cursor first, then copy transcripts here."
     echo ""
     echo "Available workloads:"

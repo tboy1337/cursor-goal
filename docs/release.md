@@ -2,7 +2,7 @@
 
 Checklist for cutting a tagged GitHub Release (`vX.Y.Z`).
 
-Current package version is **5.1.9**. The public GitHub tag for this release is **`v5.1.9`**. After tagging, README/install pins work with `git clone --branch v5.1.9`.
+Current package version is **5.1.10**. The public GitHub tag for this release is **`v5.1.10`**. After tagging, README/install pins work with `git clone --branch v5.1.10`.
 
 ## Manual Cursor IDE smoke (before pushing a version bump)
 
@@ -39,8 +39,8 @@ Non-IDE wake smoke: `python scripts/wake-smoke.py` (also run by `scripts/verify.
 3. **Verify locally**
 
    ```bash
-   py -3 scripts/verify.py
-   # or: python scripts/verify.py
+   python3 scripts/verify.py
+   # or: py -3 scripts/verify.py
    ```
 
    On Windows before pushing (or rely on the CI Windows jobs):

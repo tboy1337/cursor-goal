@@ -40,7 +40,7 @@ cd cursor-goal
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-goal.ps1
 ```
 
-Pin a release with `git clone --branch v5.1.9` instead of `main` when you want that tag. Teams/Enterprise can import this repository as a marketplace plugin (see `.cursor-plugin/marketplace.json` and [docs/teams-agpl.md](docs/teams-agpl.md)).
+Pin a release with `git clone --branch v5.1.10` instead of `main` when you want that tag. Teams/Enterprise can import this repository as a marketplace plugin (see `.cursor-plugin/marketplace.json` and [docs/teams-agpl.md](docs/teams-agpl.md)).
 
 After a successful install:
 
@@ -131,6 +131,8 @@ py -3 -u "$env:USERPROFILE\.cursor\skills\cursor-goal\scripts\run_goal.py" eval 
 py -3 -u "$env:USERPROFILE\.cursor\skills\cursor-goal\scripts\run_goal.py" manage doctor
 ```
 
+These commands are the **classic** install tree. For a Teams marketplace install, run `manage harness-cmd` and use that `run_goal.py` path instead. Do not stack classic hooks with marketplace hooks.
+
 ## Evaluator model
 
 The worker uses the session model. The remaining-work auditor does too (`inherit`). The evaluator defaults to `composer-2.5`.
@@ -163,11 +165,11 @@ $env:CURSOR_GOAL_EVAL_MODEL = 'gpt-5.3-codex'
 
 ```bash
 pip install -e ".[dev]"
-py -3 scripts/verify.py
-py -3 scripts/verify.py --fix   # isort/black, then verify
+python3 scripts/verify.py            # Windows: py -3 scripts/verify.py
+python3 scripts/verify.py --fix      # isort/black, then verify
 ```
 
-`verify.py` runs format checks, mypy, pylint, complexipy, pytest (coverage ≥95%), ShellCheck, and on Windows PSScriptAnalyzer/Pester. IDE regression material lives in [`testing/`](testing/README.md).
+`verify.py` is the local ship gate: isort/black/pyproject-fmt, mypy, pylint, complexipy, bandit, pip-audit, version-sync, plugin-tree-sync, pytest (coverage ≥95% statement/branch/function/combined), wake-smoke, ShellCheck, install-smoke, and on Windows PSScriptAnalyzer/Pester. `pytest tests` alone is not enough. IDE regression material lives in [`testing/`](testing/README.md).
 
 ## License
 

@@ -1,8 +1,9 @@
 # Testing cursor-goal
 
 This directory holds **manual / IDE-level** test material. Automated unit
-tests live in [`tests/`](../tests) (`pytest tests -q`) and are the primary,
-CI-enforced gate (`scripts/verify.py`). Everything here is a supplement for
+tests live in [`tests/`](../tests) (`pytest tests -q`). The local ship gate is
+[`scripts/verify.py`](../scripts/verify.py) (pytest plus format, lint, security,
+coverage metrics, and smoke). Everything here is a supplement for
 scenarios that need a real Cursor IDE session — hook delivery, multi-turn
 continuation, and subagent `Task` behavior cannot be fully exercised by
 `pytest` alone.
@@ -53,10 +54,13 @@ python3 run-subagent-tests.py
 ```
 
 Pattern checks against captured transcripts (if any are present in
-`testing/samples/`):
+`testing/samples/`). This is **not** pytest and **not** the ship gate
+(`python3 scripts/verify.py` or Windows `py -3 scripts/verify.py`):
 
 ```bash
+# from the repository root
 ./scripts/run-tests.sh
+# or: cd testing && ../scripts/run-tests.sh
 # or a single sample:
 python3 testing/scripts/patterns.py testing/samples/12-goal-with-test.jsonl 12-goal-with-test
 ```

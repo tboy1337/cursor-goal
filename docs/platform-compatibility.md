@@ -110,7 +110,7 @@ On Windows, pipe the response into `eval parse-result --stdin` (or use `@file`) 
 
 - `~/.cursor-goal/data` and `validation_command` are trusted-user local state. If an attacker can write `goal.json`, they can run commands as you.
 - Prefer `--test "..."` / simple argv-safe commands; compound shell snippets need `--allow-shell` (cmd.exe on Windows via pinned `COMSPEC` = `%SystemRoot%\System32\cmd.exe` when present, not PowerShell). New goals default to deny-shell; `CURSOR_GOAL_DENY_SHELL=1` / `--deny-shell` still force argv-only. Library `run_validation` defaults to `shell_ok=False`.
-- `eval parse-result @file` only accepts paths under the goal data directory or the current working directory.
+- `eval parse-result @file` only accepts paths under the goal data directory. Pass `--allow-cwd` to also allow the current working directory.
 - Eval signal is a protocol guard bound to the goal content hash with `verdict: YES` — not cryptographic attestation. `manage done --force` and `eval signal --force` exist for recovery and are logged.
 - Stop hook does **not** run validation (avoids 30s hook timeouts).
 - Turn budget and wake budget are independent (each capped at 500). Default `wake_budget = turn_budget * 10` (min 10). Stop-hook drain is capped at 2000ms.

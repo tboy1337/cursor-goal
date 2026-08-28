@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 """Local verification pipeline for the cursor-goal harness.
 
-Runs formatting checks (or optional auto-fix), typecheck, lint, pytest with
-multi-metric coverage (>=95% statement/branch/function/combined), ShellCheck
-for bash, and on Windows PSScriptAnalyzer + Pester (>=95% command coverage).
+Runs isort/black/pyproject-fmt (or optional auto-fix), mypy, pylint, complexipy,
+bandit, pip-audit, version-sync, plugin-tree-sync, pytest with multi-metric
+coverage (>=95% statement/branch/function/combined), wake-smoke, ShellCheck,
+install-smoke, and on Windows PSScriptAnalyzer + Pester (>=95% command coverage).
 
 Usage:
-  py -3 scripts/verify.py
-  py -3 scripts/verify.py --fix
-  py -3 scripts/verify.py --skip-format
-  py -3 scripts/verify.py --skip-shell
+  python3 scripts/verify.py          # Windows: py -3
+  python3 scripts/verify.py --fix
+  python3 scripts/verify.py --skip-format
+  python3 scripts/verify.py --skip-shell
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import logging
 import os
 import shutil
@@ -36,6 +38,16 @@ COVERAGE_JSON = "coverage.json"
 COVERAGE_CHECK = "scripts/check_coverage_metrics.py"
 POWERSHELL_TESTS = "scripts/run-powershell-tests.ps1"
 PIP_AUDIT_REQUIREMENTS = "scripts/pip-audit-requirements.txt"
+REQUIRED_DEV_MODULES = (
+    "pytest",
+    "mypy",
+    "pylint",
+    "black",
+    "isort",
+    "pyproject_fmt",
+    "bandit",
+    "pip_audit",
+)
 
 
 @dataclass(frozen=True)
@@ -56,12 +68,42 @@ def repo_root() -> Path:
 
 
 def setup_logging(*, verbose: bool) -> None:
+    """Configure only the verify logger so importing tools cannot spoof [verify] ERROR."""
     level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="[verify] %(levelname)s: %(message)s",
-        stream=sys.stderr,
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("[verify] %(levelname)s: %(message)s"))
+    LOG.handlers.clear()
+    LOG.addHandler(handler)
+    LOG.setLevel(level)
+    LOG.propagate = False
+    LOG.debug(
+        "verify logger isolated from root (level=%s)", logging.getLevelName(level)
     )
+
+
+def missing_dev_modules(
+    names: Sequence[str] = REQUIRED_DEV_MODULES,
+) -> list[str]:
+    """Return import names that are not installed, without executing the modules.
+
+    ``__import__("bandit")`` loads optional formatters and logs ``sarif_om``
+    errors; ``python -m pyproject_fmt`` after a prior import warns about
+    ``sys.modules``. ``find_spec`` only checks install presence.
+    """
+    missing: list[str] = []
+    for mod in names:
+        spec = importlib.util.find_spec(mod)
+        if spec is None:
+            LOG.debug("dev module missing: %s", mod)
+            missing.append(mod)
+        else:
+            LOG.debug("dev module present: %s", mod)
+    LOG.debug(
+        "dev module presence check complete missing=%s checked=%s",
+        missing,
+        list(names),
+    )
+    return missing
 
 
 def _child_env() -> dict[str, str]:
@@ -124,6 +166,22 @@ def isort_invocation(py: str) -> list[str]:
     ]
 
 
+def pyproject_fmt_invocation(py: str) -> list[str]:
+    """Return argv prefix for pyproject-fmt.
+
+    ``python -m pyproject_fmt`` emits a RuntimeWarning because the package is
+    already imported when ``-m`` runs. Prefer the console script.
+    """
+    found = shutil.which("pyproject-fmt")
+    if found:
+        LOG.debug("pyproject-fmt console script: %s", found)
+        return [found]
+    LOG.warning(
+        "pyproject-fmt console script not on PATH; using python -m pyproject_fmt"
+    )
+    return [py, "-m", "pyproject_fmt"]
+
+
 def bash_scripts(root: Path) -> list[Path]:
     """Return sorted bash scripts under scripts/ plus the skill tree's wake loop.
 
@@ -169,7 +227,7 @@ def build_steps(
             steps.append(
                 (
                     "pyproject-fmt (fix)",
-                    [py, "-m", "pyproject_fmt", PYPROJECT_TOML],
+                    [*pyproject_fmt_invocation(py), PYPROJECT_TOML],
                 )
             )
         else:
@@ -193,7 +251,7 @@ def build_steps(
             steps.append(
                 (
                     "pyproject-fmt (check)",
-                    [py, "-m", "pyproject_fmt", "--check", PYPROJECT_TOML],
+                    [*pyproject_fmt_invocation(py), "--check", PYPROJECT_TOML],
                 )
             )
 
@@ -346,9 +404,10 @@ def build_steps(
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Run the local verification pipeline: isort, black, pyproject-fmt, "
-            "mypy, pylint, complexipy, bandit, pip-audit, pytest (+ multi-metric coverage), "
-            "shellcheck, and on Windows PSScriptAnalyzer/Pester."
+            "Run the local ship gate: isort, black, pyproject-fmt, mypy, pylint, "
+            "complexipy, bandit, pip-audit, version-sync, plugin-tree-sync, "
+            "pytest (+ multi-metric coverage), wake-smoke, shellcheck, "
+            "install-smoke, and on Windows PSScriptAnalyzer/Pester."
         )
     )
     parser.add_argument(
@@ -364,7 +423,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--skip-shell",
         action="store_true",
-        help="Skip ShellCheck and PowerShell (PSScriptAnalyzer/Pester) steps.",
+        help="Skip ShellCheck, install-smoke, and on Windows PSScriptAnalyzer/Pester.",
     )
     parser.add_argument(
         "-v",
@@ -393,23 +452,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.executable,
     )
 
-    required = [
-        "pytest",
-        "mypy",
-        "pylint",
-        "black",
-        "isort",
-        "pyproject_fmt",
-        "bandit",
-        "pip_audit",
-    ]
-    # Tools are invoked via `python -m`, so check importability instead of PATH.
-    missing_mods: list[str] = []
-    for mod in required:
-        try:
-            __import__(mod if mod != "pytest" else "pytest")
-        except ImportError:
-            missing_mods.append(mod)
+    missing_mods = missing_dev_modules()
+    LOG.debug("required dev modules missing=%s", missing_mods)
     if missing_mods:
         LOG.error(
             'Missing tools: %s. Install with: pip install -e ".[dev]"',
