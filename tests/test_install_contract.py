@@ -366,9 +366,10 @@ def test_plugin_manifests_and_hooks_contract() -> None:
     assert "do not call CreateGoal" not in keeper.lower()
     skill = (plugin / "skills" / "cursor-goal" / "SKILL.md").read_text(encoding="utf-8")
     assert "name: cursor-goal" in skill
-    assert "disable-model-invocation" not in skill
-    assert "/goal" in skill.split("---", 2)[1]
-    assert "/cursor-goal" in skill.split("---", 2)[1]
+    assert "disable-model-invocation: true" in skill
+    frontmatter = skill.split("---", 2)[1]
+    assert "/cursor-goal" in frontmatter
+    assert "/goal" not in frontmatter
     assert "Iron law" in skill
     assert "FOLLOWUP_REQUIRED" in skill
     assert "Fidelity" in skill
@@ -791,7 +792,8 @@ def test_zero_friction_install_docs_and_skill() -> None:
     after = readme.split("After a successful install:")[1].split("Uninstall")[0]
     assert "Restart Cursor" in after
     assert "/cursor-goal" in after
-    assert "/goal" in after
+    assert "Both get the auditor" not in after
+    assert "or `/goal" not in after
     assert "Run `manage doctor`" not in after
     assert "confirm a single user skill" not in after.lower()
     assert "Pin **cursor-goal** as a Custom Mode" not in after
@@ -800,12 +802,14 @@ def test_zero_friction_install_docs_and_skill() -> None:
     assert "run `manage doctor` before the first" not in install_md
     assert "Confirm **one** `cursor-goal` entry" not in install_md
     assert "restart cursor" in install_md.lower()
+    assert "or `/goal" not in install_md
+    assert "Both get the auditor" not in install_md
 
-    assert "disable-model-invocation" not in skill
+    assert "disable-model-invocation: true" in skill
     frontmatter = skill.split("---", 2)[1]
-    assert "/goal" in frontmatter
     assert "/cursor-goal" in frontmatter
-    assert "pins this skill as a Custom Mode" not in skill
+    assert "/goal" not in frontmatter
+    assert "auto-applies for `/goal`" not in skill
     assert "Do not use for vanilla /goal" not in keeper
     assert "Custom Mode paired with /goal" not in keeper
 
@@ -813,12 +817,12 @@ def test_zero_friction_install_docs_and_skill() -> None:
         nxt = text.split("Next steps:", 1)[1]
         assert "Restart Cursor" in nxt, label
         assert "/cursor-goal" in nxt, label
-        assert "/goal" in nxt, label
         assert "3) Start wake loop" not in nxt, label
         assert "Custom Mode" not in nxt, label
         numbered = nxt.split("Usage in Cursor agent:", 1)[0]
         numbered = numbered.split("Windows stop hook", 1)[0]
         assert "manage doctor" not in numbered, label
+        assert "/goal" not in numbered, label
 
 
 def test_install_backup_migrates_legacy_and_prunes(

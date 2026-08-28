@@ -4,7 +4,7 @@ requires = [ "setuptools>=77" ]
 
 [project]
 name = "cursor-goal"
-version = "5.1.2"
+version = "5.1.3"
 description = "Cursor IDE /cursor-goal harness (maker≠checker); not Cursor's built-in /goal"
 readme = "README.md"
 license = "AGPL-3.0-only"

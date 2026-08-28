@@ -13,7 +13,7 @@
 /cursor-goal all tests in test/auth pass and the lint step is clean
 ```
 
-If Cursor's built-in goal tools are present, the skill uses them so the agent keeps going when the session would otherwise stop. After install, `/goal` and `/cursor-goal` both use the auditor/evaluator loop (the built-in `/goal` skill is layered, not overwritten).
+If Cursor's built-in goal tools are present, the skill uses them so the agent keeps going when the session would otherwise stop. Plain `/goal` without this skill is unchanged.
 
 ## Requirements
 
@@ -40,12 +40,12 @@ cd cursor-goal
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-goal.ps1
 ```
 
-Pin a release with `git clone --branch v5.1.2` instead of `main` when you want that tag. Teams/Enterprise can import this repository as a marketplace plugin (see `.cursor-plugin/marketplace.json` and [docs/teams-agpl.md](docs/teams-agpl.md)).
+Pin a release with `git clone --branch v5.1.3` instead of `main` when you want that tag. Teams/Enterprise can import this repository as a marketplace plugin (see `.cursor-plugin/marketplace.json` and [docs/teams-agpl.md](docs/teams-agpl.md)).
 
 After a successful install:
 
 1. Restart Cursor (or reload hooks) so `hooks.json` takes effect.
-2. In Agent chat: `/cursor-goal <verifiable condition>` — or `/goal …`. Both get the auditor/evaluator loop.
+2. In Agent chat: `/cursor-goal <verifiable condition>`.
 
 The installer already ran `manage doctor`. If it printed `Doctor: OK` and exited 0, you are done. Re-run doctor only when diagnosing stalls ([docs/troubleshooting.md](docs/troubleshooting.md)).
 
@@ -73,7 +73,7 @@ With a validation command and a turn budget:
 /cursor-goal "compound check" --test "npm test && npm run lint" --allow-shell
 ```
 
-`/goal …` works the same way after install: native tools keep the session alive; this skill still decides when the work is finished. Pinning cursor-goal as a Custom Mode is optional (keeps the skill sticky for the whole chat).
+Vanilla `/goal` is unchanged. Optionally pin cursor-goal as a Custom Mode if you want `/goal` to use this harness.
 
 A pursuing goal finishes only in this order: remaining-work auditor **CLEAR**, evaluator **YES**, then `manage done`. If native continuation is on, call `UpdateGoal complete` after `manage done`.
 

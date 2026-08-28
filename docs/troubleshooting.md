@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Quick fixes for common install and continuation failures. cursor-goal is the `/cursor-goal` harness (Codex-style loop). After install, `/cursor-goal` and `/goal` both layer native continuation under maker ≠ checker. Pinning the skill as a Custom Mode is optional (keeps the protocol sticky for the whole chat). Without this skill installed, vanilla `/goal` is still same-model self-audit.
+Quick fixes for common install and continuation failures. cursor-goal is the `/cursor-goal` harness (Codex-style loop). Vanilla `/goal` is Cursor's built-in (same-model self-audit). Optionally pin this skill as a Custom Mode if you want `/goal` to use this harness.
 
 Also run:
 
@@ -52,7 +52,7 @@ Doctor **FAIL**s when `~/.cursor/skills/cursor-goal/VERSION` (or the resolved sk
 
 Cursor [loads every `SKILL.md` under `~/.cursor/skills/`](https://cursor.com/docs/skills). Pre-v5 installers left `goal.bak.<UTC>` siblings that show up as extra skills. Re-run the v5 installer: it migrates those folders to `~/.cursor-goal/backups/` (keep 1) and **deletes** leftover `~/.cursor/skills/goal`. You should see **one** user skill named `cursor-goal`. Cursor's built-in `/goal` under `~/.cursor/skills-cursor/goal` is expected and is not this project.
 
-Seeing both `/goal` and `/cursor-goal` in the product is expected. After install this skill auto-applies for `/goal` as well, so both get maker ≠ checker. Pinning cursor-goal as a Custom Mode is optional if you want the skill sticky for the whole chat. Without this skill installed, vanilla `/goal` is native continuation with same-model self-audit.
+Seeing both `/goal` and `/cursor-goal` in the product is expected. Vanilla `/goal` stays Cursor's built-in. Pin cursor-goal as a Custom Mode only if you want `/goal` to use this harness.
 
 Doctor **FAIL**s while `~/.cursor/skills/goal/SKILL.md` still exists (stacked old user skill). Doctor **WARN**s when the built-in `~/.cursor/skills-cursor/goal` is present (layer it; do not overwrite it).
 

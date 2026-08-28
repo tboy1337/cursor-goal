@@ -643,7 +643,7 @@ print(__version__)
     Write-Host ""
     Write-Host "Next steps:"
     Write-Host "  1) Restart Cursor (or reload hooks) so hooks.json takes effect"
-    Write-Host "  2) In Cursor: /cursor-goal <verifiable condition>  (or /goal ...)"
+    Write-Host "  2) In Cursor: /cursor-goal <verifiable condition>"
     Write-GoalInfo "Windows stop hook uses stop_hook.cmd + stdout drain delay (Cursor capture race mitigation)."
     Write-GoalInfo "If create prints GOAL_WAKE_REQUIRED (native CreateGoal missing or CURSOR_GOAL_NATIVE=0), start that wake loop with notify_on_output matching ^AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor, then confirm wake status continuation_ready=true."
     Write-GoalWarn "If stop followups still drop, wake continues the goal; last-stop-response.json is always written."

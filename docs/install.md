@@ -33,7 +33,7 @@ cd cursor-goal
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-goal.ps1
 ```
 
-After a successful install, **restart Cursor** (or reload hooks) so `hooks.json` takes effect, then type `/cursor-goal <condition>` or `/goal …`. Both get the auditor/evaluator loop. The installer already ran `manage doctor`; if it exited 0, skip doctor. Leftover extra skills after a pre-v5 upgrade are a [troubleshooting](troubleshooting.md) case, not a required confirm step.
+After a successful install, **restart Cursor** (or reload hooks) so `hooks.json` takes effect, then type `/cursor-goal <condition>`. Vanilla `/goal` stays Cursor's built-in. The installer already ran `manage doctor`; if it exited 0, skip doctor. Leftover extra skills after a pre-v5 upgrade are a [troubleshooting](troubleshooting.md) case, not a required confirm step.
 
 ## What gets installed
 
@@ -66,10 +66,10 @@ On upgrade, the previous skill tree (including a leftover `~/.cursor/skills/goal
 
 ### Install from a tagged release
 
-Package version **5.1.2** pins the clone branch below. Use it when tag `v5.1.2` exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If `git clone --branch` fails, clone `main` with the Quick install steps above ([release.md](release.md)).
+Package version **5.1.3** pins the clone branch below. Use it when tag `v5.1.3` exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If `git clone --branch` fails, clone `main` with the Quick install steps above ([release.md](release.md)).
 
 ```bash
-git clone --branch v5.1.2 https://github.com/tboy1337/cursor-goal.git
+git clone --branch v5.1.3 https://github.com/tboy1337/cursor-goal.git
 cd cursor-goal
 ./scripts/install-goal.sh   # or install-goal.ps1 on Windows
 ```
