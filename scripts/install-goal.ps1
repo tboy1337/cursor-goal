@@ -29,6 +29,21 @@ function Write-GoalErr {
     Write-Host "[install-goal] $Message" -ForegroundColor Red
 }
 
+function Get-GoalInstallHoldDuration {
+    [CmdletBinding()]
+    [OutputType([int])]
+    param()
+    return 10
+}
+
+function Wait-GoalInstallExit {
+    [CmdletBinding()]
+    param()
+    $seconds = Get-GoalInstallHoldDuration
+    Write-GoalInfo ("Waiting {0} seconds before exit so this window stays readable." -f $seconds)
+    Start-Sleep -Seconds $seconds
+}
+
 function Get-GoalPsLiteral {
     [CmdletBinding()]
     [OutputType([string])]
@@ -675,5 +690,12 @@ print(__version__)
 # Direct-invocation guard: skip when dot-sourced by Pester/tests.
 $script:IsDotSourced = $MyInvocation.InvocationName -eq '.' -or $env:CURSOR_GOAL_SKIP_MAIN -eq '1'
 if (-not $script:IsDotSourced) {
-    exit (Invoke-GoalInstall)
+    $installCode = 1
+    try {
+        $installCode = Invoke-GoalInstall
+    }
+    finally {
+        Wait-GoalInstallExit
+    }
+    exit $installCode
 }

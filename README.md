@@ -40,7 +40,7 @@ cd cursor-goal
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-goal.ps1
 ```
 
-Pin a release with `git clone --branch v5.1.7` instead of `main` when you want that tag. Teams/Enterprise can import this repository as a marketplace plugin (see `.cursor-plugin/marketplace.json` and [docs/teams-agpl.md](docs/teams-agpl.md)).
+Pin a release with `git clone --branch v5.1.8` instead of `main` when you want that tag. Teams/Enterprise can import this repository as a marketplace plugin (see `.cursor-plugin/marketplace.json` and [docs/teams-agpl.md](docs/teams-agpl.md)).
 
 After a successful install:
 

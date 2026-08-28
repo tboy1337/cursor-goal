@@ -13,6 +13,33 @@ AfterAll {
     Remove-Item Env:CURSOR_GOAL_SKIP_MAIN -ErrorAction SilentlyContinue
 }
 
+Describe 'Wait-GoalInstallExit' {
+    It 'holds 10 seconds so a double-clicked window stays readable' {
+        Get-GoalInstallHoldDuration | Should -Be 10
+    }
+
+    It 'sleeps that many seconds then returns' {
+        Mock -CommandName Start-Sleep -MockWith {}
+        Wait-GoalInstallExit
+        Should -Invoke -CommandName Start-Sleep -Times 1 -Exactly -ParameterFilter {
+            $Seconds -eq 10
+        }
+    }
+
+    It 'is invoked from the direct-run wrapper, not from Invoke-GoalInstall' {
+        $text = Get-Content -LiteralPath $script:InstallScript -Raw
+        $text | Should -Match 'Wait-GoalInstallExit'
+        $direct = ($text -split 'Direct-invocation guard')[-1]
+        $direct | Should -Match 'Wait-GoalInstallExit'
+        $fn = [regex]::Match(
+            $text,
+            '(?s)function Invoke-GoalInstall \{.*?\n\}'
+        ).Value
+        $fn | Should -Not -Match 'Wait-GoalInstallExit'
+        $fn | Should -Not -Match 'Start-Sleep'
+    }
+}
+
 Describe 'Get-GoalPsLiteral' {
     It 'wraps values as PowerShell single-quoted literals' {
         Get-GoalPsLiteral -Value 'C:\Python\python.exe' | Should -Be "'C:\Python\python.exe'"

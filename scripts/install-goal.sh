@@ -29,6 +29,15 @@ log_warn()  { echo -e "${YELLOW}[install-goal]${NC} $1"; }
 log_error() { echo -e "${RED}[install-goal]${NC} $1" >&2; }
 log_step()  { echo -e "${BLUE}==>${NC} $1"; }
 
+INSTALL_HOLD_SECONDS=10
+
+hold_before_exit() {
+  log_info "Waiting ${INSTALL_HOLD_SECONDS} seconds before exit so this window stays readable."
+  sleep "${INSTALL_HOLD_SECONDS}"
+}
+
+trap hold_before_exit EXIT
+
 # Native Windows Cursor needs install-goal.ps1 (.cmd launcher). Refuse Git Bash /
 # MSYS / Cygwin, and WSL installs that write into a Windows USERPROFILE path.
 refuse_non_native_windows_install() {

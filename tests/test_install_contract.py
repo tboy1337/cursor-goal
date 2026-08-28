@@ -839,6 +839,25 @@ def test_classic_installers_target_cursor_goal_not_goal() -> None:
     assert r".cursor-goal\backups" in un_ps1
 
 
+def test_classic_installers_hold_window_before_exit() -> None:
+    """Direct-run installers wait 10s so a closing console stays readable."""
+    root = Path(__file__).resolve().parents[1]
+    sh_text = (root / "scripts" / "install-goal.sh").read_text(encoding="utf-8")
+    ps1_text = (root / "scripts" / "install-goal.ps1").read_text(encoding="utf-8")
+    assert "hold_before_exit" in sh_text
+    assert "trap hold_before_exit EXIT" in sh_text
+    assert 'sleep "${INSTALL_HOLD_SECONDS}"' in sh_text
+    assert "INSTALL_HOLD_SECONDS=10" in sh_text
+    assert "Wait-GoalInstallExit" in ps1_text
+    assert "Get-GoalInstallHoldDuration" in ps1_text
+    assert "Start-Sleep -Seconds $seconds" in ps1_text
+    invoke = ps1_text.split("function Invoke-GoalInstall", 1)[1].split(
+        "Direct-invocation guard", 1
+    )[0]
+    assert "Wait-GoalInstallExit" not in invoke
+    assert "Start-Sleep" not in invoke
+
+
 def test_zero_friction_install_docs_and_skill() -> None:
     """Successful install must not require doctor, Skills UI, or Custom Mode pin."""
     root = Path(__file__).resolve().parents[1]
