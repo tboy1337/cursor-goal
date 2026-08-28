@@ -11,6 +11,7 @@ from unittest.mock import patch
 import pytest
 from pytest_mock import MockerFixture
 
+from cursor_goal import hooks_config as hooks_mod
 from cursor_goal import win_acl
 from cursor_goal.hooks_config import write_hooks_file
 from cursor_goal.state import (
@@ -711,9 +712,14 @@ def test_write_hooks_write_text_fail(
     def boom_write(self: Path, *_a: object, **_k: object) -> None:
         raise OSError("disk full")
 
+    def boom_open(*_a: object, **_k: object) -> int:
+        raise OSError("disk full")
+
     monkeypatch.setattr(Path, "write_text", boom_write)
-    with pytest.raises(OSError):
+    monkeypatch.setattr(hooks_mod.os, "open", boom_open)
+    with pytest.raises(OSError, match="disk full"):
         write_hooks_file(path, {"version": 1, "hooks": {"stop": []}})
+    assert not path.exists()
 
 
 def test_eval_parse_result_lock_timeout(
