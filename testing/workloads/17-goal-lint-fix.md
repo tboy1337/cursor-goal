@@ -5,7 +5,7 @@ Test goal pursuit with a validation-style natural language condition referencing
 ## Prompt
 
 ```
-/goal no ESLint errors in src/, verified by eslint src/ --quiet
+/cursor-goal no ESLint errors in src/, verified by eslint src/ --quiet
 
 Fix all lint violations in testing/src/utils.ts.
 ```

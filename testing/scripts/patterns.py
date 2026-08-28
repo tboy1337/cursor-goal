@@ -317,8 +317,8 @@ FEATURES = {
         id="F14",
         name="Goal pause/resume lifecycle",
         pattern=re.compile(
-            r'/goal\s+pause'
-            r'|/goal\s+resume'
+            r'/(?:cursor-)?goal\s+pause'
+            r'|/(?:cursor-)?goal\s+resume'
             r'|goal-manage\.sh\s+pause'
             r'|goal-manage\.sh\s+resume'
             r'|"status":\s*"paused"',
@@ -330,7 +330,7 @@ FEATURES = {
         id="F15",
         name="Natural language condition parsing",
         pattern=re.compile(
-            r'/goal\s+(?!.*--test)(?!.*--budget)[^\n]+'
+            r'/(?:cursor-)?goal\s+(?!.*--test)(?!.*--budget)[^\n]+'
             r'|goal-manage\.sh\s+create\s+(?!.*--test)',
             re.IGNORECASE,
         ),
@@ -360,7 +360,7 @@ FEATURES = {
         id="F18",
         name="Goal clear/cancel",
         pattern=re.compile(
-            r'/goal\s+(clear|cancel|stop|reset)'
+            r'/(?:cursor-)?goal\s+(clear|cancel|stop|reset)'
             r'|goal-manage\.sh\s+(clear|cancel|reset)',
             re.IGNORECASE,
         ),

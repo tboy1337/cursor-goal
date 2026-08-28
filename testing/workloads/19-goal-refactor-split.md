@@ -5,7 +5,7 @@ Test goal pursuit for splitting an oversized monolithic module into focused file
 ## Prompt
 
 ```
-/goal split testing/scripts/monolith.py into focused modules until each is under 50 lines
+/cursor-goal split testing/scripts/monolith.py into focused modules until each is under 50 lines
 
 Break the monolith into separate modules by responsibility (users, email, logging, config, validation).
 ```

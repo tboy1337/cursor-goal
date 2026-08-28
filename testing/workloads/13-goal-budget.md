@@ -5,7 +5,7 @@ Test that the turn budget mechanism works correctly — goal should stop when bu
 ## Prompt
 
 ```
-/goal "implement a full REST API with 10 endpoints" --budget 3
+/cursor-goal "implement a full REST API with 10 endpoints" --budget 3
 
 Build a complete REST API.
 ```

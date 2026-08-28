@@ -1,12 +1,12 @@
 # cursor-goal (Cursor plugin)
 
-This plugin is a Cursor port of OpenAI Codex `/goal`.
+This plugin is the `/cursor-goal` harness (auditor, evaluator, `--test`). Cursor's built-in `/goal` (`CreateGoal` / `UpdateGoal`) is a different product.
 
 Teams/Enterprise: import this repository as a Team Marketplace (see repo `.cursor-plugin/marketplace.json`).
 
 Individuals: prefer `scripts/install-goal.sh` / `install-goal.ps1` from a full clone or GitHub Release.
 
-Version: **4.5.0** (AGPL-3.0-only). License text ships as `COPYING` in this plugin tree. Teams/AGPL notes:
+Version: **5.0.0** (AGPL-3.0-only). License text ships as `COPYING` in this plugin tree. Teams/AGPL notes:
 [docs/teams-agpl.md](https://github.com/tboy1337/cursor-goal/blob/main/docs/teams-agpl.md).
 
 ## Windows marketplace expectations
@@ -15,9 +15,9 @@ Marketplace stop hooks register both `stop_hook.cmd` (Windows) and `python3 -u "
 
 The same launcher command is also registered for the `subagentStop` event (`matcher: "goal-evaluator"` and `matcher: "goal-auditor"`), giving a documented, race-free continuation point the instant the evaluator or remaining-work auditor subagent finishes — `cmd_stop` dispatches between the two event shapes based on whether the JSON payload carries `subagent_type`.
 
-`${CURSOR_PLUGIN_ROOT}` is not listed in Cursor's documented hook environment variables; these hook commands rely on it being set by the plugin host at invocation time. `stop_hook.py`'s `_ensure_package_path()` also works if it is unset, by resolving the vendored `cursor_goal` package relative to its own file location (`scripts/`, its parent skill dir, or the repo's `src/` in a source checkout) — the classic `~/.cursor/skills/goal` install path does not depend on `CURSOR_PLUGIN_ROOT` at all.
+`${CURSOR_PLUGIN_ROOT}` is not listed in Cursor's documented hook environment variables; these hook commands rely on it being set by the plugin host at invocation time. `stop_hook.py`'s `_ensure_package_path()` also works if it is unset, by resolving the vendored `cursor_goal` package relative to its own file location (`scripts/`, its parent skill dir, or the repo's `src/` in a source checkout) — the classic `~/.cursor/skills/cursor-goal` install path does not depend on `CURSOR_PLUGIN_ROOT` at all.
 
-Set `CURSOR_GOAL_PYTHON` to an **absolute** Python 3.12+ path on Windows Teams installs — `manage doctor` **FAIL**s when marketplace hooks are detected without it (PATH fallback is fragile and not treated as success). Individuals should prefer classic `install-goal.ps1` (absolute interpreter bake). Resolve the harness with `manage harness-cmd` — skill/agent commands work from `${CURSOR_PLUGIN_ROOT}/skills/goal` without a classic install.
+Set `CURSOR_GOAL_PYTHON` to an **absolute** Python 3.12+ path on Windows Teams installs — `manage doctor` **FAIL**s when marketplace hooks are detected without it (PATH fallback is fragile and not treated as success). Individuals should prefer classic `install-goal.ps1` (absolute interpreter bake). Resolve the harness with `manage harness-cmd` — skill/agent commands work from `${CURSOR_PLUGIN_ROOT}/skills/cursor-goal` without a classic install.
 
 Also ships a wake watchdog (`wake loop` / `AGENT_GOAL_WAKE`) for continuation when Cursor drops stop-hook stdout. In-turn evaluation remains primary; the stop hook is a safety net.
 

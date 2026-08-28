@@ -1,5 +1,5 @@
 """
-Workload definitions for subagent-based /goal testing.
+Workload definitions for subagent-based /cursor-goal testing.
 
 Each workload defines:
   - id: unique identifier
@@ -15,19 +15,19 @@ import os
 import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-SKILL_DIR = os.path.join(REPO_ROOT, ".cursor", "skills", "goal")
+SKILL_DIR = os.path.join(REPO_ROOT, ".cursor", "skills", "cursor-goal")
 SCRIPTS_DIR = os.path.join(REPO_ROOT, "testing", "scripts")
 RUN_GOAL = (
     f"{sys.executable} -u "
     f'"{os.path.join(SKILL_DIR, "scripts", "run_goal.py")}"'
 )
 
-GOAL_SKILL_PREAMBLE = f"""You have access to the /goal skill at {SKILL_DIR}.
+GOAL_SKILL_PREAMBLE = f"""You have access to the /cursor-goal skill at {SKILL_DIR}.
 Use the Python harness (not legacy bash scripts):
 
   {RUN_GOAL} <command> ...
 
-IMPORTANT: You are testing the /goal skill. Follow its protocol exactly:
+IMPORTANT: You are testing the /cursor-goal skill. Follow its protocol exactly:
 1. Parse the goal with: {RUN_GOAL} parse "<input>"
 2. Create the goal with: {RUN_GOAL} manage create ...
 3. Do the work
@@ -61,7 +61,7 @@ WORKLOADS = [
         "prompt": f"""{GOAL_SKILL_PREAMBLE}
 
 The user says:
-/goal "fibonacci tests pass" --test "python -m pytest {SCRIPTS_DIR}/test_fibonacci.py -q" --budget 10
+/cursor-goal "fibonacci tests pass" --test "python -m pytest {SCRIPTS_DIR}/test_fibonacci.py -q" --budget 10
 
 The test file {SCRIPTS_DIR}/test_fibonacci.py has failing tests. Fix the implementation in {SCRIPTS_DIR}/fibonacci.py until all tests pass.
 
@@ -76,7 +76,7 @@ Work in this directory: {SCRIPTS_DIR}""",
         "prompt": f"""{GOAL_SKILL_PREAMBLE}
 
 The user says:
-/goal the todo_app.py search function is case-insensitive
+/cursor-goal the todo_app.py search function is case-insensitive
 
 The file {SCRIPTS_DIR}/todo_app.py has a search method that is currently case-sensitive.
 Fix it to be case-insensitive (convert both query and title to lowercase before comparing).
@@ -92,7 +92,7 @@ Work in this directory: {SCRIPTS_DIR}""",
         "prompt": f"""{GOAL_SKILL_PREAMBLE}
 
 The user says:
-/goal fix the calculator divide function, stop after 5 turns
+/cursor-goal fix the calculator divide function, stop after 5 turns
 
 The file {SCRIPTS_DIR}/calculator.py divide function works fine already.
 Just parse the goal, create it, check that the budget was set to 5, then clear the goal.
@@ -108,10 +108,10 @@ Work in this directory: {SCRIPTS_DIR}""",
         "prompt": f"""{GOAL_SKILL_PREAMBLE}
 
 The user says:
-/goal implement a REST API with 20 endpoints
+/cursor-goal implement a REST API with 20 endpoints
 
 Create the goal, verify goal.json exists with the condition, then immediately:
-/goal clear
+/cursor-goal clear
 
 Verify goal.json is removed. Report both states.
 
@@ -125,7 +125,7 @@ Work in this directory: {SCRIPTS_DIR}""",
         "prompt": f"""{GOAL_SKILL_PREAMBLE}
 
 The user says:
-/goal the calculator.py power function handles negative exponents correctly by returning a float
+/cursor-goal the calculator.py power function handles negative exponents correctly by returning a float
 
 Read {SCRIPTS_DIR}/calculator.py. The power function already works correctly for negative exponents (a ** b handles this in Python). Evaluate the goal — it should pass immediately.
 
@@ -139,7 +139,7 @@ Work in this directory: {SCRIPTS_DIR}""",
         "prompt": f"""{GOAL_SKILL_PREAMBLE}
 
 The user says:
-/goal all calculator tests pass --test "python -m pytest {SCRIPTS_DIR}/test_calculator.py -q"
+/cursor-goal all calculator tests pass --test "python -m pytest {SCRIPTS_DIR}/test_calculator.py -q"
 
 The calculator tests should already pass. Create the goal, run the test, then evaluate.
 When spawning the evaluator subagent, you MUST:

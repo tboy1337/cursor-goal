@@ -1,6 +1,6 @@
 # Platform Compatibility
 
-cursor-goal targets **Cursor IDE only**. The harness is a **Python 3.12+** package; agent protocol and stop-hook auto-continuation are Cursor-specific. `/goal` itself is an OpenAI Codex feature; this package is the Cursor port.
+cursor-goal targets **Cursor IDE only**. The harness is a **Python 3.12+** package; agent protocol and stop-hook auto-continuation are Cursor-specific. Codex origin is `/goal` (`codex-rs/ext/goal`). Cursor's built-in `/goal` is a different product; this repo installs `/cursor-goal`.
 
 **Install:** `./scripts/install-goal.sh` or `.\scripts\install-goal.ps1` from a full clone (see [install.md](install.md)).
 
@@ -21,13 +21,13 @@ Also: [known-limitations.md](known-limitations.md) · [troubleshooting.md](troub
 .cursor/agents/goalKeeper.md       → ~/.cursor/agents/goalKeeper.md
 .cursor/agents/goal-evaluator.md   → ~/.cursor/agents/goal-evaluator.md
 .cursor/agents/goal-auditor.md     → ~/.cursor/agents/goal-auditor.md
-.cursor/skills/goal/SKILL.md       → ~/.cursor/skills/goal/SKILL.md
-.cursor/skills/goal/scripts/*      → ~/.cursor/skills/goal/scripts/
-src/cursor_goal/                   → ~/.cursor/skills/goal/cursor_goal/
+.cursor/skills/cursor-goal/SKILL.md       → ~/.cursor/skills/cursor-goal/SKILL.md
+.cursor/skills/cursor-goal/scripts/*      → ~/.cursor/skills/cursor-goal/scripts/
+src/cursor_goal/                   → ~/.cursor/skills/cursor-goal/cursor_goal/
 ~/.cursor/hooks.json               → stop, subagentStop (matcher: goal-evaluator and goal-auditor)
                                    → (Unix) <python> -u …/stop_hook.py
                                    → (Windows) …/stop_hook.cmd
-VERSION                            → ~/.cursor/skills/goal/VERSION (package stamp)
+VERSION                            → ~/.cursor/skills/cursor-goal/VERSION (package stamp)
 ```
 
 ## Maker ≠ Checker (multi-model)
@@ -42,9 +42,9 @@ VERSION                            → ~/.cursor/skills/goal/VERSION (package st
 Resolve Task spawn parameters from the harness (do not hardcode a premium model):
 
 ```bash
-python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval spawn-config
+python3 -u ~/.cursor/skills/cursor-goal/scripts/run_goal.py eval spawn-config
 # → {"subagent_type":"goal-evaluator","model":"composer-2.5","readonly":true}
-python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval audit-spawn-config
+python3 -u ~/.cursor/skills/cursor-goal/scripts/run_goal.py eval audit-spawn-config
 # → {"subagent_type":"goal-auditor","model":"inherit","readonly":true}
 ```
 
@@ -75,7 +75,7 @@ python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval audit-spawn-config
 
 | Command | Purpose |
 |---------|---------|
-| `…/run_goal.py parse "<input>"` | Parse `/goal` → JSON |
+| `…/run_goal.py parse "<input>"` | Parse `/cursor-goal` → JSON |
 | `…/run_goal.py manage …` | State lifecycle (`create`/`status`/`doctor`/`pause`/`resume`/`done`/`clear`) |
 | `…/run_goal.py eval validate` | Run `validation_command`; persist output |
 | `…/run_goal.py eval spawn-config` | JSON Task params for the evaluator |
@@ -90,12 +90,12 @@ State: `~/.cursor-goal/data/goal.json` (or `CURSOR_GOAL_DATA`). Treat that direc
 ## Subagent Invocation Pattern
 
 ```bash
-python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval validate
-EVAL_PROMPT=$(python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval prompt --work-summary "...")
-SPAWN=$(python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval spawn-config)
+python3 -u ~/.cursor/skills/cursor-goal/scripts/run_goal.py eval validate
+EVAL_PROMPT=$(python3 -u ~/.cursor/skills/cursor-goal/scripts/run_goal.py eval prompt --work-summary "...")
+SPAWN=$(python3 -u ~/.cursor/skills/cursor-goal/scripts/run_goal.py eval spawn-config)
 # Cursor Task: subagent_type / model / readonly from SPAWN JSON + prompt=$EVAL_PROMPT
 # Never use generalPurpose for evaluation.
-python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval parse-result --stdin <<'EOF'
+python3 -u ~/.cursor/skills/cursor-goal/scripts/run_goal.py eval parse-result --stdin <<'EOF'
 <subagent response>
 EOF
 # YES auto-records a YES-bound signal; CLEAR from parse-audit is also required → manage done

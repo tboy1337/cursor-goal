@@ -1,6 +1,6 @@
 ---
 name: goal-auditor
-description: Readonly remaining-work auditor. Use when checking whether a fresh plan-mode chat would still find in-scope work for the active /goal condition. Spawn via Task with params from eval audit-spawn-config (model inherit). Prefer this over generalPurpose.
+description: Readonly remaining-work auditor. Use when checking whether a fresh plan-mode chat would still find in-scope work for the active /cursor-goal condition. Spawn via Task with params from eval audit-spawn-config (model inherit). Prefer this over generalPurpose.
 model: inherit
 readonly: true
 is_background: false

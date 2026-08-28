@@ -6,7 +6,7 @@ fixes, not random patches or hardcoded expected values.
 ## Prompt
 
 ```
-/goal "order_total tests pass" --test "python -m pytest testing/scripts/test_order_total.py -q" --budget 10
+/cursor-goal "order_total tests pass" --test "python -m pytest testing/scripts/test_order_total.py -q" --budget 10
 
 The tests in testing/scripts/test_order_total.py fail. Fix testing/scripts/order_total.py. Investigate why they fail before changing code — do not hardcode expected return values.
 ```

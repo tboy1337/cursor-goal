@@ -737,8 +737,8 @@ def cmd_blocked(argv: list[str]) -> int:
             f"{redact_secrets(state.last_block_reason, max_chars=500)}"
         )
         print(
-            "[goal] Auto-continuation stopped. User: /goal resume after "
-            "resolving the blocker, or /goal clear."
+            "[goal] Auto-continuation stopped. User: /cursor-goal resume after "
+            "resolving the blocker, or /cursor-goal clear."
         )
         return 0
     print(
@@ -988,7 +988,7 @@ def cmd_harness_cmd(_argv: list[str]) -> int:
             "Install the skill (install-goal.sh / install-goal.ps1), enable the "
             "Teams marketplace plugin, or set CURSOR_GOAL_HOME / "
             "CURSOR_PLUGIN_ROOT to a tree containing "
-            "skills/goal/scripts/run_goal.py.",
+            "skills/cursor-goal/scripts/run_goal.py.",
             file=sys.stderr,
         )
         return 1
@@ -1033,7 +1033,7 @@ def _print_help() -> int:
     print("  status     Show current goal state")
     print("  doctor     Install / health diagnostics")
     print("  harness-cmd  Print resolved run_goal.py / wake loop invocation")
-    print("  pause      Pause auto-continuation (user /goal pause only)")
+    print("  pause      Pause auto-continuation (user /cursor-goal pause only)")
     print("  resume     Resume a paused or blocked goal")
     print('  update "<condition>"  Change condition in place (invalidates CLEAR+YES)')
     print('  blocked "<reason>"    Record an impasse; blocks after 3 same-reason turns')

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# uninstall-goal.sh — Remove /goal install artifacts from Cursor user config
+# uninstall-goal.sh — Remove /cursor-goal install artifacts from Cursor user config
 
 set -euo pipefail
 
-INSTALL_DIR="${HOME}/.cursor/skills/goal"
+INSTALL_DIR="${HOME}/.cursor/skills/cursor-goal"
+LEGACY_INSTALL_DIR="${HOME}/.cursor/skills/goal"
 AGENTS_DIR="${HOME}/.cursor/agents"
 DATA_DIR="${HOME}/.cursor-goal/data"
 CURSOR_HOOKS_FILE="${HOME}/.cursor/hooks.json"
@@ -34,11 +35,18 @@ detect_python() {
   return 1
 }
 
+PKG_ROOT=""
+if [ -d "${INSTALL_DIR}/cursor_goal" ]; then
+  PKG_ROOT="$INSTALL_DIR"
+elif [ -d "${LEGACY_INSTALL_DIR}/cursor_goal" ]; then
+  PKG_ROOT="$LEGACY_INSTALL_DIR"
+fi
+
 if [ -f "$CURSOR_HOOKS_FILE" ]; then
   HOOKS_CLEAN_OK=0
   if PY="$(detect_python)"; then
-    if [ -d "${INSTALL_DIR}/cursor_goal" ]; then
-      if "$PY" - "$INSTALL_DIR" "$CURSOR_HOOKS_FILE" <<'PY'
+    if [ -n "$PKG_ROOT" ]; then
+      if "$PY" - "$PKG_ROOT" "$CURSOR_HOOKS_FILE" <<'PY'
 import sys
 from pathlib import Path
 
@@ -98,9 +106,15 @@ PY
 fi
 
 # Best-effort wake disarm before deleting the skill tree.
+RUN_GOAL=""
 if [ -f "${INSTALL_DIR}/scripts/run_goal.py" ]; then
+  RUN_GOAL="${INSTALL_DIR}/scripts/run_goal.py"
+elif [ -f "${LEGACY_INSTALL_DIR}/scripts/run_goal.py" ]; then
+  RUN_GOAL="${LEGACY_INSTALL_DIR}/scripts/run_goal.py"
+fi
+if [ -n "$RUN_GOAL" ]; then
   if PY="$(detect_python)"; then
-    if "$PY" -u "${INSTALL_DIR}/scripts/run_goal.py" wake disarm >/dev/null 2>&1; then
+    if "$PY" -u "$RUN_GOAL" wake disarm >/dev/null 2>&1; then
       echo "[uninstall-goal] Disarmed wake watchdog"
     else
       echo "[uninstall-goal] Warning: wake disarm failed (continuing uninstall)"
@@ -110,13 +124,19 @@ fi
 
 echo "[uninstall-goal] Removing skill at $INSTALL_DIR"
 rm -rf "$INSTALL_DIR"
+if [ -d "$LEGACY_INSTALL_DIR" ]; then
+  echo "[uninstall-goal] Removing legacy skill at $LEGACY_INSTALL_DIR"
+  rm -rf "$LEGACY_INSTALL_DIR"
+fi
 
-# Clean installer backup debris.
+# Clean installer backup debris (in-root bak folders + ~/.cursor-goal/backups).
 shopt -s nullglob
-for bak in "${HOME}/.cursor/skills"/goal.bak.*; do
+for bak in "${HOME}/.cursor/skills"/goal.bak.* "${HOME}/.cursor/skills"/cursor-goal.bak.*; do
   rm -rf "$bak"
   echo "[uninstall-goal] Removed backup $bak"
 done
+rm -rf "${HOME}/.cursor-goal/backups"
+echo "[uninstall-goal] Removed ~/.cursor-goal/backups"
 for bak in "${AGENTS_DIR}"/goalKeeper.md.bak.* "${AGENTS_DIR}"/goal-evaluator.md.bak.* "${AGENTS_DIR}"/goal-auditor.md.bak.*; do
   rm -f "$bak"
 done

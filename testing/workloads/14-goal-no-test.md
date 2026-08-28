@@ -5,7 +5,7 @@ Test goal evaluation using only subagent judgment (no --test command).
 ## Prompt
 
 ```
-/goal "add comprehensive JSDoc comments to all exported functions in src/utils.ts"
+/cursor-goal "add comprehensive JSDoc comments to all exported functions in src/utils.ts"
 
 Add JSDoc comments to every exported function in the file.
 ```

@@ -5,7 +5,7 @@ Test that the agent handles ambiguous natural language goals by asking for speci
 ## Prompt
 
 ```
-/goal make the calculator robust
+/cursor-goal make the calculator robust
 
 The calculator in testing/scripts/calculator.py needs hardening.
 ```

@@ -5,7 +5,7 @@ Test goal pursuit with multiple YES/NO evaluation cycles and an inline turn budg
 ## Prompt
 
 ```
-/goal implement all missing methods in testing/scripts/data_structures.py until the test suite passes, stop after 8 turns
+/cursor-goal implement all missing methods in testing/scripts/data_structures.py until the test suite passes, stop after 8 turns
 
 Implement Stack, Queue, and LinkedList methods to pass test_data_structures.py.
 ```

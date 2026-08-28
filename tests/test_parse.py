@@ -147,6 +147,11 @@ def test_parse_strips_goal_prefix() -> None:
     assert result["condition"] == "fix the bug"
 
 
+def test_parse_strips_cursor_goal_prefix() -> None:
+    result = parse_raw("/cursor-goal fix the bug")
+    assert result["condition"] == "fix the bug"
+
+
 def test_parse_rejects_empty_condition_after_flags() -> None:
     with pytest.raises(ValueError, match="Could not extract"):
         parse_raw('--test "npm test"')

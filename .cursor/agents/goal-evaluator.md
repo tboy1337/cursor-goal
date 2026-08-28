@@ -1,6 +1,6 @@
 ---
 name: goal-evaluator
-description: Readonly goal completion checker. Use when evaluating whether an active /goal condition is met. Spawn via Task with params from eval spawn-config (default model composer-2.5). Prefer this over generalPurpose.
+description: Readonly goal completion checker. Use when evaluating whether an active /cursor-goal condition is met. Spawn via Task with params from eval spawn-config (default model composer-2.5). Prefer this over generalPurpose.
 model: composer-2.5
 readonly: true
 is_background: false

@@ -5,7 +5,7 @@ Test goal pursuit targeting complete test coverage for a module with partial tes
 ## Prompt
 
 ```
-/goal every exported function in testing/scripts/calculator.py has at least one test, verified by pytest testing/scripts/test_calculator.py
+/cursor-goal every exported function in testing/scripts/calculator.py has at least one test, verified by pytest testing/scripts/test_calculator.py
 
 Add missing tests for multiply, divide, power, and modulo in test_calculator.py.
 ```

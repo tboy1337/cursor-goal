@@ -1,18 +1,18 @@
 # Workload 12: Goal with Validation Command
 
-Test the full /goal lifecycle with a validation command that transitions from failing to passing.
+Test the full /cursor-goal lifecycle with a validation command that transitions from failing to passing.
 
 ## Prompt
 
 ```
-/goal "fibonacci tests pass" --test "python -m pytest testing/scripts/test_fibonacci.py -q" --budget 10
+/cursor-goal "fibonacci tests pass" --test "python -m pytest testing/scripts/test_fibonacci.py -q" --budget 10
 
 The test file testing/scripts/test_fibonacci.py has failing tests. Fix the implementation in testing/scripts/fibonacci.py until all tests pass.
 ```
 
 ## Expected Behavior
 
-1. Agent parses /goal command and creates goal.json via run_goal.py manage
+1. Agent parses /cursor-goal command and creates goal.json via run_goal.py manage
 2. Agent reads the test file and implementation file
 3. Agent runs the test command — sees failures
 4. Agent fixes the implementation

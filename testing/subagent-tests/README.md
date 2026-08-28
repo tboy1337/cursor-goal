@@ -1,4 +1,4 @@
-# Subagent-Based Testing for /goal
+# Subagent-Based Testing for /cursor-goal
 
 Automated testing of cursor-goal features via Task subagents.
 
@@ -43,8 +43,8 @@ Results are saved to `results/<timestamp>/`.
 Prefer the installed Python harness (legacy `goal-*.sh` scripts are removed):
 
 ```bash
-python3 -u ~/.cursor/skills/goal/scripts/run_goal.py manage status
-python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval spawn-config
+python3 -u ~/.cursor/skills/cursor-goal/scripts/run_goal.py manage status
+python3 -u ~/.cursor/skills/cursor-goal/scripts/run_goal.py eval spawn-config
 ```
 
 Workloads in `workloads.py` invoke `run_goal.py` with `eval spawn-config` so evaluator Task calls use `goal-evaluator` + the configured model (default `composer-2.5`; override with `CURSOR_GOAL_EVAL_MODEL`).

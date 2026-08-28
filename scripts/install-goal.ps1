@@ -1,4 +1,4 @@
-﻿# install-goal.ps1 - Install /goal Python harness for Cursor on Windows
+﻿# install-goal.ps1 - Install /cursor-goal Python harness for Cursor on Windows
 #
 # Usage (from a full clone or a GitHub source archive for a tagged release):
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-goal.ps1
@@ -354,6 +354,67 @@ print("hardened")
     }
 }
 
+function Invoke-GoalInstallBackup {
+    <#
+    .SYNOPSIS
+    Snapshot / prune / restore skill backups via cursor_goal.install_backup.
+    #>
+    [CmdletBinding()]
+    [OutputType([int])]
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Python,
+        [Parameter(Mandatory = $true)][string]$PackageRoot,
+        [Parameter(Mandatory = $true)][string]$HomeDir,
+        [Parameter(Mandatory = $true)][string]$Action,
+        [string]$Manifest = "",
+        [Parameter(Mandatory = $true)][string]$TmpDir,
+        [string]$StdoutPath = ""
+    )
+    New-Item -ItemType Directory -Force -Path $TmpDir | Out-Null
+    $tmpPy = Join-Path $TmpDir ("cg-bak-" + [guid]::NewGuid().ToString('N') + ".py")
+    $script = @'
+import sys
+sys.path.insert(0, sys.argv[1])
+from cursor_goal.install_backup import main
+argv = ["--home", sys.argv[2], sys.argv[3]]
+if len(sys.argv) > 4 and sys.argv[4]:
+    argv.extend(["--manifest", sys.argv[4]])
+raise SystemExit(main(argv))
+'@
+    try {
+        Write-Utf8NoBomFile -Path $tmpPy -Content $script
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            # Do not use PowerShell ``1>`` redirects: they write UTF-16 and
+            # json.loads(utf-8) then fails, so hook-merge rollback cannot restore.
+            $output = & $Python.Exe @($Python.PrefixArgs) $tmpPy $PackageRoot $HomeDir $Action $Manifest
+            $code = $LASTEXITCODE
+            if ($StdoutPath) {
+                $text = if ($null -eq $output) {
+                    ''
+                }
+                elseif ($output -is [System.Array]) {
+                    ($output | ForEach-Object { "$_" }) -join "`n"
+                }
+                else {
+                    [string]$output
+                }
+                if ($text.Trim()) {
+                    Write-Utf8NoBomFile -Path $StdoutPath -Content ($text.TrimEnd() + "`n")
+                }
+            }
+            return $code
+        }
+        finally {
+            $ErrorActionPreference = $prevEap
+        }
+    }
+    finally {
+        Remove-Item -Force $tmpPy -ErrorAction SilentlyContinue
+    }
+}
+
 function Invoke-GoalInstall {
     [CmdletBinding()]
     [OutputType([int])]
@@ -371,14 +432,14 @@ function Invoke-GoalInstall {
         $RepoRoot = (Resolve-Path (Join-Path $scriptDir "..")).Path
     }
 
-    $installDir = Join-Path $HomeDir ".cursor\skills\goal"
+    $installDir = Join-Path $HomeDir ".cursor\skills\cursor-goal"
     $agentsDir = Join-Path $HomeDir ".cursor\agents"
     $dataDir = Join-Path $HomeDir ".cursor-goal\data"
     $hooksFile = Join-Path $HomeDir ".cursor\hooks.json"
 
     Write-Host ""
     Write-Host "================================" -ForegroundColor Blue
-    Write-Host " Installing /goal skill" -ForegroundColor Blue
+    Write-Host " Installing /cursor-goal skill" -ForegroundColor Blue
     Write-Host " Python harness for Cursor" -ForegroundColor Blue
     Write-Host "================================" -ForegroundColor Blue
     Write-Host ""
@@ -394,7 +455,7 @@ function Invoke-GoalInstall {
     Write-GoalInfo ("Using interpreter: {0} ({1})" -f $Python.Exe, $Python.Version)
 
     $sourcePkg = Join-Path $RepoRoot "src\cursor_goal"
-    $sourceSkill = Join-Path $RepoRoot ".cursor\skills\goal"
+    $sourceSkill = Join-Path $RepoRoot ".cursor\skills\cursor-goal"
     $sourceAgent = Join-Path $RepoRoot ".cursor\agents\goalKeeper.md"
     $sourceEvaluator = Join-Path $RepoRoot ".cursor\agents\goal-evaluator.md"
     $sourceAuditor = Join-Path $RepoRoot ".cursor\agents\goal-auditor.md"
@@ -434,14 +495,19 @@ function Invoke-GoalInstall {
     }
 
     $targetPkg = Join-Path $installDir "cursor_goal"
-    $skillBak = $null
-    if (Test-Path (Join-Path $installDir "SKILL.md")) {
-        $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
-        $skillBak = "$installDir.bak.$stamp"
-        if (Test-Path $skillBak) { Remove-Item -Recurse -Force $skillBak }
-        Copy-Item -Recurse $installDir $skillBak
-        Write-GoalInfo "Backed up previous skill install to $skillBak"
+    $packageRoot = Join-Path $RepoRoot "src"
+    $backupTmp = Join-Path $installDir "scripts\.tmp"
+    New-Item -ItemType Directory -Force -Path $backupTmp | Out-Null
+    $backupRoot = Join-Path $HomeDir ".cursor-goal\backups"
+    New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
+    $manifestPath = Join-Path $backupRoot ".last-install-manifest.json"
+    $bakCode = Invoke-GoalInstallBackup -Python $Python -PackageRoot $packageRoot -HomeDir $HomeDir -Action "backup-before" -Manifest $manifestPath -TmpDir $backupTmp -StdoutPath $manifestPath
+    if ($bakCode -ne 0) {
+        Write-GoalErr "Failed to snapshot previous skill/agents/hooks for rollback."
+        return 1
     }
+    Write-GoalInfo "Wrote install backup manifest $manifestPath"
+
     if (Test-Path $targetPkg) { Remove-Item -Recurse -Force $targetPkg }
     Copy-Item -Recurse $sourcePkg $targetPkg
     Get-ChildItem -Path $targetPkg -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue |
@@ -497,30 +563,9 @@ print(__version__)
         if (Test-Path $legacy) { Remove-Item -Force $legacy }
     }
 
-    $agentTs = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
     $destKeeper = Join-Path $agentsDir "goalKeeper.md"
     $destEvaluator = Join-Path $agentsDir "goal-evaluator.md"
     $destAuditor = Join-Path $agentsDir "goal-auditor.md"
-    # $null means the agent file did not exist before this install (rollback
-    # should delete it, not "restore" a backup that never existed).
-    $keeperBak = $null
-    $evaluatorBak = $null
-    $auditorBak = $null
-    if (Test-Path -LiteralPath $destKeeper) {
-        $keeperBak = Join-Path $agentsDir "goalKeeper.md.bak.$agentTs"
-        Copy-Item -LiteralPath $destKeeper -Destination $keeperBak -Force
-        Write-GoalInfo "Backed up existing goalKeeper.md to $keeperBak"
-    }
-    if (Test-Path -LiteralPath $destEvaluator) {
-        $evaluatorBak = Join-Path $agentsDir "goal-evaluator.md.bak.$agentTs"
-        Copy-Item -LiteralPath $destEvaluator -Destination $evaluatorBak -Force
-        Write-GoalInfo "Backed up existing goal-evaluator.md to $evaluatorBak"
-    }
-    if (Test-Path -LiteralPath $destAuditor) {
-        $auditorBak = Join-Path $agentsDir "goal-auditor.md.bak.$agentTs"
-        Copy-Item -LiteralPath $destAuditor -Destination $auditorBak -Force
-        Write-GoalInfo "Backed up existing goal-auditor.md to $auditorBak"
-    }
     Copy-Item $sourceAgent $destKeeper -Force
     Write-GoalInfo "Installed: $destKeeper"
     Copy-Item $sourceEvaluator $destEvaluator -Force
@@ -530,60 +575,23 @@ print(__version__)
 
     New-Item -ItemType Directory -Force -Path (Join-Path $HomeDir ".cursor") | Out-Null
 
-    $hooksBak = $null
-    if (Test-Path $hooksFile) {
-        $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
-        $hooksBak = "$hooksFile.bak.$stamp"
-        Copy-Item $hooksFile $hooksBak -Force
-        Write-GoalInfo "Backed up existing hooks.json to $hooksBak"
-    }
-
     $mergeCode = Invoke-GoalHooksConfigMerge -Python $Python -InstallDir $installDir -HooksFile $hooksFile -HookCommand $hookCommand
     if ($mergeCode -ne 0) {
         Write-GoalErr "Failed to merge stop/subagentStop hooks via hooks_config (exit $mergeCode)."
-        if ($hooksBak -and (Test-Path -LiteralPath $hooksBak)) {
-            Write-GoalWarn "Restoring hooks.json from $hooksBak"
-            Copy-Item -LiteralPath $hooksBak -Destination $hooksFile -Force
-            Write-GoalInfo "Restored previous hooks.json."
-        }
-        if ($skillBak -and (Test-Path -LiteralPath $skillBak)) {
-            Write-GoalWarn "Restoring skill files from $skillBak"
-            if (Test-Path -LiteralPath $installDir) {
-                Remove-Item -Recurse -Force -LiteralPath $installDir
-            }
-            Move-Item -LiteralPath $skillBak -Destination $installDir
-            Write-GoalInfo "Restored previous skill install."
+        if (Test-Path -LiteralPath $manifestPath) {
+            Write-GoalWarn "Rolling back skill/agents/hooks from $manifestPath"
+            $null = Invoke-GoalInstallBackup -Python $Python -PackageRoot $packageRoot -HomeDir $HomeDir -Action "restore" -Manifest $manifestPath -TmpDir $backupTmp
         }
         else {
-            Write-GoalErr "Skill files were installed under $installDir (no prior backup to restore)."
-        }
-        if ($keeperBak -and (Test-Path -LiteralPath $keeperBak)) {
-            Write-GoalWarn "Restoring goalKeeper.md from $keeperBak"
-            Move-Item -LiteralPath $keeperBak -Destination $destKeeper -Force
-        }
-        elseif (Test-Path -LiteralPath $destKeeper) {
-            Write-GoalWarn "Removing goalKeeper.md installed this run (no prior version existed)"
-            Remove-Item -Force -LiteralPath $destKeeper
-        }
-        if ($evaluatorBak -and (Test-Path -LiteralPath $evaluatorBak)) {
-            Write-GoalWarn "Restoring goal-evaluator.md from $evaluatorBak"
-            Move-Item -LiteralPath $evaluatorBak -Destination $destEvaluator -Force
-        }
-        elseif (Test-Path -LiteralPath $destEvaluator) {
-            Write-GoalWarn "Removing goal-evaluator.md installed this run (no prior version existed)"
-            Remove-Item -Force -LiteralPath $destEvaluator
-        }
-        if ($auditorBak -and (Test-Path -LiteralPath $auditorBak)) {
-            Write-GoalWarn "Restoring goal-auditor.md from $auditorBak"
-            Move-Item -LiteralPath $auditorBak -Destination $destAuditor -Force
-        }
-        elseif (Test-Path -LiteralPath $destAuditor) {
-            Write-GoalWarn "Removing goal-auditor.md installed this run (no prior version existed)"
-            Remove-Item -Force -LiteralPath $destAuditor
+            Write-GoalErr "Skill files were installed under $installDir (no backup manifest to restore)."
         }
         return 1
     }
     Write-GoalInfo "Merged/upgraded stop + subagentStop hooks in hooks.json"
+    $pruneCode = Invoke-GoalInstallBackup -Python $Python -PackageRoot $packageRoot -HomeDir $HomeDir -Action "prune-after" -TmpDir $backupTmp
+    if ($pruneCode -ne 0) {
+        Write-GoalWarn "Post-install backup prune failed (install itself succeeded)."
+    }
 
     Write-Host ""
     Write-Host "Stop hook command: $hookCommand"
@@ -599,12 +607,31 @@ print(__version__)
     # 'Continue' so stderr flows through as plain text instead.
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
+    $prevHome = $env:HOME
+    $prevProfile = $env:USERPROFILE
     try {
+        # Windows expanduser("~") uses USERPROFILE, not HOME. Isolate doctor
+        # to this install's HomeDir so leftover ~/.cursor/skills/goal on the
+        # real profile cannot fail a fixture install.
+        $env:HOME = $HomeDir
+        $env:USERPROFILE = $HomeDir
         & $Python.Exe -u (Join-Path $installDir "scripts\run_goal.py") manage doctor 2>&1 |
             ForEach-Object { Write-Host $_ }
     }
     finally {
         $ErrorActionPreference = $prevEap
+        if ($null -eq $prevHome) {
+            Remove-Item Env:HOME -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:HOME = $prevHome
+        }
+        if ($null -eq $prevProfile) {
+            Remove-Item Env:USERPROFILE -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:USERPROFILE = $prevProfile
+        }
     }
     if ($LASTEXITCODE -ne 0) {
         Write-GoalErr "manage doctor FAILED (exit $LASTEXITCODE) - install files were written, but the harness is not healthy."
@@ -614,12 +641,12 @@ print(__version__)
     }
     Write-Host ""
     Write-Host "============================================" -ForegroundColor Green
-    Write-Host " /goal Autonomous Loop - Installed!" -ForegroundColor Green
+    Write-Host " /cursor-goal harness - Installed!" -ForegroundColor Green
     Write-Host "============================================" -ForegroundColor Green
     Write-Host ""
     Write-Host "Next steps:"
     Write-Host "  1) Restart Cursor (or reload hooks) so hooks.json takes effect"
-    Write-Host "  2) In Cursor: /goal <verifiable condition>"
+    Write-Host "  2) In Cursor: /cursor-goal <verifiable condition>"
     Write-Host "  3) Start wake loop with notify_on_output matching ^AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor"
     Write-Host "  4) Confirm wake status shows pid_alive=true / continuation_ready=true before other work"
     Write-Host "  5) If Hooks UI shows {} but last-stop-response.json has followup_message, rely on wake"

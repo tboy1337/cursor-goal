@@ -3,7 +3,7 @@
 
 Source of truth:
   - src/cursor_goal/
-  - .cursor/skills/goal/ (SKILL.md + scripts)
+  - .cursor/skills/cursor-goal/ (SKILL.md + scripts)
   - .cursor/agents/
 
 Generated:
@@ -65,17 +65,21 @@ def _copy_tree(src: Path, dest: Path) -> None:
 def write_plugin(root: Path) -> Path:
     version = package_version(root)
     plugin_root = root / "plugins" / PLUGIN_NAME
-    skill_src = root / ".cursor" / "skills" / "goal"
+    skill_src = root / ".cursor" / "skills" / "cursor-goal"
     agents_src = root / ".cursor" / "agents"
     pkg_src = root / "src" / "cursor_goal"
 
-    skill_dest = plugin_root / "skills" / "goal"
+    skills_parent = plugin_root / "skills"
+    leftover_skill = skills_parent / "goal"
+    if leftover_skill.exists():
+        shutil.rmtree(leftover_skill)
+    skill_dest = skills_parent / "cursor-goal"
     agents_dest = plugin_root / "agents"
     hooks_dest = plugin_root / "hooks"
     manifest_dir = plugin_root / ".cursor-plugin"
 
-    skill_dest.mkdir(parents=True, exist_ok=True)
-    _clear_dir(skill_dest / "scripts")
+    _clear_dir(skill_dest)
+    (skill_dest / "scripts").mkdir(parents=True, exist_ok=True)
     agents_dest.mkdir(parents=True, exist_ok=True)
     hooks_dest.mkdir(parents=True, exist_ok=True)
     manifest_dir.mkdir(parents=True, exist_ok=True)
@@ -99,7 +103,7 @@ def write_plugin(root: Path) -> Path:
     shutil.copy2(agents_src / "goal-evaluator.md", agents_dest / "goal-evaluator.md")
     shutil.copy2(agents_src / "goal-auditor.md", agents_dest / "goal-auditor.md")
 
-    plugin_root_var = "${CURSOR_PLUGIN_ROOT}/skills/goal/scripts"
+    plugin_root_var = "${CURSOR_PLUGIN_ROOT}/skills/cursor-goal/scripts"
     # The same stop_hook.cmd / stop_hook.py launcher handles both event
     # shapes at runtime (cmd_stop dispatches on the "subagent_type" key), so
     # subagentStop reuses the identical commands, scoped via "matcher" plus a
@@ -161,8 +165,8 @@ def write_plugin(root: Path) -> Path:
         "name": PLUGIN_NAME,
         "version": version,
         "description": (
-            "Cursor port of OpenAI Codex /goal "
-            "(maker!=checker + stop-hook safety net)"
+            "Codex-style /cursor-goal harness "
+            "(maker!=checker + stop-hook safety net); not Cursor's built-in /goal"
         ),
         "author": {"name": "tboy1337"},
         "homepage": "https://github.com/tboy1337/cursor-goal",
@@ -185,7 +189,7 @@ def write_plugin(root: Path) -> Path:
         "name": "cursor-goal-marketplace",
         "owner": {"name": "tboy1337"},
         "metadata": {
-            "description": "Cursor port of OpenAI Codex /goal",
+            "description": "Codex-style /cursor-goal harness (not Cursor's built-in /goal)",
             "version": version,
             "pluginRoot": "plugins",
         },
@@ -214,7 +218,9 @@ def write_plugin(root: Path) -> Path:
     readme = plugin_root / "README.md"
     readme.write_text(
         "# cursor-goal (Cursor plugin)\n\n"
-        "This plugin is a Cursor port of OpenAI Codex `/goal`.\n\n"
+        "This plugin is the `/cursor-goal` harness (auditor, evaluator, "
+        "`--test`). Cursor's built-in `/goal` (`CreateGoal` / `UpdateGoal`) "
+        "is a different product.\n\n"
         "Teams/Enterprise: import this repository as a Team Marketplace "
         "(see repo `.cursor-plugin/marketplace.json`).\n\n"
         "Individuals: prefer `scripts/install-goal.sh` / `install-goal.ps1` "
@@ -246,7 +252,7 @@ def write_plugin(root: Path) -> Path:
         "`_ensure_package_path()` also works if it is unset, by resolving the "
         "vendored `cursor_goal` package relative to its own file location "
         "(`scripts/`, its parent skill dir, or the repo's `src/` in a source "
-        "checkout) — the classic `~/.cursor/skills/goal` install path does not "
+        "checkout) — the classic `~/.cursor/skills/cursor-goal` install path does not "
         "depend on `CURSOR_PLUGIN_ROOT` at all.\n\n"
         "Set `CURSOR_GOAL_PYTHON` to an **absolute** Python 3.12+ path on "
         "Windows Teams installs — `manage doctor` **FAIL**s when marketplace "
@@ -254,7 +260,7 @@ def write_plugin(root: Path) -> Path:
         "treated as success). Individuals should prefer classic "
         "`install-goal.ps1` (absolute interpreter bake). Resolve the "
         "harness with `manage harness-cmd` — skill/agent commands work from "
-        "`${CURSOR_PLUGIN_ROOT}/skills/goal` without a classic install.\n\n"
+        "`${CURSOR_PLUGIN_ROOT}/skills/cursor-goal` without a classic install.\n\n"
         "Also ships a wake watchdog (`wake loop` / `AGENT_GOAL_WAKE`) for "
         "continuation when Cursor drops stop-hook stdout. In-turn evaluation "
         "remains primary; the stop hook is a safety net.\n\n"
@@ -271,13 +277,13 @@ def _files_to_compare(plugin_root: Path) -> list[Path]:
     """Return critical single-file paths under the plugin root."""
     paths: list[Path] = []
     for pattern in (
-        "skills/goal/SKILL.md",
-        "skills/goal/scripts/run_goal.py",
-        "skills/goal/scripts/stop_hook.py",
-        "skills/goal/scripts/stop_hook.cmd",
-        "skills/goal/scripts/wake_loop.cmd",
-        "skills/goal/scripts/wake_loop.sh",
-        "skills/goal/VERSION",
+        "skills/cursor-goal/SKILL.md",
+        "skills/cursor-goal/scripts/run_goal.py",
+        "skills/cursor-goal/scripts/stop_hook.py",
+        "skills/cursor-goal/scripts/stop_hook.cmd",
+        "skills/cursor-goal/scripts/wake_loop.cmd",
+        "skills/cursor-goal/scripts/wake_loop.sh",
+        "skills/cursor-goal/VERSION",
         "agents/goalKeeper.md",
         "agents/goal-evaluator.md",
         "agents/goal-auditor.md",
@@ -364,8 +370,8 @@ def check_plugin(root: Path) -> int:
             if label is not None:
                 mismatches.append(label)
 
-        expected_pkg = expected / "skills" / "goal" / "cursor_goal"
-        actual_pkg = plugin_root / "skills" / "goal" / "cursor_goal"
+        expected_pkg = expected / "skills" / "cursor-goal" / "cursor_goal"
+        actual_pkg = plugin_root / "skills" / "cursor-goal" / "cursor_goal"
         expected_files = {
             p.relative_to(expected_pkg).as_posix(): p
             for p in _iter_vendored_files(expected_pkg)
@@ -377,15 +383,17 @@ def check_plugin(root: Path) -> int:
         for rel_posix, left in expected_files.items():
             right = actual_files.get(rel_posix)
             if right is None:
-                mismatches.append(f"missing: skills/goal/cursor_goal/{rel_posix}")
+                mismatches.append(
+                    f"missing: skills/cursor-goal/cursor_goal/{rel_posix}"
+                )
                 continue
             label = _compare_file(
-                left, right, Path("skills/goal/cursor_goal") / rel_posix
+                left, right, Path("skills/cursor-goal/cursor_goal") / rel_posix
             )
             if label is not None:
                 mismatches.append(label)
         for rel_posix in sorted(set(actual_files) - set(expected_files)):
-            mismatches.append(f"extra: skills/goal/cursor_goal/{rel_posix}")
+            mismatches.append(f"extra: skills/cursor-goal/cursor_goal/{rel_posix}")
 
         market_data = json.loads(market.read_text(encoding="utf-8"))
         if market_data.get("metadata", {}).get("version") != version:
@@ -398,6 +406,9 @@ def check_plugin(root: Path) -> int:
         )
         if pkg.get("version") != version:
             mismatches.append("plugin.json version drift")
+        leftover_skill = plugin_root / "skills" / "goal"
+        if leftover_skill.exists():
+            mismatches.append("leftover: skills/goal (must be skills/cursor-goal)")
         if mismatches:
             print("plugin tree out of sync:", file=sys.stderr)
             for item in mismatches:

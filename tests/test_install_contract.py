@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 import shutil
 import subprocess
 import sys
+from contextlib import redirect_stdout
 from pathlib import Path
 from types import ModuleType
 
@@ -355,12 +357,14 @@ def test_plugin_manifests_and_hooks_contract() -> None:
     assert {e["command"] for e in subagent_stop_list} == {
         e["command"] for e in stop_list
     }
-    assert (plugin / "skills" / "goal" / "cursor_goal" / "__init__.py").is_file()
+    assert (plugin / "skills" / "cursor-goal" / "cursor_goal" / "__init__.py").is_file()
     assert (plugin / "agents" / "goalKeeper.md").is_file()
     keeper = (plugin / "agents" / "goalKeeper.md").read_text(encoding="utf-8")
     assert "Verify this turn" in keeper
     assert "manage blocked" in keeper
-    skill = (plugin / "skills" / "goal" / "SKILL.md").read_text(encoding="utf-8")
+    skill = (plugin / "skills" / "cursor-goal" / "SKILL.md").read_text(encoding="utf-8")
+    assert "name: cursor-goal" in skill
+    assert "disable-model-invocation: true" in skill
     assert "Iron law" in skill
     assert "FOLLOWUP_REQUIRED" in skill
     assert "Fidelity" in skill
@@ -382,19 +386,19 @@ def test_plugin_manifests_and_hooks_contract() -> None:
     assert "CONFIRM-PASS" in auditor
     assert "tests pass" in auditor.lower()
     assert "untrusted" in auditor.lower()
-    assert (plugin / "skills" / "goal" / "scripts" / "stop_hook.cmd").is_file()
-    assert (plugin / "skills" / "goal" / "scripts" / "wake_loop.sh").is_file()
-    stop_cmd = (plugin / "skills" / "goal" / "scripts" / "stop_hook.cmd").read_text(
-        encoding="utf-8"
-    )
+    assert (plugin / "skills" / "cursor-goal" / "scripts" / "stop_hook.cmd").is_file()
+    assert (plugin / "skills" / "cursor-goal" / "scripts" / "wake_loop.sh").is_file()
+    stop_cmd = (
+        plugin / "skills" / "cursor-goal" / "scripts" / "stop_hook.cmd"
+    ).read_text(encoding="utf-8")
     assert "CURSOR_GOAL_PYTHON" in stop_cmd
     assert "absolute path" in stop_cmd
     assert "WARNING" in stop_cmd
     assert '"%CGP%" -u' in stop_cmd
     assert '"%CURSOR_GOAL_PYTHON%" -u' not in stop_cmd
-    wake_cmd = (plugin / "skills" / "goal" / "scripts" / "wake_loop.cmd").read_text(
-        encoding="utf-8"
-    )
+    wake_cmd = (
+        plugin / "skills" / "cursor-goal" / "scripts" / "wake_loop.cmd"
+    ).read_text(encoding="utf-8")
     assert "CURSOR_GOAL_PYTHON" in wake_cmd
     assert "absolute path" in wake_cmd
     assert "WARNING" in wake_cmd
@@ -419,6 +423,12 @@ def test_classic_install_ps1_cgp_metachar_parity() -> None:
     assert r"scripts\.tmp" in ps1
     assert "PackageRoot" in ps1
     assert "skill tree not modified" in ps1
+    assert r".cursor\skills\cursor-goal" in ps1
+    assert "Invoke-GoalInstallBackup" in ps1
+    assert "backup-before" in ps1
+    assert ".cursor-goal\\backups" in ps1 or ".cursor-goal/backups" in ps1.replace(
+        "\\", "/"
+    )
 
 
 def test_marketplace_hooks_and_doctor_fixture(tmp_path: Path) -> None:
@@ -460,6 +470,26 @@ def test_sync_plugin_tree_check() -> None:
         text=True,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+def test_verify_isort_invocation_and_utf8_child_env() -> None:
+    """verify.py must not use python -m isort (broken on isort 9 / 3.14)."""
+    root = Path(__file__).resolve().parents[1]
+    script = root / "scripts" / "verify.py"
+    spec = importlib.util.spec_from_file_location("cursor_goal_verify", script)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["cursor_goal_verify"] = mod
+    spec.loader.exec_module(mod)
+    cmd = mod.isort_invocation(sys.executable)
+    assert cmd
+    joined = " ".join(cmd)
+    assert "-m isort" not in joined
+    name = Path(cmd[0]).name.lower()
+    assert "isort" in name or "from isort.main import main" in joined
+    env = mod._child_env()
+    assert env["PYTHONUTF8"] == "1"
+    assert env["PYTHONIOENCODING"] == "utf-8"
 
 
 def test_compare_file_ignores_crlf_vs_lf(tmp_path: Path) -> None:
@@ -506,7 +536,7 @@ def test_sync_plugin_tree_check_detects_vendored_drift(tmp_path: Path) -> None:
         / "plugins"
         / "cursor-goal"
         / "skills"
-        / "goal"
+        / "cursor-goal"
         / "cursor_goal"
         / "__init__.py"
     )
@@ -675,8 +705,10 @@ def test_detect_bump_cli_writes_github_output(tmp_path: Path) -> None:
 def test_plugin_vendored_package_imports() -> None:
     """Marketplace tree is a runnable copy of src/, not just a sync check."""
     root = Path(__file__).resolve().parents[1]
-    plugin_parent = root / "plugins" / "cursor-goal" / "skills" / "goal"
+    plugin_parent = root / "plugins" / "cursor-goal" / "skills" / "cursor-goal"
     assert (plugin_parent / "cursor_goal" / "__init__.py").is_file()
+    leftover = root / "plugins" / "cursor-goal" / "skills" / "goal"
+    assert not leftover.exists(), leftover
     env = {**os.environ, "PYTHONPATH": str(plugin_parent)}
     completed = subprocess.run(
         [
@@ -698,4 +730,315 @@ def test_plugin_vendored_package_imports() -> None:
     )
     assert completed.returncode == 0, completed.stderr
     printed = completed.stdout.strip().replace("\\", "/")
-    assert "plugins/cursor-goal/skills/goal/cursor_goal" in printed
+    assert "plugins/cursor-goal/skills/cursor-goal/cursor_goal" in printed
+
+
+def test_classic_installers_target_cursor_goal_not_goal() -> None:
+    """v5 dest is ~/.cursor/skills/cursor-goal; backups live under ~/.cursor-goal."""
+    root = Path(__file__).resolve().parents[1]
+    sh_text = (root / "scripts" / "install-goal.sh").read_text(encoding="utf-8")
+    ps1_text = (root / "scripts" / "install-goal.ps1").read_text(encoding="utf-8")
+    un_sh = (root / "scripts" / "uninstall-goal.sh").read_text(encoding="utf-8")
+    un_ps1 = (root / "scripts" / "uninstall-goal.ps1").read_text(encoding="utf-8")
+    assert 'INSTALL_DIR="${HOME}/.cursor/skills/cursor-goal"' in sh_text
+    assert ".cursor/skills/goal.bak." not in sh_text
+    assert "backup-before --manifest" in sh_text
+    assert ".cursor-goal/backups" in sh_text
+    assert r".cursor\skills\cursor-goal" in ps1_text
+    assert "backup-before" in ps1_text
+    assert "-Manifest $manifestPath" in ps1_text
+    assert "Write-Utf8NoBomFile -Path $StdoutPath" in ps1_text
+    assert 'LEGACY_INSTALL_DIR="${HOME}/.cursor/skills/goal"' in un_sh
+    assert ".cursor-goal/backups" in un_sh
+    assert r".cursor\skills\cursor-goal" in un_ps1
+    assert r".cursor\skills\goal" in un_ps1
+    assert r".cursor-goal\backups" in un_ps1
+
+
+def test_install_backup_migrates_legacy_and_prunes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import install_backup as bak
+
+    home = tmp_path / "home"
+    skills = home / ".cursor" / "skills"
+    legacy = skills / "goal"
+    legacy.mkdir(parents=True)
+    (legacy / "SKILL.md").write_text("# old\n", encoding="utf-8")
+    sibling = skills / "goal.bak.20200101T000000Z"
+    sibling.mkdir()
+    (sibling / "SKILL.md").write_text("# bak\n", encoding="utf-8")
+    agents = home / ".cursor" / "agents"
+    agents.mkdir(parents=True)
+    (agents / "goalKeeper.md").write_text("keeper\n", encoding="utf-8")
+    hooks = home / ".cursor" / "hooks.json"
+    hooks.write_text('{"version":1,"hooks":{"stop":[]}}\n', encoding="utf-8")
+
+    monkeypatch.setattr(bak, "utc_stamp", lambda: "20260828T000000Z")
+    manifest = bak.backup_before(home)
+    assert manifest["skill_backup_source"] == "goal"
+    assert not legacy.exists()
+    assert not sibling.exists()
+    backup_skill = Path(str(manifest["skill_backup"]))
+    assert backup_skill.is_dir()
+    assert (backup_skill / "SKILL.md").read_text(encoding="utf-8") == "# old\n"
+    assert Path(str(manifest["agents"]["goalKeeper.md"])).is_file()
+    assert Path(str(manifest["hooks_backup"])).is_file()
+
+    dest = bak.install_dir(home)
+    dest.mkdir(parents=True)
+    (dest / "SKILL.md").write_text("# new\n", encoding="utf-8")
+    bak.restore_after_failure(home, manifest)
+    assert not dest.exists()
+    restored = bak.legacy_install_dir(home)
+    assert (restored / "SKILL.md").read_text(encoding="utf-8") == "# old\n"
+    assert json.loads(hooks.read_text(encoding="utf-8"))["version"] == 1
+    assert (agents / "goalKeeper.md").read_text(encoding="utf-8") == "keeper\n"
+
+
+def test_install_backup_prune_keeps_one_and_cli_roundtrip(
+    tmp_path: Path,
+) -> None:
+    from cursor_goal import install_backup as bak
+
+    home = tmp_path / "home"
+    skill_root = bak.backups_root(home) / "skill"
+    skill_root.mkdir(parents=True)
+    (skill_root / "20260827T000000Z").mkdir()
+    (skill_root / "20260828T000000Z").mkdir()
+    leftover = bak.legacy_install_dir(home)
+    leftover.mkdir(parents=True)
+    (leftover / "SKILL.md").write_text("# leftover\n", encoding="utf-8")
+    removed = bak.prune_backups(home, keep=1)
+    assert removed["skill"] >= 1
+    remaining = [path.name for path in skill_root.iterdir() if path.is_dir()]
+    assert remaining == ["20260828T000000Z"]
+    assert not leftover.exists()
+
+    code = bak.main(["--home", str(home), "uninstall-debris"])
+    assert code == 0
+    assert not bak.backups_root(home).exists()
+
+
+def test_install_backup_cli_backup_before_stdout_is_json(tmp_path: Path) -> None:
+    from cursor_goal import install_backup as bak
+
+    home = tmp_path / "home"
+    home.mkdir()
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        code = bak.main(["--home", str(home), "backup-before"])
+    assert code == 0
+    payload = json.loads(buf.getvalue())
+    assert "skill_backup" in payload
+    assert "agents" in payload
+    assert "hooks_backup" in payload
+
+
+def test_install_backup_current_skill_unique_dir_and_restore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import install_backup as bak
+
+    home = tmp_path / "home"
+    current = bak.install_dir(home)
+    current.mkdir(parents=True)
+    (current / "SKILL.md").write_text("# live\n", encoding="utf-8")
+    (current / "__pycache__").mkdir()
+    (current / "__pycache__" / "x.pyc").write_text("x", encoding="utf-8")
+    agents = bak.agents_dir(home)
+    agents.mkdir(parents=True)
+    for name in bak.AGENT_NAMES:
+        (agents / name).write_text(f"{name}\n", encoding="utf-8")
+    hooks = home / ".cursor" / "hooks.json"
+    hooks.write_text('{"version":1}\n', encoding="utf-8")
+    stamp = "20260828T120000Z"
+    collide = bak.backups_root(home) / "skill" / stamp
+    collide.mkdir(parents=True)
+    (bak.backups_root(home) / "skill" / f"{stamp}-2").mkdir()
+    hook_collide = bak.backups_root(home) / "hooks" / f"hooks.json.bak.{stamp}"
+    hook_collide.parent.mkdir(parents=True)
+    hook_collide.write_text("old\n", encoding="utf-8")
+    monkeypatch.setattr(bak, "utc_stamp", lambda: stamp)
+    manifest = bak.backup_before(home)
+    assert manifest["skill_backup_source"] == "cursor-goal"
+    assert current.is_dir()
+    backup = Path(str(manifest["skill_backup"]))
+    assert backup.name == f"{stamp}-3"
+    assert not (backup / "__pycache__").exists()
+    assert Path(str(manifest["hooks_backup"])).name.endswith(str(os.getpid())) or (
+        Path(str(manifest["hooks_backup"])).name != hook_collide.name
+    )
+
+    (current / "SKILL.md").write_text("# replaced\n", encoding="utf-8")
+    bak.restore_after_failure(home, manifest)
+    assert (current / "SKILL.md").read_text(encoding="utf-8") == "# live\n"
+    assert json.loads(hooks.read_text(encoding="utf-8")) == {"version": 1}
+
+
+def test_install_backup_restore_missing_and_new_agents(tmp_path: Path) -> None:
+    from cursor_goal import install_backup as bak
+
+    home = tmp_path / "home"
+    dest = bak.install_dir(home)
+    dest.mkdir(parents=True)
+    (dest / "SKILL.md").write_text("# new\n", encoding="utf-8")
+    agents = bak.agents_dir(home)
+    agents.mkdir(parents=True)
+    (agents / "goalKeeper.md").write_text("installed\n", encoding="utf-8")
+    (agents / "goal-evaluator.md").write_text("keep\n", encoding="utf-8")
+    bak.restore_after_failure(
+        home,
+        {
+            "skill_backup": str(tmp_path / "missing-skill"),
+            "skill_backup_source": "cursor-goal",
+            "hooks_backup": str(tmp_path / "missing-hooks.json"),
+            "agents": {
+                "goalKeeper.md": None,
+                "goal-evaluator.md": str(tmp_path / "missing-eval.md"),
+            },
+        },
+    )
+    assert (dest / "SKILL.md").is_file()
+    assert not (agents / "goalKeeper.md").exists()
+    assert (agents / "goal-evaluator.md").read_text(encoding="utf-8") == "keep\n"
+
+
+def test_install_backup_restore_legacy_when_legacy_exists(
+    tmp_path: Path,
+) -> None:
+    from cursor_goal import install_backup as bak
+
+    home = tmp_path / "home"
+    backup = bak.backups_root(home) / "skill" / "stamp"
+    backup.mkdir(parents=True)
+    (backup / "SKILL.md").write_text("# bak\n", encoding="utf-8")
+    dest = bak.install_dir(home)
+    dest.mkdir(parents=True)
+    (dest / "SKILL.md").write_text("# new\n", encoding="utf-8")
+    legacy = bak.legacy_install_dir(home)
+    legacy.mkdir(parents=True)
+    (legacy / "SKILL.md").write_text("# leftover\n", encoding="utf-8")
+    bak.restore_after_failure(
+        home,
+        {
+            "skill_backup": str(backup),
+            "skill_backup_source": "goal",
+            "agents": {},
+        },
+    )
+    assert not dest.exists()
+    assert (legacy / "SKILL.md").read_text(encoding="utf-8") == "# bak\n"
+
+
+def test_install_backup_prune_agents_hooks_and_in_root_bak(
+    tmp_path: Path,
+) -> None:
+    from cursor_goal import install_backup as bak
+
+    home = tmp_path / "home"
+    agents_bak = bak.backups_root(home) / "agents"
+    (agents_bak / "old").mkdir(parents=True)
+    (agents_bak / "new").mkdir()
+    hooks_bak = bak.backups_root(home) / "hooks"
+    hooks_bak.mkdir(parents=True)
+    (hooks_bak / "hooks.json.bak.1").write_text("1\n", encoding="utf-8")
+    (hooks_bak / "hooks.json.bak.2").write_text("2\n", encoding="utf-8")
+    skills = bak.skills_dir(home)
+    skills.mkdir(parents=True)
+    (skills / "cursor-goal.bak.old").mkdir()
+    live_agents = bak.agents_dir(home)
+    live_agents.mkdir(parents=True)
+    (live_agents / "goalKeeper.md.bak.old").write_text("x\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="keep must be"):
+        bak.prune_backups(home, keep=0)
+    removed = bak.prune_backups(home, keep=1)
+    assert removed["agents"] == 1
+    assert removed["hooks"] == 1
+    assert not (skills / "cursor-goal.bak.old").exists()
+    assert not (live_agents / "goalKeeper.md.bak.old").exists()
+    assert bak._sorted_stamp_dirs(tmp_path / "missing") == []
+    assert bak._sorted_files(tmp_path / "missing") == []
+    assert bak.list_legacy_skill_bak_dirs(home) == []
+
+
+def test_install_backup_cli_prune_restore_and_bad_manifest(
+    tmp_path: Path,
+) -> None:
+    from cursor_goal import install_backup as bak
+
+    home = tmp_path / "home"
+    skill = bak.backups_root(home) / "skill" / "only"
+    skill.mkdir(parents=True)
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        code = bak.main(["--home", str(home), "prune-after", "--keep", "1"])
+    assert code == 0
+    assert json.loads(buf.getvalue())["skill"] == 0
+
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps({"skill_backup": None, "agents": "nope"}),
+        encoding="utf-8",
+    )
+    assert bak.main(["--home", str(home), "restore", "--manifest", str(manifest)]) == 0
+    assert bak.main(["--home", str(home), "restore"]) == 1
+    utf16 = tmp_path / "manifest-utf16.json"
+    utf16.write_bytes(json.dumps({"skill_backup": None, "agents": {}}).encode("utf-16"))
+    loaded = bak._load_manifest(utf16)
+    assert loaded["skill_backup"] is None
+    assert bak.main(["--home", str(home), "restore", "--manifest", str(utf16)]) == 0
+    written = tmp_path / "written-manifest.json"
+    buf_before = io.StringIO()
+    with redirect_stdout(buf_before):
+        write_code = bak.main(
+            ["--home", str(home), "backup-before", "--manifest", str(written)]
+        )
+    assert write_code == 0
+    assert json.loads(written.read_text(encoding="utf-8")) == json.loads(
+        buf_before.getvalue()
+    )
+    assert not written.read_bytes().startswith(b"\xff\xfe")
+    bad = tmp_path / "bad.json"
+    bad.write_text("[]\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="JSON object"):
+        bak._load_manifest(bad)
+    garbage = tmp_path / "garbage.bin"
+    garbage.write_bytes(b"\xff")
+    with pytest.raises(ValueError, match="UTF-8 or UTF-16"):
+        bak._load_manifest(garbage)
+    assert bak.main(["--home", str(home), "restore", "--manifest", str(bad)]) == 1
+
+
+def test_install_backup_copy_tree_replaces_existing_dest(tmp_path: Path) -> None:
+    from cursor_goal import install_backup as bak
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.txt").write_text("a\n", encoding="utf-8")
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    (dest / "old.txt").write_text("old\n", encoding="utf-8")
+    bak._copy_tree(src, dest)
+    assert (dest / "a.txt").read_text(encoding="utf-8") == "a\n"
+    assert not (dest / "old.txt").exists()
+
+
+def test_install_backup_uninstall_debris_removes_trees(tmp_path: Path) -> None:
+    from cursor_goal import install_backup as bak
+
+    home = tmp_path / "home"
+    bak.install_dir(home).mkdir(parents=True)
+    bak.legacy_install_dir(home).mkdir(parents=True)
+    sibling = bak.skills_dir(home) / "goal.bak.old"
+    sibling.mkdir()
+    agents = bak.agents_dir(home)
+    agents.mkdir(parents=True)
+    (agents / "goal-evaluator.md.bak.x").write_text("x\n", encoding="utf-8")
+    (bak.backups_root(home) / "skill").mkdir(parents=True)
+    bak.uninstall_debris(home)
+    assert not bak.install_dir(home).exists()
+    assert not bak.legacy_install_dir(home).exists()
+    assert not sibling.exists()
+    assert not bak.backups_root(home).exists()
+    assert not (agents / "goal-evaluator.md.bak.x").exists()

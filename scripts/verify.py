@@ -63,6 +63,19 @@ def setup_logging(*, verbose: bool) -> None:
     )
 
 
+def _child_env() -> dict[str, str]:
+    """Environment for pipeline subprocesses.
+
+    Force UTF-8 on Windows so isort/black can read files that contain arrows
+    or ≠ (cp1252 ``charmap`` otherwise skips them as unparseable).
+    """
+    env = os.environ.copy()
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    LOG.debug("child env forced PYTHONUTF8=1 PYTHONIOENCODING=utf-8")
+    return env
+
+
 def run_step(name: str, command: Sequence[str], *, cwd: Path) -> StepResult:
     display = " ".join(command)
     LOG.info("START %s: %s", name, display)
@@ -71,7 +84,7 @@ def run_step(name: str, command: Sequence[str], *, cwd: Path) -> StepResult:
         list(command),
         cwd=cwd,
         check=False,
-        env=os.environ.copy(),
+        env=_child_env(),
     )
     duration = time.perf_counter() - started
     result = StepResult(
@@ -87,16 +100,41 @@ def run_step(name: str, command: Sequence[str], *, cwd: Path) -> StepResult:
     return result
 
 
+def isort_invocation(py: str) -> list[str]:
+    """Return argv prefix for isort.
+
+    isort 9 on CPython 3.14 installs a native ``isort/__init__.pyd``, so
+    ``python -m isort`` fails with "isort is a package and cannot be directly
+    executed". CI invokes the console script; do the same, with a
+    ``isort.main`` fallback when Scripts/ is not on PATH.
+    """
+    found = shutil.which("isort")
+    if found:
+        LOG.debug("isort console script: %s", found)
+        return [found]
+    LOG.warning(
+        "isort console script not on PATH; using isort.main (python -m isort "
+        "is broken on isort 9 / CPython 3.14 native builds)"
+    )
+    return [
+        py,
+        "-c",
+        "from isort.main import main; raise SystemExit(main())",
+    ]
+
+
 def bash_scripts(root: Path) -> list[Path]:
     """Return sorted bash scripts under scripts/ plus the skill tree's wake loop.
 
     The marketplace/plugin skill tree ships its own bash entry point
-    (.cursor/skills/goal/scripts/wake_loop.sh) that CI lints alongside
+    (.cursor/skills/cursor-goal/scripts/wake_loop.sh) that CI lints alongside
     scripts/*.sh; include it here too so `verify.py` matches CI exactly.
     """
     scripts_dir = root / "scripts"
     found = list(scripts_dir.glob("*.sh")) + list(scripts_dir.glob("*.bash"))
-    wake_loop_sh = root / ".cursor" / "skills" / "goal" / "scripts" / "wake_loop.sh"
+    wake_loop_sh = (
+        root / ".cursor" / "skills" / "cursor-goal" / "scripts" / "wake_loop.sh"
+    )
     if wake_loop_sh.is_file():
         found.append(wake_loop_sh)
     plugin_wake = (
@@ -104,7 +142,7 @@ def bash_scripts(root: Path) -> list[Path]:
         / "plugins"
         / "cursor-goal"
         / "skills"
-        / "goal"
+        / "cursor-goal"
         / "scripts"
         / "wake_loop.sh"
     )
@@ -125,7 +163,7 @@ def build_steps(
 
     if not skip_format:
         if fix:
-            steps.append(("isort (fix)", [py, "-m", "isort", *SRC_PATHS]))
+            steps.append(("isort (fix)", [*isort_invocation(py), *SRC_PATHS]))
             steps.append(("black (fix)", [py, "-m", "black", *SRC_PATHS]))
             steps.append(
                 (
@@ -137,7 +175,12 @@ def build_steps(
             steps.append(
                 (
                     "isort (check)",
-                    [py, "-m", "isort", "--check-only", "--diff", *SRC_PATHS],
+                    [
+                        *isort_invocation(py),
+                        "--check-only",
+                        "--diff",
+                        *SRC_PATHS,
+                    ],
                 )
             )
             steps.append(

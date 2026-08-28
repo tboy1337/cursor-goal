@@ -79,11 +79,11 @@ jobs:
       - name: ShellCheck
         run: |
           shellcheck --severity=warning scripts/*.sh
-          if [ -f .cursor/skills/goal/scripts/wake_loop.sh ]; then
-            shellcheck --severity=warning .cursor/skills/goal/scripts/wake_loop.sh
+          if [ -f .cursor/skills/cursor-goal/scripts/wake_loop.sh ]; then
+            shellcheck --severity=warning .cursor/skills/cursor-goal/scripts/wake_loop.sh
           fi
-          if [ -f plugins/cursor-goal/skills/goal/scripts/wake_loop.sh ]; then
-            shellcheck --severity=warning plugins/cursor-goal/skills/goal/scripts/wake_loop.sh
+          if [ -f plugins/cursor-goal/skills/cursor-goal/scripts/wake_loop.sh ]; then
+            shellcheck --severity=warning plugins/cursor-goal/skills/cursor-goal/scripts/wake_loop.sh
           fi
 
       - name: Unix install smoke

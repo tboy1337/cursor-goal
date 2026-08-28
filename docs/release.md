@@ -2,13 +2,13 @@
 
 Checklist for cutting a tagged GitHub Release (`vX.Y.Z`).
 
-Current package version is **4.5.0**. The public GitHub tag for this release is **`v4.5.0`**. After tagging, README/install pins work with `git clone --branch v4.5.0`.
+Current package version is **5.0.0**. The public GitHub tag for this release is **`v5.0.0`**. After tagging, README/install pins work with `git clone --branch v5.0.0`.
 
 ## Manual Cursor IDE smoke (before pushing a version bump)
 
 Harness unit tests do not cover the IDE. After install, smoke in Cursor:
 
-1. `/goal` create with an argv-safe `--test` (e.g. `py -3 -c "raise SystemExit(0)"`)
+1. `/cursor-goal` create with an argv-safe `--test` (e.g. `py -3 -c "raise SystemExit(0)"`)
 2. Parse `GOAL_WAKE_REQUIRED`; start its `command` in a background Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor` (re-handshake existing loops so they attach this longer pattern)
 3. Confirm `wake status` shows `continuation_ready=true` / `pid_alive=true`
 4. Run `eval validate` (clears any prior CLEAR + YES), spawn a **new** `goal-auditor` (`eval parse-audit` CLEAR on the current tree), then `goal-evaluator`, `manage done` on matching CLEAR + YES
@@ -73,6 +73,6 @@ Pushes to `testing`, pull requests, and commits that do not change the pyproject
 ## Do not
 
 - Edit `plugins/cursor-goal/**` or `.cursor-plugin/marketplace.json` by hand — always regenerate via `sync-plugin-tree.py`
-- Hand-edit `.cursor/skills/goal/scripts/stop_hook.cmd` expecting it to match the installer bake or marketplace variant — those are three intentional roles (see [install.md](install.md))
+- Hand-edit `.cursor/skills/cursor-goal/scripts/stop_hook.cmd` expecting it to match the installer bake or marketplace variant — those are three intentional roles (see [install.md](install.md))
 - Push a tag that does not match `__version__` (the tag-triggered workflow fails intentionally)
 - Skip `verify.py` before pushing a version bump

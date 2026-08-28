@@ -39,12 +39,12 @@ echo "[install-smoke] HOME=$HOME"
 echo "[install-smoke] Installing..."
 bash "${REPO_ROOT}/scripts/install-goal.sh"
 
-test -f "$HOME/.cursor/skills/goal/cursor_goal/__init__.py"
-test -f "$HOME/.cursor/skills/goal/scripts/run_goal.py"
-test -f "$HOME/.cursor/skills/goal/scripts/stop_hook.py"
-test -f "$HOME/.cursor/skills/goal/scripts/wake_loop.sh"
-test ! -f "$HOME/.cursor/skills/goal/scripts/wake_loop.cmd"
-test -f "$HOME/.cursor/skills/goal/VERSION"
+test -f "$HOME/.cursor/skills/cursor-goal/cursor_goal/__init__.py"
+test -f "$HOME/.cursor/skills/cursor-goal/scripts/run_goal.py"
+test -f "$HOME/.cursor/skills/cursor-goal/scripts/stop_hook.py"
+test -f "$HOME/.cursor/skills/cursor-goal/scripts/wake_loop.sh"
+test ! -f "$HOME/.cursor/skills/cursor-goal/scripts/wake_loop.cmd"
+test -f "$HOME/.cursor/skills/cursor-goal/VERSION"
 test -f "$HOME/.cursor/agents/goalKeeper.md"
 test -f "$HOME/.cursor/agents/goal-evaluator.md"
 test -f "$HOME/.cursor/agents/goal-auditor.md"
@@ -86,12 +86,12 @@ assert "-u" in entry.get("command", ""), entry
 print("[install-smoke] Hook marker/loop_limit/-u OK")
 PY
 
-VERSION_FILE="$HOME/.cursor/skills/goal/VERSION"
+VERSION_FILE="$HOME/.cursor/skills/cursor-goal/VERSION"
 VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
 test -n "$VERSION"
 echo "[install-smoke] VERSION=$VERSION"
 
-RUN_GOAL="$HOME/.cursor/skills/goal/scripts/run_goal.py"
+RUN_GOAL="$HOME/.cursor/skills/cursor-goal/scripts/run_goal.py"
 echo "[install-smoke] Running manage status..."
 "$SMOKE_PY" -u "$RUN_GOAL" manage status | grep -q "No active goal"
 
@@ -108,8 +108,17 @@ AUDIT_SPAWN="$("$SMOKE_PY" -u "$RUN_GOAL" eval audit-spawn-config)"
 echo "[install-smoke] audit-spawn-config: $AUDIT_SPAWN"
 "$SMOKE_PY" -c 'import json,sys; d=json.loads(sys.argv[1]); assert d.get("subagent_type")=="goal-auditor"; assert d.get("readonly") is True; assert d.get("model")=="inherit"' "$AUDIT_SPAWN"
 
+echo "[install-smoke] Checking v5 layout (no leftover user /goal skill)..."
+test ! -d "$HOME/.cursor/skills/goal"
+if ls -d "$HOME/.cursor/skills"/goal.bak.* >/dev/null 2>&1; then
+  echo "[install-smoke] leftover goal.bak.* under skills/" >&2
+  exit 1
+fi
+test -d "$HOME/.cursor-goal/backups"
+
 echo "[install-smoke] Uninstalling..."
 bash "${REPO_ROOT}/scripts/uninstall-goal.sh" --purge-data
+test ! -d "$HOME/.cursor/skills/cursor-goal"
 test ! -d "$HOME/.cursor/skills/goal"
 test ! -d "$HOME/.cursor-goal"
 

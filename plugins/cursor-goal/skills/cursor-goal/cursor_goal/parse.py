@@ -1,4 +1,4 @@
-"""Parse natural-language /goal input into structured JSON."""
+"""Parse natural-language /cursor-goal (or leftover /goal) input into JSON."""
 
 from __future__ import annotations
 
@@ -184,18 +184,18 @@ def _normalize_condition(condition: str) -> str:
 
 
 def parse_raw(raw: str) -> dict[str, Any]:  # pylint: disable=too-many-branches
-    """Parse /goal input into a JSON-serializable dict."""
+    """Parse /cursor-goal (or leftover /goal) input into a JSON-serializable dict."""
     text = raw.strip()
     if not text:
-        raise ValueError('Usage: cursor-goal parse "<raw /goal input>"')
+        raise ValueError('Usage: cursor-goal parse "<raw /cursor-goal input>"')
 
-    text = re.sub(r"^/goal\s*", "", text, count=1)
+    text = re.sub(r"^/(?:cursor-)?goal\s*", "", text, count=1)
 
     blocked_parts = text.split(None, 1)
     if blocked_parts and blocked_parts[0].lower() == "blocked":
         reason = blocked_parts[1].strip() if len(blocked_parts) > 1 else ""
         if not reason:
-            raise ValueError('Usage: /goal blocked "<reason>"')
+            raise ValueError('Usage: /cursor-goal blocked "<reason>"')
         blocked: dict[str, Any] = {
             "subcommand": "blocked",
             "action": "blocked",

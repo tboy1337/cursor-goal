@@ -87,7 +87,7 @@ def _classic_hooks_configured() -> bool | None:
             "stop_hook" in text or "cursor_goal" in text or "run_goal" in text
         )
     skill_hook = (
-        _user_home() / ".cursor" / "skills" / "goal" / "scripts" / "stop_hook.py"
+        _user_home() / ".cursor" / "skills" / "cursor-goal" / "scripts" / "stop_hook.py"
     )
     if skill_hook.is_file():
         return False
@@ -161,7 +161,7 @@ def _scan_root_for_marketplace_hooks(root: Path) -> tuple[bool, bool]:
     """
     hooks = root / "hooks" / "hooks.json"
     if not hooks.is_file():
-        alt = root / "skills" / "goal" / "scripts" / "stop_hook.py"
+        alt = root / "skills" / "cursor-goal" / "scripts" / "stop_hook.py"
         return False, alt.is_file()
     return _hooks_file_has_goal_marker(hooks), True
 
@@ -195,6 +195,49 @@ def _cursor_goal_python_is_unsafe(value: str) -> bool:
     return any(ch in _UNSAFE_CGP_CHARS for ch in value)
 
 
+def _legacy_user_skill_failures() -> list[str]:
+    """Hard-fail when the pre-v5 ``~/.cursor/skills/goal`` tree is still present."""
+    leftover = _user_home() / ".cursor" / "skills" / "goal" / "SKILL.md"
+    if leftover.is_file():
+        logger.warning("Legacy user skill still present path=%s", leftover)
+        return [
+            "Legacy user skill ~/.cursor/skills/goal still exists (collides with "
+            "Cursor's built-in /goal). Re-run install-goal.sh / install-goal.ps1 "
+            "to migrate to ~/.cursor/skills/cursor-goal and remove the old skill."
+        ]
+    return []
+
+
+def _skill_layout_warnings() -> list[str]:
+    """Warn about leftover bak folders and Cursor's built-in /goal skill."""
+    warnings: list[str] = []
+    skills = _user_home() / ".cursor" / "skills"
+    if skills.is_dir():
+        try:
+            bak_dirs = [
+                path
+                for path in skills.iterdir()
+                if path.is_dir() and path.name.startswith("goal.bak.")
+            ]
+        except OSError as exc:
+            logger.warning("Could not scan skills dir for bak folders: %s", exc)
+            bak_dirs = []
+        if bak_dirs:
+            warnings.append(
+                f"Leftover skill backup folders under ~/.cursor/skills "
+                f"({len(bak_dirs)}). Re-run the installer to move them to "
+                "~/.cursor-goal/backups."
+            )
+    builtin = _user_home() / ".cursor" / "skills-cursor" / "goal" / "SKILL.md"
+    if builtin.is_file():
+        warnings.append(
+            "Cursor built-in /goal is present (~/.cursor/skills-cursor/goal). "
+            "Expected: use /goal for native continuation; /cursor-goal for "
+            "this harness."
+        )
+    return warnings
+
+
 def _install_version_failures() -> list[str]:
     """Hard-fail when classic/plugin skill VERSION drifts from package version."""
     try:
@@ -206,8 +249,9 @@ def _install_version_failures() -> list[str]:
         return []
     version_path = root / "VERSION"
     normalized = root.as_posix().replace("\\", "/")
-    is_classic_user = "/.cursor/skills/goal" in normalized or normalized.endswith(
-        ".cursor/skills/goal"
+    is_classic_user = (
+        "/.cursor/skills/cursor-goal" in normalized
+        or normalized.endswith(".cursor/skills/cursor-goal")
     )
     if not version_path.is_file():
         if is_classic_user:
@@ -434,7 +478,7 @@ def _doctor_check_harness(hard_fails: list[str], warnings: list[str]) -> None:
                 f"run_goal.py missing at {report['run_goal']}. "
                 "Run the classic installer, enable the Teams marketplace plugin, "
                 "or set CURSOR_GOAL_HOME / CURSOR_PLUGIN_ROOT to a tree that "
-                "contains skills/goal/scripts/run_goal.py"
+                "contains skills/cursor-goal/scripts/run_goal.py"
             )
     except ValueError as exc:
         warnings.append(f"Harness path unresolved: {exc}")
@@ -646,6 +690,8 @@ def cmd_doctor(_argv: list[str]) -> int:
     _doctor_check_windows_python(hard_fails, warnings, market_hooks)
     hard_fails.extend(_stale_baked_python_failures())
     hard_fails.extend(_install_version_failures())
+    hard_fails.extend(_legacy_user_skill_failures())
+    warnings.extend(_skill_layout_warnings())
 
     state = _doctor_load_goal(hard_fails)
     wake_info = wake_status_info()

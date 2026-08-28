@@ -62,7 +62,7 @@ python3 testing/scripts/patterns.py testing/samples/12-goal-with-test.jsonl 12-g
 ```
 
 Manual workload (in Cursor): open a workload file under `workloads/`, paste
-its `## Prompt` block into a fresh `/goal` session, and check off
+its `## Prompt` block into a fresh `/cursor-goal` session, and check off
 `## Verification Patterns` against the transcript. Capture the transcript
 into `testing/samples/<workload-id>.jsonl` afterward if you want it to
 become a regression sample (see [`samples/README.md`](samples/README.md)).

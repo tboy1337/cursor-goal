@@ -130,7 +130,7 @@ FIDELITY_RULE = (
     "with a weaker condition. Do not invent --test."
 )
 NO_AGENT_PAUSE_RULE = (
-    "Do not manage pause unless the user said /goal pause. Use manage "
+    "Do not manage pause unless the user said /cursor-goal pause. Use manage "
     "blocked for a repeated impasse (the same blocker on 3 consecutive "
     "pursuing turns). Never mark blocked because the work is hard."
 )

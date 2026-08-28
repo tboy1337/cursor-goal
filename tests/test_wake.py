@@ -1551,7 +1551,7 @@ def test_unix_ownership_via_ps(wake_on: Path, monkeypatch: pytest.MonkeyPatch) -
 
     class Owned:
         returncode = 0
-        stdout = "python3 -u /home/x/.cursor/skills/goal/scripts/run_goal.py wake loop"
+        stdout = "python3 -u /home/x/.cursor/skills/cursor-goal/scripts/run_goal.py wake loop"
         stderr = ""
 
     monkeypatch.setattr(wake_process_mod.subprocess, "run", lambda *_a, **_k: Owned())

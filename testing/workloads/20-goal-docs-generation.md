@@ -5,7 +5,7 @@ Test goal pursuit for adding docstrings to an undocumented API client module.
 ## Prompt
 
 ```
-/goal every public class and function in testing/scripts/api_client.py has docstrings
+/cursor-goal every public class and function in testing/scripts/api_client.py has docstrings
 
 Add Google-style docstrings to APIClient and all module-level functions.
 ```

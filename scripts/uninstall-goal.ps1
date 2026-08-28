@@ -1,4 +1,4 @@
-# uninstall-goal.ps1 — Remove /goal install artifacts from Cursor user config
+# uninstall-goal.ps1 — Remove /cursor-goal install artifacts from Cursor user config
 #
 # Usage:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\uninstall-goal.ps1
@@ -77,14 +77,26 @@ function Invoke-GoalUninstall {
         [switch]$PurgeData
     )
 
-    $installDir = Join-Path $HomeDir ".cursor\skills\goal"
+    $installDir = Join-Path $HomeDir ".cursor\skills\cursor-goal"
+    $legacyInstallDir = Join-Path $HomeDir ".cursor\skills\goal"
     $agentsDir = Join-Path $HomeDir ".cursor\agents"
     $hooksFile = Join-Path $HomeDir ".cursor\hooks.json"
 
+    $pkgRoot = $null
+    if (Test-Path (Join-Path $installDir "cursor_goal")) {
+        $pkgRoot = $installDir
+    }
+    elseif (Test-Path (Join-Path $legacyInstallDir "cursor_goal")) {
+        $pkgRoot = $legacyInstallDir
+    }
+
     if (Test-Path $hooksFile) {
-        $pkgDir = Join-Path $installDir "cursor_goal"
+        $pkgDir = $null
+        if ($pkgRoot) {
+            $pkgDir = Join-Path $pkgRoot "cursor_goal"
+        }
         $cleaned = $false
-        if (Test-Path $pkgDir) {
+        if ($pkgDir -and (Test-Path $pkgDir)) {
             $py = $null
             $pyArgs = @()
             if (Get-Command py -ErrorAction SilentlyContinue) {
@@ -114,7 +126,7 @@ print("hooks cleaned")
                     $prevEap = $ErrorActionPreference
                     $ErrorActionPreference = 'Continue'
                     try {
-                        $null = & $py @($pyArgs + @($tmpPy, $installDir, $hooksFile)) 2>&1
+                        $null = & $py @($pyArgs + @($tmpPy, $pkgRoot, $hooksFile)) 2>&1
                     }
                     finally {
                         $ErrorActionPreference = $prevEap
@@ -202,8 +214,17 @@ print("hooks cleaned")
     }
 
     # Best-effort wake disarm before deleting the skill tree.
-    $runGoal = Join-Path $installDir "scripts\run_goal.py"
-    if (Test-Path $runGoal) {
+    $runGoal = $null
+    foreach ($candidate in @(
+            (Join-Path $installDir "scripts\run_goal.py"),
+            (Join-Path $legacyInstallDir "scripts\run_goal.py")
+        )) {
+        if (Test-Path $candidate) {
+            $runGoal = $candidate
+            break
+        }
+    }
+    if ($runGoal) {
         $py = $null
         $pyArgs = @()
         if (Get-Command py -ErrorAction SilentlyContinue) {
@@ -239,15 +260,25 @@ print("hooks cleaned")
 
     Write-Host "[uninstall-goal] Removing skill at $installDir"
     if (Test-Path $installDir) { Remove-Item -Recurse -Force $installDir }
+    if (Test-Path $legacyInstallDir) {
+        Write-Host "[uninstall-goal] Removing legacy skill at $legacyInstallDir"
+        Remove-Item -Recurse -Force $legacyInstallDir
+    }
 
-    # Clean installer backup debris next to the skill / agents / hooks files.
+    # Clean installer backup debris (in-root bak folders + ~/.cursor-goal/backups).
     $skillsParent = Join-Path $HomeDir ".cursor\skills"
     if (Test-Path -LiteralPath $skillsParent) {
-        Get-ChildItem -LiteralPath $skillsParent -Directory -Filter "goal.bak.*" -ErrorAction SilentlyContinue |
+        Get-ChildItem -LiteralPath $skillsParent -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like 'goal.bak.*' -or $_.Name -like 'cursor-goal.bak.*' } |
             ForEach-Object {
                 Remove-Item -Recurse -Force -LiteralPath $_.FullName -ErrorAction SilentlyContinue
                 Write-Host ("[uninstall-goal] Removed backup {0}" -f $_.FullName)
             }
+    }
+    $backupRoot = Join-Path $HomeDir ".cursor-goal\backups"
+    if (Test-Path -LiteralPath $backupRoot) {
+        Remove-Item -Recurse -Force -LiteralPath $backupRoot -ErrorAction SilentlyContinue
+        Write-Host "[uninstall-goal] Removed $backupRoot"
     }
     if (Test-Path -LiteralPath $agentsDir) {
         Get-ChildItem -LiteralPath $agentsDir -File -Filter "goalKeeper.md.bak.*" -ErrorAction SilentlyContinue |

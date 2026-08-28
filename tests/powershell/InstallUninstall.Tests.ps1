@@ -277,7 +277,7 @@ Describe 'Invoke-GoalInstall' {
         $code = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $RepoRoot -Python $python
         $code | Should -Be 0
 
-        $installDir = Join-Path $TempHome '.cursor\skills\goal'
+        $installDir = Join-Path $TempHome '.cursor\skills\cursor-goal'
         Test-Path (Join-Path $installDir 'cursor_goal\__init__.py') | Should -BeTrue
         Test-Path (Join-Path $installDir 'SKILL.md') | Should -BeTrue
         Test-Path (Join-Path $installDir 'scripts\stop_hook.py') | Should -BeTrue
@@ -323,10 +323,13 @@ Describe 'Invoke-GoalInstall' {
 
         $code = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $RepoRoot -Python (Find-GoalPython)
         $code | Should -Be 0
-        $backups = @(Get-ChildItem -LiteralPath $agentsDir -Filter '*.bak.*')
-        @($backups | Where-Object { $_.Name -like 'goalKeeper.md.bak.*' }).Count | Should -BeGreaterThan 0
-        @($backups | Where-Object { $_.Name -like 'goal-evaluator.md.bak.*' }).Count | Should -BeGreaterThan 0
-        @($backups | Where-Object { $_.Name -like 'goal-auditor.md.bak.*' }).Count | Should -BeGreaterThan 0
+        $agentBakRoot = Join-Path $TempHome '.cursor-goal\backups\agents'
+        Test-Path $agentBakRoot | Should -BeTrue
+        $agentFiles = @(Get-ChildItem -LiteralPath $agentBakRoot -Recurse -File)
+        @($agentFiles | Where-Object { $_.Name -eq 'goalKeeper.md' }).Count | Should -BeGreaterThan 0
+        @($agentFiles | Where-Object { $_.Name -eq 'goal-evaluator.md' }).Count | Should -BeGreaterThan 0
+        @($agentFiles | Where-Object { $_.Name -eq 'goal-auditor.md' }).Count | Should -BeGreaterThan 0
+        @(Get-ChildItem -LiteralPath $agentsDir -Filter '*.bak.*' -ErrorAction SilentlyContinue).Count | Should -Be 0
         (Get-Content -Raw (Join-Path $agentsDir 'goalKeeper.md')).Trim() | Should -Not -Be 'old-keeper'
     }
 
@@ -334,7 +337,7 @@ Describe 'Invoke-GoalInstall' {
         Mock Protect-GoalDataDirAcl { return 1 }
         $code = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $RepoRoot -Python (Find-GoalPython)
         $code | Should -Be 1
-        Test-Path (Join-Path $TempHome '.cursor\skills\goal\SKILL.md') | Should -BeFalse
+        Test-Path (Join-Path $TempHome '.cursor\skills\cursor-goal\SKILL.md') | Should -BeFalse
     }
 
     It 'backs up and merges an existing hooks.json' {
@@ -353,8 +356,9 @@ Describe 'Invoke-GoalInstall' {
 
         $code = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $RepoRoot -Python (Find-GoalPython)
         $code | Should -Be 0
-        $bakMatches = @(Get-ChildItem -Path $cursorDir -Filter 'hooks.json.bak.*' -File)
-        $bakMatches.Count | Should -BeGreaterThan 0
+        $hookBaks = @(Get-ChildItem -Path (Join-Path $TempHome '.cursor-goal\backups\hooks') -Filter 'hooks.json.bak.*' -File -ErrorAction SilentlyContinue)
+        $hookBaks.Count | Should -BeGreaterThan 0
+        @(Get-ChildItem -Path $cursorDir -Filter 'hooks.json.bak.*' -File -ErrorAction SilentlyContinue).Count | Should -Be 0
         $hooks = Get-Content -Raw $hooksPath | ConvertFrom-Json
         $cmds = @($hooks.hooks.stop | ForEach-Object { $_.command })
         $cmds | Should -Contain './keep-me.sh'
@@ -362,7 +366,7 @@ Describe 'Invoke-GoalInstall' {
     }
 
     It 'replaces a previous package install and removes legacy bash stubs' {
-        $installDir = Join-Path $TempHome '.cursor\skills\goal'
+        $installDir = Join-Path $TempHome '.cursor\skills\cursor-goal'
         New-Item -ItemType Directory -Force -Path (Join-Path $installDir 'cursor_goal') | Out-Null
         New-Item -ItemType Directory -Force -Path (Join-Path $installDir 'scripts') | Out-Null
         Set-Content -Path (Join-Path $installDir 'cursor_goal\old.txt') -Value 'old'
@@ -373,8 +377,26 @@ Describe 'Invoke-GoalInstall' {
         Test-Path (Join-Path $installDir 'cursor_goal\old.txt') | Should -BeFalse
         Test-Path (Join-Path $installDir 'goal-stop.sh') | Should -BeFalse
         Test-Path (Join-Path $installDir 'VERSION') | Should -BeTrue
-        $skillBaks = @(Get-ChildItem -Path (Join-Path $TempHome '.cursor\skills') -Directory -Filter 'goal.bak.*')
-        $skillBaks.Count | Should -BeGreaterThan 0
+        $skillBaks = @(Get-ChildItem -Path (Join-Path $TempHome '.cursor\skills') -Directory -Filter 'goal.bak.*' -ErrorAction SilentlyContinue)
+        $skillBaks.Count | Should -Be 0
+        $offRoot = @(Get-ChildItem -Path (Join-Path $TempHome '.cursor-goal\backups\skill') -Directory -ErrorAction SilentlyContinue)
+        $offRoot.Count | Should -Be 1
+    }
+
+    It 'migrates leftover skills\goal and does not leave sibling bak folders' {
+        $legacyDir = Join-Path $TempHome '.cursor\skills\goal'
+        New-Item -ItemType Directory -Force -Path (Join-Path $legacyDir 'scripts') | Out-Null
+        Set-Content -Path (Join-Path $legacyDir 'SKILL.md') -Value 'legacy-skill' -Encoding utf8
+        $siblingBak = Join-Path $TempHome '.cursor\skills\goal.bak.20200101T000000Z'
+        New-Item -ItemType Directory -Force -Path $siblingBak | Out-Null
+        Set-Content -Path (Join-Path $siblingBak 'SKILL.md') -Value 'old-bak' -Encoding utf8
+        $code = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $RepoRoot -Python (Find-GoalPython)
+        $code | Should -Be 0
+        Test-Path $legacyDir | Should -BeFalse
+        Test-Path $siblingBak | Should -BeFalse
+        Test-Path (Join-Path $TempHome '.cursor\skills\cursor-goal\SKILL.md') | Should -BeTrue
+        @(Get-ChildItem -Path (Join-Path $TempHome '.cursor\skills') -Directory -Filter 'goal.bak.*' -ErrorAction SilentlyContinue).Count | Should -Be 0
+        @(Get-ChildItem -Path (Join-Path $TempHome '.cursor-goal\backups\skill') -Directory -ErrorAction SilentlyContinue).Count | Should -Be 1
     }
 
     It 'returns 1 when Python discovery fails' {
@@ -403,8 +425,8 @@ Describe 'Invoke-GoalInstall' {
         $partial = Join-Path $TempHome 'no-keeper'
         New-Item -ItemType Directory -Force -Path (Join-Path $partial 'src\cursor_goal') | Out-Null
         Set-Content -Path (Join-Path $partial 'src\cursor_goal\__init__.py') -Value '__version__ = "0.0.0"'
-        New-Item -ItemType Directory -Force -Path (Join-Path $partial '.cursor\skills\goal') | Out-Null
-        Set-Content -Path (Join-Path $partial '.cursor\skills\goal\SKILL.md') -Value 'skill'
+        New-Item -ItemType Directory -Force -Path (Join-Path $partial '.cursor\skills\cursor-goal') | Out-Null
+        Set-Content -Path (Join-Path $partial '.cursor\skills\cursor-goal\SKILL.md') -Value 'skill'
         New-Item -ItemType Directory -Force -Path (Join-Path $partial '.cursor\agents') | Out-Null
         Set-Content -Path (Join-Path $partial '.cursor\agents\goal-evaluator.md') -Value 'eval'
         Set-Content -Path (Join-Path $partial '.cursor\agents\goal-auditor.md') -Value 'audit'
@@ -416,8 +438,8 @@ Describe 'Invoke-GoalInstall' {
         $partial = Join-Path $TempHome 'no-eval'
         New-Item -ItemType Directory -Force -Path (Join-Path $partial 'src\cursor_goal') | Out-Null
         Set-Content -Path (Join-Path $partial 'src\cursor_goal\__init__.py') -Value '__version__ = "0.0.0"'
-        New-Item -ItemType Directory -Force -Path (Join-Path $partial '.cursor\skills\goal') | Out-Null
-        Set-Content -Path (Join-Path $partial '.cursor\skills\goal\SKILL.md') -Value 'skill'
+        New-Item -ItemType Directory -Force -Path (Join-Path $partial '.cursor\skills\cursor-goal') | Out-Null
+        Set-Content -Path (Join-Path $partial '.cursor\skills\cursor-goal\SKILL.md') -Value 'skill'
         New-Item -ItemType Directory -Force -Path (Join-Path $partial '.cursor\agents') | Out-Null
         Set-Content -Path (Join-Path $partial '.cursor\agents\goalKeeper.md') -Value 'keeper'
         Set-Content -Path (Join-Path $partial '.cursor\agents\goal-auditor.md') -Value 'audit'
@@ -429,8 +451,8 @@ Describe 'Invoke-GoalInstall' {
         $partial = Join-Path $TempHome 'no-auditor'
         New-Item -ItemType Directory -Force -Path (Join-Path $partial 'src\cursor_goal') | Out-Null
         Set-Content -Path (Join-Path $partial 'src\cursor_goal\__init__.py') -Value '__version__ = "0.0.0"'
-        New-Item -ItemType Directory -Force -Path (Join-Path $partial '.cursor\skills\goal') | Out-Null
-        Set-Content -Path (Join-Path $partial '.cursor\skills\goal\SKILL.md') -Value 'skill'
+        New-Item -ItemType Directory -Force -Path (Join-Path $partial '.cursor\skills\cursor-goal') | Out-Null
+        Set-Content -Path (Join-Path $partial '.cursor\skills\cursor-goal\SKILL.md') -Value 'skill'
         New-Item -ItemType Directory -Force -Path (Join-Path $partial '.cursor\agents') | Out-Null
         Set-Content -Path (Join-Path $partial '.cursor\agents\goalKeeper.md') -Value 'keeper'
         Set-Content -Path (Join-Path $partial '.cursor\agents\goal-evaluator.md') -Value 'eval'
@@ -487,11 +509,13 @@ Describe 'Invoke-GoalUninstall' {
     It 'removes skill, agents, and stop hooks but keeps data by default' {
         $code = Invoke-GoalUninstall -HomeDir $TempHome
         $code | Should -Be 0
+        Test-Path (Join-Path $TempHome '.cursor\skills\cursor-goal') | Should -BeFalse
         Test-Path (Join-Path $TempHome '.cursor\skills\goal') | Should -BeFalse
         Test-Path (Join-Path $TempHome '.cursor\agents\goalKeeper.md') | Should -BeFalse
         Test-Path (Join-Path $TempHome '.cursor\agents\goal-evaluator.md') | Should -BeFalse
         Test-Path (Join-Path $TempHome '.cursor\agents\goal-auditor.md') | Should -BeFalse
         Test-Path (Join-Path $TempHome '.cursor-goal') | Should -BeTrue
+        Test-Path (Join-Path $TempHome '.cursor-goal\backups') | Should -BeFalse
         $hooks = Get-Content -Raw (Join-Path $TempHome '.cursor\hooks.json') | ConvertFrom-Json
         @($hooks.hooks.stop).Count | Should -Be 0
     }
@@ -501,6 +525,11 @@ Describe 'Invoke-GoalUninstall' {
         $bak = Join-Path $skillsParent 'goal.bak.20200101T000000Z'
         New-Item -ItemType Directory -Force -Path $bak | Out-Null
         Set-Content -Path (Join-Path $bak 'SKILL.md') -Value 'old' -Encoding utf8
+        $legacySkill = Join-Path $skillsParent 'goal'
+        New-Item -ItemType Directory -Force -Path $legacySkill | Out-Null
+        Set-Content -Path (Join-Path $legacySkill 'SKILL.md') -Value 'legacy' -Encoding utf8
+        $offRoot = Join-Path $TempHome '.cursor-goal\backups\skill\keep-me'
+        New-Item -ItemType Directory -Force -Path $offRoot | Out-Null
         $agentsDir = Join-Path $TempHome '.cursor\agents'
         Set-Content -Path (Join-Path $agentsDir 'goalKeeper.md.bak.20200101T000000Z') -Value 'x' -Encoding utf8
         Set-Content -Path (Join-Path $agentsDir 'goal-evaluator.md.bak.20200101T000000Z') -Value 'y' -Encoding utf8
@@ -508,6 +537,8 @@ Describe 'Invoke-GoalUninstall' {
         $code = Invoke-GoalUninstall -HomeDir $TempHome
         $code | Should -Be 0
         Test-Path -LiteralPath $bak | Should -BeFalse
+        Test-Path -LiteralPath $legacySkill | Should -BeFalse
+        Test-Path -LiteralPath (Join-Path $TempHome '.cursor-goal\backups') | Should -BeFalse
         Test-Path -LiteralPath (Join-Path $agentsDir 'goalKeeper.md.bak.20200101T000000Z') | Should -BeFalse
         Test-Path -LiteralPath (Join-Path $agentsDir 'goal-evaluator.md.bak.20200101T000000Z') | Should -BeFalse
         Test-Path -LiteralPath (Join-Path $agentsDir 'goal-auditor.md.bak.20200101T000000Z') | Should -BeFalse
@@ -568,7 +599,7 @@ Describe 'Invoke-GoalHooksConfigMerge failure' {
         New-Item -ItemType Directory -Force -Path $TempHome | Out-Null
         try {
             # Seed a prior install + hooks so backups exist and restore paths run.
-            $installDir = Join-Path $TempHome '.cursor\skills\goal'
+            $installDir = Join-Path $TempHome '.cursor\skills\cursor-goal'
             New-Item -ItemType Directory -Force -Path (Join-Path $installDir 'scripts') | Out-Null
             Set-Content -Path (Join-Path $installDir 'SKILL.md') -Value 'prior-skill'
             Set-Content -Path (Join-Path $installDir 'scripts\marker.txt') -Value 'prior'
@@ -602,7 +633,7 @@ Describe 'Invoke-GoalUninstall python fallback' {
         try {
             $null = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $RepoRoot -Python (Find-GoalPython)
             # Remove package so hooks_config path is unavailable; force inline Python cleanup.
-            Remove-Item -Recurse -Force (Join-Path $TempHome '.cursor\skills\goal\cursor_goal')
+            Remove-Item -Recurse -Force (Join-Path $TempHome '.cursor\skills\cursor-goal\cursor_goal')
             $code = Invoke-GoalUninstall -HomeDir $TempHome
             $code | Should -Be 0
             $hooks = Get-Content -Raw (Join-Path $TempHome '.cursor\hooks.json') | ConvertFrom-Json
@@ -629,7 +660,7 @@ Describe 'Invoke-GoalUninstall python fallback' {
             }
             $code = Invoke-GoalUninstall -HomeDir $TempHome
             $code | Should -Be 0
-            Test-Path (Join-Path $TempHome '.cursor\skills\goal') | Should -BeFalse
+            Test-Path (Join-Path $TempHome '.cursor\skills\cursor-goal') | Should -BeFalse
         }
         finally {
             if (Test-Path $TempHome) { Remove-Item -Recurse -Force $TempHome }
@@ -643,11 +674,11 @@ Describe 'Invoke-GoalUninstall python fallback' {
             $null = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $RepoRoot -Python (Find-GoalPython)
             # Remove package and block both py/python so neither hooks_config nor
             # inline JSON cleanup can run — uninstall must abort and keep the skill.
-            Remove-Item -Recurse -Force (Join-Path $TempHome '.cursor\skills\goal\cursor_goal')
+            Remove-Item -Recurse -Force (Join-Path $TempHome '.cursor\skills\cursor-goal\cursor_goal')
             Mock Get-Command { return $null }
             $code = Invoke-GoalUninstall -HomeDir $TempHome
             $code | Should -Be 1
-            Test-Path (Join-Path $TempHome '.cursor\skills\goal') | Should -BeTrue
+            Test-Path (Join-Path $TempHome '.cursor\skills\cursor-goal') | Should -BeTrue
             $hooks = Get-Content -Raw (Join-Path $TempHome '.cursor\hooks.json') | ConvertFrom-Json
             @($hooks.hooks.stop).Count | Should -BeGreaterThan 0
         }
@@ -751,7 +782,7 @@ Describe 'Invoke-GoalInstall doctor failure' {
         try {
             $code = Invoke-GoalInstall -HomeDir $TempHome -RepoRoot $RepoRoot -Python (Find-GoalPython)
             $code | Should -Be 1
-            Test-Path (Join-Path $TempHome '.cursor\skills\goal\SKILL.md') | Should -BeTrue
+            Test-Path (Join-Path $TempHome '.cursor\skills\cursor-goal\SKILL.md') | Should -BeTrue
         }
         finally {
             Remove-Item Env:CURSOR_GOAL_PYTHON -ErrorAction SilentlyContinue
@@ -769,7 +800,7 @@ Describe 'Invoke-GoalUninstall inline fallback with py launcher unavailable' {
             $pythonExe = (Find-GoalPython).Exe
             # Removing the package forces the second (package-independent) cleanup
             # path, which has its own py/python resolution to exercise.
-            Remove-Item -Recurse -Force (Join-Path $TempHome '.cursor\skills\goal\cursor_goal')
+            Remove-Item -Recurse -Force (Join-Path $TempHome '.cursor\skills\cursor-goal\cursor_goal')
             Mock Get-Command {
                 param($Name, $ErrorAction)
                 if ($Name -eq 'py') { return $null }

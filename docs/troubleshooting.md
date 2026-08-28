@@ -1,17 +1,17 @@
 # Troubleshooting
 
-Quick fixes for common install and continuation failures. cursor-goal is a Cursor port of OpenAI Codex `/goal`.
+Quick fixes for common install and continuation failures. cursor-goal is the `/cursor-goal` harness (Codex-style loop). Cursor's built-in `/goal` is a different command.
 
 Also run:
 
 ```bash
 # Unix / macOS / WSL
-python3 -u ~/.cursor/skills/goal/scripts/run_goal.py manage doctor
+python3 -u ~/.cursor/skills/cursor-goal/scripts/run_goal.py manage doctor
 ```
 
 ```powershell
 # Windows
-py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" manage doctor
+py -3 -u "$env:USERPROFILE\.cursor\skills\cursor-goal\scripts\run_goal.py" manage doctor
 ```
 
 Stall checklist (Hooks `{}`, no continuation): work the steps below before filing a GitHub issue.
@@ -24,12 +24,12 @@ Stall checklist (Hooks `{}`, no continuation): work the steps below before filin
 
 ```text
 # Unix
-python3 -u ~/.cursor/skills/goal/scripts/run_goal.py wake loop
+python3 -u ~/.cursor/skills/cursor-goal/scripts/run_goal.py wake loop
 ```
 
 ```powershell
 # Windows classic — prefer baked wake_loop.cmd when present
-py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" wake loop
+py -3 -u "$env:USERPROFILE\.cursor\skills\cursor-goal\scripts\run_goal.py" wake loop
 ```
 
 4. Confirm `wake status` shows `continuation_ready=true` (and `pid_alive=true`).
@@ -46,7 +46,15 @@ Doctor **FAIL**s when both classic `~/.cursor/hooks.json` stop entries and Teams
 
 ## Classic install VERSION drift
 
-Doctor **FAIL**s when `~/.cursor/skills/goal/VERSION` (or the resolved skill root `VERSION`) is missing on a classic install path or does not match the running package version. Re-run `install-goal.sh` / `install-goal.ps1` (or sync/re-enable the marketplace plugin) so the installed skill tree matches the package.
+Doctor **FAIL**s when `~/.cursor/skills/cursor-goal/VERSION` (or the resolved skill root `VERSION`) is missing on a classic install path or does not match the running package version. Re-run `install-goal.sh` / `install-goal.ps1` (or sync/re-enable the marketplace plugin) so the installed skill tree matches the package.
+
+## Extra `goal` / `goal.bak.*` in Customize → Skills
+
+Cursor [loads every `SKILL.md` under `~/.cursor/skills/`](https://cursor.com/docs/skills). Pre-v5 installers left `goal.bak.<UTC>` siblings that show up as extra skills. Re-run the v5 installer: it migrates those folders to `~/.cursor-goal/backups/` (keep 1) and **deletes** leftover `~/.cursor/skills/goal`. You should see **one** user skill named `cursor-goal`. Cursor's built-in `/goal` under `~/.cursor/skills-cursor/goal` is expected and is not this project.
+
+Seeing both `/goal` and `/cursor-goal` in the product is expected: `/goal` is native continuation; `/cursor-goal` is this harness.
+
+Doctor **FAIL**s while `~/.cursor/skills/goal/SKILL.md` still exists (stacked old user skill). Doctor **WARN**s when the built-in `~/.cursor/skills-cursor/goal` is present.
 
 ## `manage doctor` FAIL: insecure data directory
 
@@ -100,7 +108,7 @@ Corrupt files are renamed to `goal.json.corrupt.<UTC>`. Remove or fix, then `man
 
 ## Recovery flags and advanced overrides
 
-These are intentionally undiscoverable from the normal `/goal` flow — agents
+These are intentionally undiscoverable from the normal `/cursor-goal` flow — agents
 should not need them for a healthy goal. They exist for humans recovering
 from a stuck or corrupted state.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install-goal.sh — Install /goal Python harness for Cursor (Unix/macOS/WSL/Git Bash)
+# install-goal.sh — Install /cursor-goal Python harness for Cursor (Unix/macOS/WSL/Git Bash)
 #
 # Usage (from a full clone or a GitHub source archive for a tagged release):
 #   ./scripts/install-goal.sh
@@ -16,18 +16,13 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-INSTALL_DIR="${HOME}/.cursor/skills/goal"
+INSTALL_DIR="${HOME}/.cursor/skills/cursor-goal"
 AGENTS_DIR="${HOME}/.cursor/agents"
 DATA_DIR="${HOME}/.cursor-goal/data"
 CURSOR_HOOKS_FILE="${HOME}/.cursor/hooks.json"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-SKILL_BACKUP=""
-# Empty means the agent file did not exist before this install (rollback
-# should delete it, not "restore" a backup that never existed).
-AGENT_KEEPER_BACKUP=""
-AGENT_EVALUATOR_BACKUP=""
-AGENT_AUDITOR_BACKUP=""
+BACKUP_MANIFEST=""
 
 log_info()  { echo -e "${GREEN}[install-goal]${NC} $1"; }
 log_warn()  { echo -e "${YELLOW}[install-goal]${NC} $1"; }
@@ -80,6 +75,15 @@ shell_quote() {
   "$PYTHON_BIN" -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' "$1"
 }
 
+run_install_backup() {
+  "$PYTHON_BIN" - "$REPO_ROOT/src" "$HOME" "$@" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from cursor_goal.install_backup import main
+raise SystemExit(main(["--home", sys.argv[2], *sys.argv[3:]]))
+PY
+}
+
 check_dependencies() {
   log_step "Checking dependencies..."
   if ! PYTHON_BIN="$(detect_python)"; then
@@ -95,7 +99,7 @@ check_dependencies() {
 
 install_skill_files() {
   log_step "Installing skill files..."
-  local SOURCE_SKILL="${REPO_ROOT}/.cursor/skills/goal"
+  local SOURCE_SKILL="${REPO_ROOT}/.cursor/skills/cursor-goal"
   local SOURCE_PKG="${REPO_ROOT}/src/cursor_goal"
   local SOURCE_AGENT="${REPO_ROOT}/.cursor/agents/goalKeeper.md"
   local SOURCE_EVALUATOR="${REPO_ROOT}/.cursor/agents/goal-evaluator.md"
@@ -129,12 +133,13 @@ install_skill_files() {
     exit 1
   fi
 
-  if [ -d "$INSTALL_DIR" ] && [ -f "${INSTALL_DIR}/SKILL.md" ]; then
-    SKILL_BACKUP="${INSTALL_DIR}.bak.$(date -u +%Y%m%dT%H%M%SZ)"
-    rm -rf "$SKILL_BACKUP"
-    cp -R "$INSTALL_DIR" "$SKILL_BACKUP"
-    log_info "Backed up previous skill install to $SKILL_BACKUP"
+  mkdir -p "${HOME}/.cursor-goal/backups"
+  BACKUP_MANIFEST="${HOME}/.cursor-goal/backups/.last-install-manifest.json"
+  if ! run_install_backup backup-before --manifest "$BACKUP_MANIFEST" >/dev/null; then
+    log_error "Failed to snapshot previous skill/agents/hooks for rollback."
+    exit 1
   fi
+  log_info "Wrote install backup manifest $BACKUP_MANIFEST"
 
   rm -rf "${INSTALL_DIR}/cursor_goal"
   cp -R "$SOURCE_PKG" "${INSTALL_DIR}/cursor_goal"
@@ -165,25 +170,6 @@ PY
         "${INSTALL_DIR}/goal-eval.sh" \
         "${INSTALL_DIR}/goal-parse.sh"
 
-  # Backup existing agents before overwrite (same pattern as skill backup).
-  local TS
-  TS="$(date -u +%Y%m%dT%H%M%SZ)"
-  if [ -f "${AGENTS_DIR}/goalKeeper.md" ]; then
-    AGENT_KEEPER_BACKUP="${AGENTS_DIR}/goalKeeper.md.bak.${TS}"
-    cp "${AGENTS_DIR}/goalKeeper.md" "$AGENT_KEEPER_BACKUP"
-    log_info "Backed up existing goalKeeper.md"
-  fi
-  if [ -f "${AGENTS_DIR}/goal-evaluator.md" ]; then
-    AGENT_EVALUATOR_BACKUP="${AGENTS_DIR}/goal-evaluator.md.bak.${TS}"
-    cp "${AGENTS_DIR}/goal-evaluator.md" "$AGENT_EVALUATOR_BACKUP"
-    log_info "Backed up existing goal-evaluator.md"
-  fi
-  if [ -f "${AGENTS_DIR}/goal-auditor.md" ]; then
-    AGENT_AUDITOR_BACKUP="${AGENTS_DIR}/goal-auditor.md.bak.${TS}"
-    cp "${AGENTS_DIR}/goal-auditor.md" "$AGENT_AUDITOR_BACKUP"
-    log_info "Backed up existing goal-auditor.md"
-  fi
-
   cp "$SOURCE_AGENT" "${AGENTS_DIR}/goalKeeper.md"
   log_info "Installed: ${AGENTS_DIR}/goalKeeper.md"
   cp "$SOURCE_EVALUATOR" "${AGENTS_DIR}/goal-evaluator.md"
@@ -205,13 +191,6 @@ configure_stop_hook() {
 
   local CMD
   CMD="$(hook_command)"
-  local HOOKS_BACKUP=""
-
-  if [ -f "$CURSOR_HOOKS_FILE" ]; then
-    HOOKS_BACKUP="${CURSOR_HOOKS_FILE}.bak.$(date -u +%Y%m%dT%H%M%SZ)"
-    cp "$CURSOR_HOOKS_FILE" "$HOOKS_BACKUP"
-    log_info "Backed up existing hooks.json to $HOOKS_BACKUP"
-  fi
 
   if ! "$PYTHON_BIN" - "$INSTALL_DIR" "$CURSOR_HOOKS_FILE" "$CMD" <<'PY'
 import sys
@@ -228,43 +207,18 @@ print("merged")
 PY
   then
     log_error "Failed to merge stop/subagentStop hooks into hooks.json."
-    if [ -n "$HOOKS_BACKUP" ] && [ -f "$HOOKS_BACKUP" ]; then
-      log_warn "Restoring hooks.json from $HOOKS_BACKUP"
-      cp "$HOOKS_BACKUP" "$CURSOR_HOOKS_FILE"
-      log_info "Restored previous hooks.json."
-    fi
-    if [ -n "$SKILL_BACKUP" ] && [ -d "$SKILL_BACKUP" ]; then
-      log_warn "Restoring skill files from $SKILL_BACKUP"
-      rm -rf "$INSTALL_DIR"
-      mv "$SKILL_BACKUP" "$INSTALL_DIR"
-      log_info "Restored previous skill install."
+    if [ -n "$BACKUP_MANIFEST" ] && [ -f "$BACKUP_MANIFEST" ]; then
+      log_warn "Rolling back skill/agents/hooks from $BACKUP_MANIFEST"
+      run_install_backup restore --manifest "$BACKUP_MANIFEST" || true
     else
-      log_error "Skill files were installed under $INSTALL_DIR (no prior backup to restore)."
-    fi
-    if [ -n "$AGENT_KEEPER_BACKUP" ] && [ -f "$AGENT_KEEPER_BACKUP" ]; then
-      log_warn "Restoring goalKeeper.md from $AGENT_KEEPER_BACKUP"
-      mv "$AGENT_KEEPER_BACKUP" "${AGENTS_DIR}/goalKeeper.md"
-    elif [ -f "${AGENTS_DIR}/goalKeeper.md" ]; then
-      log_warn "Removing goalKeeper.md installed this run (no prior version existed)"
-      rm -f "${AGENTS_DIR}/goalKeeper.md"
-    fi
-    if [ -n "$AGENT_EVALUATOR_BACKUP" ] && [ -f "$AGENT_EVALUATOR_BACKUP" ]; then
-      log_warn "Restoring goal-evaluator.md from $AGENT_EVALUATOR_BACKUP"
-      mv "$AGENT_EVALUATOR_BACKUP" "${AGENTS_DIR}/goal-evaluator.md"
-    elif [ -f "${AGENTS_DIR}/goal-evaluator.md" ]; then
-      log_warn "Removing goal-evaluator.md installed this run (no prior version existed)"
-      rm -f "${AGENTS_DIR}/goal-evaluator.md"
-    fi
-    if [ -n "$AGENT_AUDITOR_BACKUP" ] && [ -f "$AGENT_AUDITOR_BACKUP" ]; then
-      log_warn "Restoring goal-auditor.md from $AGENT_AUDITOR_BACKUP"
-      mv "$AGENT_AUDITOR_BACKUP" "${AGENTS_DIR}/goal-auditor.md"
-    elif [ -f "${AGENTS_DIR}/goal-auditor.md" ]; then
-      log_warn "Removing goal-auditor.md installed this run (no prior version existed)"
-      rm -f "${AGENTS_DIR}/goal-auditor.md"
+      log_error "Skill files were installed under $INSTALL_DIR (no backup manifest to restore)."
     fi
     exit 1
   fi
   log_info "Merged/upgraded stop + subagentStop hooks in hooks.json"
+  if ! run_install_backup prune-after; then
+    log_warn "Post-install backup prune failed (install itself succeeded)."
+  fi
 }
 
 print_summary() {
@@ -280,7 +234,7 @@ print_summary() {
   fi
   echo ""
   echo -e "${GREEN}============================================${NC}"
-  echo -e "${GREEN} /goal Autonomous Loop - Installed!         ${NC}"
+  echo -e "${GREEN} /cursor-goal harness - Installed!           ${NC}"
   echo -e "${GREEN}============================================${NC}"
   echo ""
   echo "Components:"
@@ -298,14 +252,14 @@ print_summary() {
   echo ""
   echo "Next steps:"
   echo "  1) Restart Cursor (or reload hooks) so hooks.json takes effect"
-  echo "  2) In Cursor: /goal <verifiable condition>"
+  echo "  2) In Cursor: /cursor-goal <verifiable condition>"
   echo "  3) Start wake loop with notify_on_output matching ^AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor"
   echo "  4) Confirm wake status shows pid_alive=true / continuation_ready=true before other work"
   echo "  5) If Hooks UI shows {} but last-stop-response.json has followup_message, rely on wake"
   echo ""
   echo "Usage in Cursor agent:"
-  echo "  /goal all tests pass and lint is clean"
-  echo "  /goal status | pause | resume | clear"
+  echo "  /cursor-goal all tests pass and lint is clean"
+  echo "  /cursor-goal status | pause | resume | clear"
   echo ""
   echo "Note: Prefer in-turn evaluation; the stop hook is a safety net."
   echo "On Windows, use install-goal.ps1 (stop_hook.cmd + drain delay)."
@@ -317,7 +271,7 @@ print_summary() {
 main() {
   echo ""
   echo -e "${BLUE}================================${NC}"
-  echo -e "${BLUE} Installing /goal skill         ${NC}"
+  echo -e "${BLUE} Installing /cursor-goal skill  ${NC}"
   echo -e "${BLUE} Python harness for Cursor      ${NC}"
   echo -e "${BLUE}================================${NC}"
   echo ""

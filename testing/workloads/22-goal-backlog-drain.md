@@ -5,7 +5,7 @@ Test goal pursuit for resolving all TODO comments in a codebase.
 ## Prompt
 
 ```
-/goal resolve all TODO comments in testing/scripts/todo_app.py
+/cursor-goal resolve all TODO comments in testing/scripts/todo_app.py
 
 Implement every TODO: priority validation, error handling, soft delete, sorting, case-insensitive search, and completion time tracking.
 ```

@@ -2,7 +2,7 @@
 
 Operational limits of cursor-goal for real-world use. See also [troubleshooting](troubleshooting.md) and [SECURITY.md](../SECURITY.md).
 
-`/goal` is an OpenAI Codex feature (`codex-rs/ext/goal`). This package is a Cursor port of that loop. Differences that matter in practice: Cursor has no Codex-style hidden idle injection or per-token goal budget, so continuation is `stop` / `subagentStop` plus optional wake; completion is gated by a separate auditor + evaluator rather than a same-model self-audit.
+`/goal` is an OpenAI Codex feature (`codex-rs/ext/goal`). This package is a Cursor port of that loop, invoked as **`/cursor-goal`**. Cursor also ships a first-party `/goal` (`CreateGoal` / `UpdateGoal`) — this harness does **not** use those tools. Continuation here remains `stop` / `subagentStop` plus optional wake. Differences that matter in practice: Cursor has no Codex-style hidden idle injection or per-token goal budget; completion is gated by a separate auditor + evaluator rather than a same-model self-audit.
 
 ## Continuation: documented hooks are primary, wake is a best-effort backup
 
@@ -30,7 +30,7 @@ Tokenless / plain-int `wake.pid` files (pre-3.0): cleared without kill. If the P
 
 ## Blocked is the honest stop; pause is user-owned
 
-There is no model-initiated pause. `manage pause` is for `/goal pause` from the user. A repeated impasse (missing secret, permission denied, waiting on the user) is `manage blocked "<reason>"`. The **same** normalized reason on **3 consecutive** pursuing turns (distinct `turns_used`/`wake_ticks` keys) sets `status=blocked`, disarms wake, and stop/wake emit no continuation. Resume from blocked starts a fresh streak. Never mark blocked because the work is hard.
+There is no model-initiated pause. `manage pause` is for `/cursor-goal pause` from the user. A repeated impasse (missing secret, permission denied, waiting on the user) is `manage blocked "<reason>"`. The **same** normalized reason on **3 consecutive** pursuing turns (distinct `turns_used`/`wake_ticks` keys) sets `status=blocked`, disarms wake, and stop/wake emit no continuation. Resume from blocked starts a fresh streak. Never mark blocked because the work is hard.
 
 Mid-goal condition edits use `manage update` (same `created_at`, CLEAR+YES invalidated). Agents should not `create --force` a weaker condition.
 
@@ -62,7 +62,7 @@ When a `validation_command` is set but has never been run, `eval prompt` tells t
 
 ## Remaining-work audit is in the loop; Plan Mode UI is not
 
-`/goal` spawns a readonly `goal-auditor` subagent (empty context, original condition, no work summary) as the unattended equivalent of a fresh plan-mode chat. A new context window alone is not enough: Plan Mode finds remaining work because it runs parallel `explore` agents and writes a punch list. The auditor is instructed to do the same (spawn `explore` Tasks at `thoroughness: very thorough`, then targeted reads).
+`/cursor-goal` spawns a readonly `goal-auditor` subagent (empty context, original condition, no work summary) as the unattended equivalent of a fresh plan-mode chat. A new context window alone is not enough: Plan Mode finds remaining work because it runs parallel `explore` agents and writes a punch list. The auditor is instructed to do the same (spawn `explore` Tasks at `thoroughness: very thorough`, then targeted reads).
 
 Conditions are classified as **narrow** (equivalent to a test, lint, build, or other validation command) or **broad** (open-ended remaining-work that is not reducible to that command). Narrow goals keep a single CLEAR plus evaluator YES. Broad goals additionally:
 
@@ -71,15 +71,15 @@ Conditions are classified as **narrow** (equivalent to a test, lint, build, or o
 
 `eval validate` clears YES, primary CLEAR, and confirm-pass so a later pass cannot reuse a stale audit. The auditor is scoped to the original condition: it must not invent extra polish for a “tests pass” goal.
 
-`/goal` still does **not** invoke the Cursor Plan Mode UI, `ce-plan`, `/review`, `/review-bugbot`, `/review-security`, or thermo-nuclear review. Those wait on the user (which stalls unattended continuation) or add a second checker that can refuse a goal whose condition is already met.
+`/cursor-goal` still does **not** invoke the Cursor Plan Mode UI, `ce-plan`, `/review`, `/review-bugbot`, `/review-security`, or thermo-nuclear review. Those wait on the user (which stalls unattended continuation) or add a second checker that can refuse a goal whose condition is already met.
 
 ## Marketplace vs classic Windows install
 
 Marketplace `stop_hook.cmd` / `wake_loop.cmd` may fall back to PATH discovery, but **`manage doctor` requires an absolute `CURSOR_GOAL_PYTHON` (Python 3.12+)** for Windows marketplace installs — PATH-only is not treated as success. Classic `install-goal.ps1` bakes an absolute interpreter — preferred for individuals on Windows. Classic and marketplace/template launchers execute quote-stripped `%CGP%` (not the raw env var), reject unsafe cmd metacharacters in `CURSOR_GOAL_PYTHON`, and doctor rejects the same. Classic install also hardens the data-dir ACL at install time and writes helper scripts under the install tree's `scripts\.tmp` (not shared `%TEMP%`). Residual risk: `echo %CGP%| findstr` can expand nested `%VAR%` inside a crafted path — keep `CURSOR_GOAL_PYTHON` free of percent signs.
 
-Teams marketplace installs are **standalone**: resolve the harness with `manage harness-cmd` or `$CURSOR_PLUGIN_ROOT/skills/goal/scripts/run_goal.py`. Do not stack classic `~/.cursor/hooks.json` entries with marketplace plugin hooks — `manage doctor` **FAIL**s when both look configured. See [teams-agpl.md](teams-agpl.md).
+Teams marketplace installs are **standalone**: resolve the harness with `manage harness-cmd` or `$CURSOR_PLUGIN_ROOT/skills/cursor-goal/scripts/run_goal.py`. Do not stack classic `~/.cursor/hooks.json` entries with marketplace plugin hooks — `manage doctor` **FAIL**s when both look configured. See [teams-agpl.md](teams-agpl.md).
 
-`${CURSOR_PLUGIN_ROOT}` (used inside the marketplace `hooks.json` commands) is **not** one of Cursor's documented hook environment variables — it is set by the plugin host at hook-invocation time, on a best-effort basis. `stop_hook.py`'s own path resolution does not depend on it: it locates the vendored `cursor_goal` package relative to its own file location first (`scripts/`, the parent skill directory, or a source checkout's `src/`), so the hook still works if `CURSOR_PLUGIN_ROOT` is ever unset. The classic `~/.cursor/skills/goal` install path never references `CURSOR_PLUGIN_ROOT` at all.
+`${CURSOR_PLUGIN_ROOT}` (used inside the marketplace `hooks.json` commands) is **not** one of Cursor's documented hook environment variables — it is set by the plugin host at hook-invocation time, on a best-effort basis. `stop_hook.py`'s own path resolution does not depend on it: it locates the vendored `cursor_goal` package relative to its own file location first (`scripts/`, the parent skill directory, or a source checkout's `src/`), so the hook still works if `CURSOR_PLUGIN_ROOT` is ever unset. The classic `~/.cursor/skills/cursor-goal` install path never references `CURSOR_PLUGIN_ROOT` at all.
 
 The marketplace `hooks.json` registers **two** unconditional entries per event (`stop` and `subagentStop`): a Windows `cmd /c ...stop_hook.cmd` and a Unix `python3 -u ...stop_hook.py`. `subagentStop` is registered twice per launcher (`matcher: goal-evaluator` and `matcher: goal-auditor`), so the marketplace tree has four `subagentStop` rows. Exactly one launcher is expected to fail per platform (missing `cmd` on Unix, missing/renamed `python3` on Windows) — this is expected Hooks UI noise, not a broken install. A singleflight lock plus a `generation_id`-keyed dedupe stamp ensure only one hook instance mutates goal state and emits a `followup_message` per turn even when both entries happen to run.
 

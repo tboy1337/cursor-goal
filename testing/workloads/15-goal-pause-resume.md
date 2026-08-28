@@ -5,7 +5,7 @@ Test that the agent can pause an active goal mid-pursuit and resume it later wit
 ## Prompt
 
 ```
-/goal migrate all console.log calls to a proper logger, stop after 10 turns
+/cursor-goal migrate all console.log calls to a proper logger, stop after 10 turns
 
 The file testing/scripts/app_logger.js uses console.log throughout. Replace with a structured logger module.
 ```
@@ -13,21 +13,21 @@ The file testing/scripts/app_logger.js uses console.log throughout. Replace with
 Midway through execution (after ~3-5 turns), send:
 
 ```
-/goal pause
+/cursor-goal pause
 ```
 
 Then after a brief pause:
 
 ```
-/goal resume
+/cursor-goal resume
 ```
 
 ## Expected Behavior
 
 1. Agent creates goal with natural language condition and inline turn budget
 2. Agent begins migrating console.log calls in app_logger.js
-3. User sends `/goal pause` — agent stops pursuit and saves state
-4. User sends `/goal resume` — agent continues from where it left off
+3. User sends `/cursor-goal pause` — agent stops pursuit and saves state
+4. User sends `/cursor-goal resume` — agent continues from where it left off
 5. Agent completes migration and evaluates goal
 6. Subagent confirms logger migration is complete
 7. Agent marks goal as achieved
@@ -42,8 +42,8 @@ Then after a brief pause:
 ## Verification Patterns
 
 - `run_goal.py manage create` called with natural language condition
-- `/goal pause` or `run_goal.py manage pause` in transcript
-- `/goal resume` or `run_goal.py manage resume` in transcript
+- `/cursor-goal pause` or `run_goal.py manage pause` in transcript
+- `/cursor-goal resume` or `run_goal.py manage resume` in transcript
 - `"status": "paused"` then back to `"pursuing"` in goal.json
 - Subagent "Evaluate goal completion" invoked after resume
 - `[goal] ✓ Goal achieved` on completion

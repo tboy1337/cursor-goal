@@ -211,7 +211,7 @@ def test_hooks_look_configured_skill_without_hooks(
     from cursor_goal import manage as manage_mod
 
     fake_home = tmp_path / "home"
-    skill = fake_home / ".cursor" / "skills" / "goal" / "scripts"
+    skill = fake_home / ".cursor" / "skills" / "cursor-goal" / "scripts"
     skill.mkdir(parents=True)
     (skill / "stop_hook.py").write_text("#", encoding="utf-8")
     from cursor_goal import doctor as doctor_mod
@@ -239,7 +239,7 @@ def test_marketplace_hooks_skill_only(
     from cursor_goal import manage as manage_mod
 
     plugin = tmp_path / "plugin"
-    scripts = plugin / "skills" / "goal" / "scripts"
+    scripts = plugin / "skills" / "cursor-goal" / "scripts"
     scripts.mkdir(parents=True)
     (scripts / "stop_hook.py").write_text("#", encoding="utf-8")
     fake_home = tmp_path / "home"
@@ -1851,7 +1851,7 @@ def test_install_version_missing_on_classic_tree(
 ) -> None:
     from cursor_goal import doctor as doctor_mod
 
-    skill = tmp_path / ".cursor" / "skills" / "goal"
+    skill = tmp_path / ".cursor" / "skills" / "cursor-goal"
     scripts = skill / "scripts"
     scripts.mkdir(parents=True)
     (scripts / "run_goal.py").write_text("# stub\n", encoding="utf-8")
@@ -1977,7 +1977,7 @@ def test_install_version_skill_root_errors(
     monkeypatch.setattr(doctor_mod, "skill_root", lambda: empty)
     assert doctor_mod._install_version_failures() == []
 
-    plugin_skill = tmp_path / "plugins" / "cursor-goal" / "skills" / "goal"
+    plugin_skill = tmp_path / "plugins" / "cursor-goal" / "skills" / "cursor-goal"
     scripts = plugin_skill / "scripts"
     scripts.mkdir(parents=True)
     (scripts / "run_goal.py").write_text("# stub\n", encoding="utf-8")
@@ -2242,3 +2242,48 @@ def test_manage_blocked_error_paths(
     code, out, _err = run_cli("manage", "blocked", "waiting")
     assert code == 0
     assert "Goal blocked" in out
+
+
+def test_doctor_fails_on_leftover_user_goal_skill(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import doctor as doctor_mod
+
+    del goal_home
+    leftover = doctor_mod._user_home() / ".cursor" / "skills" / "goal" / "SKILL.md"
+    leftover.parent.mkdir(parents=True)
+    leftover.write_text("# leftover\n", encoding="utf-8")
+    monkeypatch.setattr(doctor_mod, "_hooks_look_configured", lambda: True)
+    fails = doctor_mod._legacy_user_skill_failures()
+    assert fails
+    assert "Legacy user skill" in fails[0]
+    code, _out, err = run_cli("manage", "doctor")
+    assert code == 1
+    assert "Legacy user skill" in err
+
+
+def test_doctor_warns_on_builtin_cursor_goal_skill(
+    goal_home: Path,
+) -> None:
+    from cursor_goal import doctor as doctor_mod
+
+    del goal_home
+    builtin = (
+        doctor_mod._user_home() / ".cursor" / "skills-cursor" / "goal" / "SKILL.md"
+    )
+    builtin.parent.mkdir(parents=True)
+    builtin.write_text("# builtin\n", encoding="utf-8")
+    warnings = doctor_mod._skill_layout_warnings()
+    assert any("built-in /goal" in item for item in warnings)
+
+
+def test_doctor_warns_on_in_root_goal_bak(
+    goal_home: Path,
+) -> None:
+    from cursor_goal import doctor as doctor_mod
+
+    del goal_home
+    bak = doctor_mod._user_home() / ".cursor" / "skills" / "goal.bak.20200101T000000Z"
+    bak.mkdir(parents=True)
+    warnings = doctor_mod._skill_layout_warnings()
+    assert any("Leftover skill backup" in item for item in warnings)

@@ -27,8 +27,8 @@ def skill_root() -> Path:
     Resolution order:
     1. ``CURSOR_GOAL_HOME`` (must be absolute) when set
     2. Parent of this package when layout is ``<skill>/cursor_goal/``
-    3. ``$CURSOR_PLUGIN_ROOT/skills/goal`` when the env var is set
-    4. Classic ``~/.cursor/skills/goal``
+    3. ``$CURSOR_PLUGIN_ROOT/skills/cursor-goal`` when the env var is set
+    4. Classic ``~/.cursor/skills/cursor-goal``
     """
     override = (os.environ.get(_ENV_HOME) or "").strip()
     if override:
@@ -46,13 +46,13 @@ def skill_root() -> Path:
 
     plugin_root = (os.environ.get(_ENV_PLUGIN_ROOT) or "").strip()
     if plugin_root:
-        candidate = native_path(plugin_root) / "skills" / "goal"
+        candidate = native_path(plugin_root) / "skills" / "cursor-goal"
         if (candidate / "scripts" / "run_goal.py").is_file():
             logger.debug("skill_root from plugin=%s", candidate)
             return candidate
 
     classic = native_path(
-        os.path.join(os.path.expanduser("~"), ".cursor", "skills", "goal")
+        os.path.join(os.path.expanduser("~"), ".cursor", "skills", "cursor-goal")
     )
     logger.debug("skill_root classic fallback=%s", classic)
     return classic

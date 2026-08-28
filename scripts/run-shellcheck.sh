@@ -25,11 +25,11 @@ EOF
 # The marketplace/plugin skill tree ships its own bash entry point (the wake
 # watchdog loop launcher); keep local runs in parity with CI by scanning it
 # too instead of only scripts/.
-WAKE_LOOP_SH="${REPO_ROOT}/.cursor/skills/goal/scripts/wake_loop.sh"
+WAKE_LOOP_SH="${REPO_ROOT}/.cursor/skills/cursor-goal/scripts/wake_loop.sh"
 if [ -f "${WAKE_LOOP_SH}" ]; then
   SCRIPTS+=("${WAKE_LOOP_SH}")
 fi
-PLUGIN_WAKE_LOOP_SH="${REPO_ROOT}/plugins/cursor-goal/skills/goal/scripts/wake_loop.sh"
+PLUGIN_WAKE_LOOP_SH="${REPO_ROOT}/plugins/cursor-goal/skills/cursor-goal/scripts/wake_loop.sh"
 if [ -f "${PLUGIN_WAKE_LOOP_SH}" ]; then
   SCRIPTS+=("${PLUGIN_WAKE_LOOP_SH}")
 fi

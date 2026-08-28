@@ -28,7 +28,7 @@ try {
         throw "Invoke-GoalInstall failed with exit $code"
     }
 
-    $installDir = Join-Path $tmpHome ".cursor\skills\goal"
+    $installDir = Join-Path $tmpHome ".cursor\skills\cursor-goal"
     $hooksFile = Join-Path $tmpHome ".cursor\hooks.json"
     $runGoal = Join-Path $installDir "scripts\run_goal.py"
     $stopCmd = Join-Path $installDir "scripts\stop_hook.cmd"
@@ -128,6 +128,20 @@ try {
     }
     Write-Host "[install-smoke] audit-spawn-config: $auditSpawn"
 
+    Write-Host "[install-smoke] Checking v5 layout (no leftover user /goal skill)..."
+    $legacySkill = Join-Path $tmpHome ".cursor\skills\goal"
+    if (Test-Path $legacySkill) {
+        throw "Leftover user skill $legacySkill still present"
+    }
+    $skillBaks = @(Get-ChildItem -Path (Join-Path $tmpHome ".cursor\skills") -Directory -Filter "goal.bak.*" -ErrorAction SilentlyContinue)
+    if ($skillBaks.Count -gt 0) {
+        throw ("Leftover goal.bak.* under skills: {0}" -f (($skillBaks | ForEach-Object { $_.Name }) -join ', '))
+    }
+    $backupRoot = Join-Path $tmpHome ".cursor-goal\backups"
+    if (-not (Test-Path $backupRoot)) {
+        throw "Missing backup root $backupRoot"
+    }
+
     Write-Host "[install-smoke] Uninstalling..."
     $env:CURSOR_GOAL_SKIP_MAIN = "1"
     . (Join-Path $repoRoot "scripts\uninstall-goal.ps1")
@@ -137,6 +151,9 @@ try {
     }
     if (Test-Path $installDir) {
         throw "Skill dir still present after uninstall"
+    }
+    if (Test-Path $legacySkill) {
+        throw "Legacy skill dir still present after uninstall"
     }
 
     Write-Host "[install-smoke] OK"

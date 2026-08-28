@@ -1,7 +1,7 @@
 {
   "name": "cursor-goal",
-  "version": "4.5.0",
-  "description": "Cursor port of OpenAI Codex /goal (maker!=checker + stop-hook safety net)",
+  "version": "5.0.0",
+  "description": "Codex-style /cursor-goal harness (maker!=checker + stop-hook safety net); not Cursor's built-in /goal",
   "author": {
     "name": "tboy1337"
   },

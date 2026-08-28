@@ -5,7 +5,7 @@ Test goal pursuit for fixing a failing test suite across multiple modules.
 ## Prompt
 
 ```
-/goal fix the failing tests in testing/scripts/, the test suite should pass end-to-end
+/cursor-goal fix the failing tests in testing/scripts/, the test suite should pass end-to-end
 
 Multiple test files are failing. Diagnose and fix all failures.
 ```

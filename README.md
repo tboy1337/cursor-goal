@@ -7,15 +7,24 @@
 
 **Set a verifiable condition. Keep working until it's met.**
 
-Autonomous `/goal` loop for Cursor IDE: persist an objective, work across turns, and stop only when the condition is actually true.
+This repo is the **`/cursor-goal` harness** — a Codex-style persisted loop (file state, remaining-work auditor, separate evaluator, `--test`, turn/wake budgets, `stop`/`subagentStop` + wake). It is **not** Cursor's built-in `/goal`.
 
-**Origin:** `/goal` is an [OpenAI Codex](https://github.com/openai/codex) feature (`codex-rs/ext/goal`). This repo is a Cursor port of that loop. Codex continues from inside its runtime; Cursor cannot, so cursor-goal uses documented `stop` / `subagentStop` hooks plus a wake watchdog, and splits maker ≠ checker (remaining-work auditor + evaluator) instead of a same-model self-audit.
+| | Cursor built-in | This project |
+|---|---|---|
+| Slash command | `/goal` | `/cursor-goal` |
+| Skill folder | `~/.cursor/skills-cursor/goal` | `~/.cursor/skills/cursor-goal` |
+| Continuation | Runtime (`CreateGoal` / `UpdateGoal`) | Hooks + wake |
+| Done when | Agent calls `UpdateGoal complete` | `manage done` after CLEAR + YES |
+
+Use native `/goal` when you want platform continuation (idle/headless/cloud). Use `/cursor-goal` when you want maker ≠ checker and `--test`. User skills are **not** copied to Cloud Agents — this harness is a local/classic or Teams plugin install.
+
+**Origin:** Codex `/goal` is an [OpenAI Codex](https://github.com/openai/codex) feature (`codex-rs/ext/goal`). This repo ports that loop to Cursor. Codex continues from inside its runtime; this harness uses documented `stop` / `subagentStop` hooks plus a wake watchdog, and splits maker ≠ checker instead of a same-model self-audit.
 
 **Primary loop:** in-turn subagent evaluation (worker ≠ evaluator model) via the Python harness.  
 **Continuation:** Cursor's documented `stop` and `subagentStop` hooks (`followup_message`) keep turns flowing, plus a best-effort wake watchdog (`AGENT_GOAL_WAKE`) that does not depend on hook stdout capture.
 
 ```text
-/goal all tests in test/auth pass and the lint step is clean
+/cursor-goal all tests in test/auth pass and the lint step is clean
 ```
 
 ## Minimum happy path
@@ -30,7 +39,7 @@ Wake is armed by default while pursuing and recommended as a best-effort supplem
 
 ## How the worker works
 
-Every `/goal` uses the same automatic playbook — nothing extra to set:
+Every `/cursor-goal` uses the same automatic playbook — nothing extra to set:
 
 1. Do the next concrete change toward the condition.
 2. Run `eval validate` **this turn** (or gather explicit evidence if no `--test` was given). Never evaluate or mark done without that fresh evidence. Never invent or weaken `--test` to fit a timeout.
@@ -38,7 +47,7 @@ Every `/goal` uses the same automatic playbook — nothing extra to set:
 4. If validation passed and there is a git diff: once before the first YES attempt, strip AI slop without changing behavior, then re-validate.
 5. Spawn a **new** readonly `goal-auditor` (original condition, no work summary) after every implemented batch. Never evaluate or `manage done` on a CLEAR recorded before those edits. REMAINING → implement that list and return to step 2. CLEAR whose tree fingerprint still matches → spawn `goal-evaluator`. YES → `manage done`. NO → keep working.
 
-Do **not** invoke Plan Mode, `ce-plan`, Bugbot, `/review`, or thermo-nuclear review inside `/goal` (they wait on the user). The remaining-work auditor is the unattended equivalent of a fresh plan-mode chat, scoped to the original condition. Never claim complete in chat while `manage status` is `pursuing`. Keep the **full** original condition — do not shrink success to a smaller, easier, or already-green subset. Never `manage pause` unless the user said `/goal pause`; use `manage blocked` after the same impasse on 3 consecutive turns.
+Do **not** invoke Plan Mode, `ce-plan`, Bugbot, `/review`, or thermo-nuclear review inside `/cursor-goal` (they wait on the user). The remaining-work auditor is the unattended equivalent of a fresh plan-mode chat, scoped to the original condition. Never claim complete in chat while `manage status` is `pursuing`. Keep the **full** original condition — do not shrink success to a smaller, easier, or already-green subset. Never `manage pause` unless the user said `/cursor-goal pause`; use `manage blocked` after the same impasse on 3 consecutive turns.
 
 ## Requirements
 
@@ -54,7 +63,7 @@ Three supported paths:
 | Path | Who | How |
 |------|-----|-----|
 | **Clone + installer** | Individuals | Clone `main` (or a GitHub Release source archive) → `scripts/install-goal.sh` / `scripts/install-goal.ps1` |
-| **Tagged release** | Individuals | `git clone --branch v4.5.0 …` then installer (see [docs/install.md](docs/install.md)). |
+| **Tagged release** | Individuals | `git clone --branch v5.0.0 …` then installer (see [docs/install.md](docs/install.md)). |
 | **Teams marketplace** | Teams/Enterprise | Import this repo in Cursor Dashboard → Plugins (see `.cursor-plugin/marketplace.json`) |
 
 **Agent install (explicit steps):**
@@ -62,13 +71,14 @@ Three supported paths:
 1. Clone `https://github.com/tboy1337/cursor-goal` (default branch `main`). Prefer a tagged source archive only when that tag exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases).
 2. Run the OS installer from the repo root (`scripts/install-goal.sh` on Unix/macOS; `scripts/install-goal.ps1` on native Windows).
 3. Verify with `manage status` and `eval spawn-config` (commands below).
+4. In Cursor, open **Customize → Skills** and confirm **one** user skill named `cursor-goal` (not extra `goal` / `goal.bak.*` entries). Cursor's built-in `/goal` may still appear separately under built-in skills — that is expected.
 
 Do **not** use Git Bash `install-goal.sh` against native Windows Cursor — the script refuses and redirects you to `install-goal.ps1` (required for `stop_hook.cmd`).
 
 Tell your agent:
 
 ```
-Install the /goal skill from https://github.com/tboy1337/cursor-goal:
+Install the /cursor-goal skill from https://github.com/tboy1337/cursor-goal:
 1) git clone https://github.com/tboy1337/cursor-goal.git
 2) On Windows: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-goal.ps1
    On Unix/macOS: ./scripts/install-goal.sh
@@ -101,8 +111,8 @@ Uninstall: `./scripts/uninstall-goal.sh` or `.\scripts\uninstall-goal.ps1` (add 
 2. Run `manage doctor` — fix any FAIL lines before starting a goal. Run `manage harness-cmd` once to resolve the correct `run_goal.py` invocation for your install (classic vs. Teams marketplace) and reuse its printed command/Wake-loop lines for the rest of the session instead of hardcoding a path.
 3. In Cursor create a demo goal (argv-safe `--test`, no shell metacharacters):
 
-   - Windows: `/goal "demo done" --test "py -3 -c \"raise SystemExit(0)\""`
-   - Unix: `/goal "demo done" --test "python3 -c 'raise SystemExit(0)'"`
+   - Windows: `/cursor-goal "demo done" --test "py -3 -c \"raise SystemExit(0)\""`
+   - Unix: `/cursor-goal "demo done" --test "python3 -c 'raise SystemExit(0)'"`
 
 4. **Start the wake loop before doing other work** (recommended, best-effort supplement for continuation when Cursor drops `stop`/`subagentStop` hook stdout):
    - Find the create output line starting with `GOAL_WAKE_REQUIRED `.
@@ -119,10 +129,10 @@ Note: an unrelated npm package is also named `cursor-goal`; this project is the 
 
 ## Worked example
 
-A complete create-to-done session, run by hand from a Unix shell (an agent normally drives this through the `/goal` skill instead of typing commands directly):
+A complete create-to-done session, run by hand from a Unix shell (an agent normally drives this through the `/cursor-goal` skill instead of typing commands directly):
 
 ```bash
-RUN="python3 -u ~/.cursor/skills/goal/scripts/run_goal.py"
+RUN="python3 -u ~/.cursor/skills/cursor-goal/scripts/run_goal.py"
 
 # 1. Create a goal with an argv-safe validation command (no shell metacharacters
 #    such as `;`/`|`/`&`, so it runs without --allow-shell).
@@ -152,7 +162,7 @@ echo "CLEAR: ok.txt exists; nothing in-scope remains" | $RUN eval parse-audit --
 # → [goal-eval] CLEAR remaining-work audit signal recorded automatically. (exit 0)
 
 # 6. Generate the evaluator prompt and Task spawn config, then run the
-#    goal-evaluator subagent yourself (this is what the /goal skill's Task
+#    goal-evaluator subagent yourself (this is what the /cursor-goal skill's Task
 #    call automates) and capture its raw text response.
 $RUN eval prompt > /tmp/prompt.txt
 $RUN eval spawn-config
@@ -172,19 +182,19 @@ If the auditor returns REMAINING, `eval parse-audit` exits 1 — implement that 
 Verify (Unix / macOS / WSL):
 
 ```bash
-python3 -u ~/.cursor/skills/goal/scripts/run_goal.py manage status
+python3 -u ~/.cursor/skills/cursor-goal/scripts/run_goal.py manage status
 # → [goal] No active goal.
-python3 -u ~/.cursor/skills/goal/scripts/run_goal.py eval spawn-config
+python3 -u ~/.cursor/skills/cursor-goal/scripts/run_goal.py eval spawn-config
 # → {"subagent_type":"goal-evaluator","model":"composer-2.5","readonly":true}
-python3 -u ~/.cursor/skills/goal/scripts/run_goal.py manage doctor
+python3 -u ~/.cursor/skills/cursor-goal/scripts/run_goal.py manage doctor
 ```
 
 Verify (Windows PowerShell):
 
 ```powershell
-py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" manage status
-py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" eval spawn-config
-py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" manage doctor
+py -3 -u "$env:USERPROFILE\.cursor\skills\cursor-goal\scripts\run_goal.py" manage status
+py -3 -u "$env:USERPROFILE\.cursor\skills\cursor-goal\scripts\run_goal.py" eval spawn-config
+py -3 -u "$env:USERPROFILE\.cursor\skills\cursor-goal\scripts\run_goal.py" manage doctor
 ```
 
 ## Usage
@@ -192,18 +202,18 @@ py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" manage docto
 Lifecycle: create a goal, then `status` / `pause` / `resume` / `update` / `blocked` / `clear` as needed.
 
 ```text
-/goal all tests in test/auth pass and the lint step is clean
-/goal status
-/goal pause | resume | clear
-/goal blocked missing deploy key
+/cursor-goal all tests in test/auth pass and the lint step is clean
+/cursor-goal status
+/cursor-goal pause | resume | clear
+/cursor-goal blocked missing deploy key
 ```
 
 Flags / natural language:
 
 ```text
-/goal "all tests pass" --test "npm test" --budget 20
-/goal "compound check" --test "npm test && npm run lint" --allow-shell
-/goal fix bugs, verified by pytest, stop after 15 turns
+/cursor-goal "all tests pass" --test "npm test" --budget 20
+/cursor-goal "compound check" --test "npm test && npm run lint" --allow-shell
+/cursor-goal fix bugs, verified by pytest, stop after 15 turns
 ```
 
 ## Multi-model (maker ≠ checker)
@@ -235,8 +245,8 @@ reports the resolved evaluator model so you can confirm what actually ran.
 
 | Layer | Role |
 |-------|------|
-| `parse` | NL `/goal` input → JSON |
-| `manage` | Persist lifecycle in `~/.cursor-goal/data/goal.json` |
+| `parse` | NL `/cursor-goal` input → JSON |
+| `manage` | Persist lifecycle in `~/.cursor-goal/data/cursor-goal.json` |
 | `eval validate` | Run `validation_command`; persist output for prompts |
 | `eval audit-spawn-config` | JSON Task params for the remaining-work auditor (`goal-auditor` + inherit) |
 | `eval spawn-config` | JSON Task params for the evaluator (model + subagent) |
@@ -248,9 +258,9 @@ reports the resolved evaluator model so you can confirm what actually ran.
 CLI (after install):
 
 ```bash
-python -u ~/.cursor/skills/goal/scripts/run_goal.py parse "..."
-python -u ~/.cursor/skills/goal/scripts/run_goal.py manage create "..." [--test "..."] [--budget N]
-python -u ~/.cursor/skills/goal/scripts/run_goal.py eval validate|audit-spawn-config|audit-prompt|parse-audit|spawn-config|prompt|parse-result|signal|check
+python -u ~/.cursor/skills/cursor-goal/scripts/run_goal.py parse "..."
+python -u ~/.cursor/skills/cursor-goal/scripts/run_goal.py manage create "..." [--test "..."] [--budget N]
+python -u ~/.cursor/skills/cursor-goal/scripts/run_goal.py eval validate|audit-spawn-config|audit-prompt|parse-audit|spawn-config|prompt|parse-result|signal|check
 ```
 
 Developers can also `pip install -e ".[dev]"` and use `cursor-goal` / `python -m cursor_goal`.

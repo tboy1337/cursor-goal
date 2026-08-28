@@ -52,7 +52,7 @@ def test_skill_root_from_plugin_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     plugin = tmp_path / "plugin"
-    skill = plugin / "skills" / "goal"
+    skill = plugin / "skills" / "cursor-goal"
     scripts = skill / "scripts"
     scripts.mkdir(parents=True)
     (scripts / "run_goal.py").write_text("#", encoding="utf-8")

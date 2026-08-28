@@ -67,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _print_help() -> None:
     print("Usage: cursor-goal <command> [args...]")
-    print('  parse "<raw /goal input>"     Parse input to JSON')
+    print('  parse "<raw /cursor-goal input>"     Parse input to JSON')
     print("  manage <subcommand> [...]     Goal lifecycle")
     print(
         "                                "

@@ -5,15 +5,15 @@ After `.\scripts\install-goal.ps1`:
 0. Run doctor and confirm OK (or OK with warnings):
 
 ```powershell
-py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" manage doctor
+py -3 -u "$env:USERPROFILE\.cursor\skills\cursor-goal\scripts\run_goal.py" manage doctor
 ```
 
 1. Confirm `~/.cursor/hooks.json` stop command ends with `stop_hook.cmd`.
-2. Confirm `~/.cursor/skills/goal/scripts/stop_hook.cmd` embeds an absolute Python path and `PYTHONUNBUFFERED=1`.
+2. Confirm `~/.cursor/skills/cursor-goal/scripts/stop_hook.cmd` embeds an absolute Python path and `PYTHONUNBUFFERED=1`.
 3. Create a pursuing goal:
 
 ```powershell
-py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" manage create "smoke continue" --budget 5
+py -3 -u "$env:USERPROFILE\.cursor\skills\cursor-goal\scripts\run_goal.py" manage create "smoke continue" --budget 5
 ```
 
 Expect `Wake budget: 50` (default `budget * 10`) and schema/status fields via `manage status`.
@@ -21,7 +21,7 @@ Expect `Wake budget: 50` (default `budget * 10`) and schema/status fields via `m
 4. Expect create output to mention wake armed. Start the wake loop in a **background** Cursor Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor`:
 
 ```powershell
-py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" wake loop
+py -3 -u "$env:USERPROFILE\.cursor\skills\cursor-goal\scripts\run_goal.py" wake loop
 ```
 
 5. In Cursor Agent, do a tiny edit and let the turn complete (`status=completed`).
@@ -33,7 +33,7 @@ py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" wake loop
 7. Clear:
 
 ```powershell
-py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" manage clear
+py -3 -u "$env:USERPROFILE\.cursor\skills\cursor-goal\scripts\run_goal.py" manage clear
 ```
 
 Pipe-only check (no Cursor UI):
@@ -41,7 +41,7 @@ Pipe-only check (no Cursor UI):
 ```powershell
 $env:CURSOR_GOAL_STOP_DRAIN_MS = '0'
 $payload = '{"status":"completed","loop_count":0}'
-$payload | cmd /c "$env:USERPROFILE\.cursor\skills\goal\scripts\stop_hook.cmd"
+$payload | cmd /c "$env:USERPROFILE\.cursor\skills\cursor-goal\scripts\stop_hook.cmd"
 ```
 
 Expect a JSON line with `followup_message` (or `{}` if no pursuing goal) and a written `last-stop-response.json`.
@@ -49,10 +49,10 @@ Expect a JSON line with `followup_message` (or `{}` if no pursuing goal) and a w
 Wake tick check:
 
 ```powershell
-py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" manage create "wake smoke" --budget 3
-py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" wake tick
+py -3 -u "$env:USERPROFILE\.cursor\skills\cursor-goal\scripts\run_goal.py" manage create "wake smoke" --budget 3
+py -3 -u "$env:USERPROFILE\.cursor\skills\cursor-goal\scripts\run_goal.py" wake tick
 # Expect: AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor {"prompt":"[GOAL] ..."}
-py -3 -u "$env:USERPROFILE\.cursor\skills\goal\scripts\run_goal.py" manage clear
+py -3 -u "$env:USERPROFILE\.cursor\skills\cursor-goal\scripts\run_goal.py" manage clear
 ```
 
 ## Residual risk

@@ -5,7 +5,7 @@ Test goal evaluation with a natural language condition describing a real-world m
 ## Prompt
 
 ```
-/goal every call site of the old fetch() wrapper has been migrated to the new httpClient and the build succeeds
+/cursor-goal every call site of the old fetch() wrapper has been migrated to the new httpClient and the build succeeds
 
 Migrate testing/scripts/user_service.js and related files from legacy_api.js to http_client.js.
 ```
