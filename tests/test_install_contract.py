@@ -492,6 +492,20 @@ def test_verify_isort_invocation_and_utf8_child_env() -> None:
     assert env["PYTHONIOENCODING"] == "utf-8"
 
 
+def test_pip_audit_scopes_to_this_project_not_the_environment() -> None:
+    """Bare pip-audit scans every installed package, including other git repos."""
+    root = Path(__file__).resolve().parents[1]
+    req = root / "scripts" / "pip-audit-requirements.txt"
+    text = req.read_text(encoding="utf-8")
+    assert "-e .[dev]" in text
+    verify = (root / "scripts" / "verify.py").read_text(encoding="utf-8")
+    assert "pip-audit-requirements.txt" in verify
+    ci = (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    rel = (root / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    assert ci.count("pip-audit -r scripts/pip-audit-requirements.txt") == 3
+    assert rel.count("pip-audit -r scripts/pip-audit-requirements.txt") == 3
+
+
 def test_compare_file_ignores_crlf_vs_lf(tmp_path: Path) -> None:
     """Windows write_text CRLF must not false-drift against LF checkouts."""
     root = Path(__file__).resolve().parents[1]

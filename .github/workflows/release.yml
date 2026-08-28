@@ -55,7 +55,7 @@ jobs:
           pyproject-fmt --check pyproject.toml
 
       - name: pip-audit
-        run: pip-audit
+        run: pip-audit -r scripts/pip-audit-requirements.txt --progress-spinner off
 
       - name: Bandit
         run: bandit -r src/cursor_goal -c pyproject.toml -q
@@ -130,7 +130,7 @@ jobs:
           python scripts/sync-plugin-tree.py --check
 
       - name: pip-audit
-        run: pip-audit
+        run: pip-audit -r scripts/pip-audit-requirements.txt --progress-spinner off
 
       - name: Bandit
         run: bandit -r src/cursor_goal -c pyproject.toml -q
@@ -181,7 +181,7 @@ jobs:
           python scripts/sync-plugin-tree.py --check
 
       - name: pip-audit
-        run: pip-audit
+        run: pip-audit -r scripts/pip-audit-requirements.txt --progress-spinner off
 
       - name: Bandit
         run: bandit -r src/cursor_goal -c pyproject.toml -q

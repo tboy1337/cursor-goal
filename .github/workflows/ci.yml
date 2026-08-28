@@ -41,7 +41,7 @@ jobs:
           black --check --diff src tests scripts
           pyproject-fmt --check pyproject.toml
       - name: pip-audit
-        run: pip-audit
+        run: pip-audit -r scripts/pip-audit-requirements.txt --progress-spinner off
       - name: Bandit
         run: bandit -r src/cursor_goal -c pyproject.toml -q
       - name: Pytest
@@ -100,7 +100,7 @@ jobs:
       - name: Install
         run: pip install -e ".[dev]"
       - name: pip-audit
-        run: pip-audit
+        run: pip-audit -r scripts/pip-audit-requirements.txt --progress-spinner off
       - name: Bandit
         run: bandit -r src/cursor_goal -c pyproject.toml -q
       - name: Pytest
@@ -130,7 +130,7 @@ jobs:
       - name: Install
         run: pip install -e ".[dev]"
       - name: pip-audit
-        run: pip-audit
+        run: pip-audit -r scripts/pip-audit-requirements.txt --progress-spinner off
       - name: Bandit
         run: bandit -r src/cursor_goal -c pyproject.toml -q
       - name: Plugin tree sync

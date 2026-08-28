@@ -35,6 +35,7 @@ PYPROJECT_TOML = "pyproject.toml"
 COVERAGE_JSON = "coverage.json"
 COVERAGE_CHECK = "scripts/check_coverage_metrics.py"
 POWERSHELL_TESTS = "scripts/run-powershell-tests.ps1"
+PIP_AUDIT_REQUIREMENTS = "scripts/pip-audit-requirements.txt"
 
 
 @dataclass(frozen=True)
@@ -204,7 +205,20 @@ def build_steps(
             [py, "-m", "bandit", "-r", MYPY_TARGET, "-c", "pyproject.toml", "-q"],
         )
     )
-    steps.append(("pip-audit", [py, "-m", "pip_audit"]))
+    steps.append(
+        (
+            "pip-audit",
+            [
+                py,
+                "-m",
+                "pip_audit",
+                "-r",
+                str(root / PIP_AUDIT_REQUIREMENTS),
+                "--progress-spinner",
+                "off",
+            ],
+        )
+    )
     steps.append(
         (
             "version-sync",

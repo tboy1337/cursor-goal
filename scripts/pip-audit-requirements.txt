@@ -1,0 +1,3 @@
+# Audit this repo's runtime + [dev] extra only.
+# Bare `pip-audit` scans the whole interpreter (other editable checkouts, system pip).
+-e .[dev]
