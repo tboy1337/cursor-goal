@@ -1,12 +1,12 @@
 # cursor-goal (Cursor plugin)
 
-This plugin is the `/cursor-goal` harness (auditor, evaluator, `--test`). Cursor's built-in `/goal` (`CreateGoal` / `UpdateGoal`) is a different product.
+This plugin is the `/cursor-goal` harness (auditor, evaluator, `--test`). It layers Cursor's built-in `/goal` (`CreateGoal` / `UpdateGoal`) for continuation when those tools exist.
 
 Teams/Enterprise: import this repository as a Team Marketplace (see repo `.cursor-plugin/marketplace.json`).
 
 Individuals: prefer `scripts/install-goal.sh` / `install-goal.ps1` from a full clone or GitHub Release.
 
-Version: **5.0.0** (AGPL-3.0-only). License text ships as `COPYING` in this plugin tree. Teams/AGPL notes:
+Version: **5.1.0** (AGPL-3.0-only). License text ships as `COPYING` in this plugin tree. Teams/AGPL notes:
 [docs/teams-agpl.md](https://github.com/tboy1337/cursor-goal/blob/main/docs/teams-agpl.md).
 
 ## Windows marketplace expectations

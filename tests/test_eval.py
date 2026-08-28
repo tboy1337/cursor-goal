@@ -563,6 +563,18 @@ def test_eval_spawn_config_refuses_dead_wake(
     assert "wake" in err.lower()
 
 
+def test_eval_prompt_skips_wake_gate_when_native(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+    monkeypatch.setenv("CURSOR_GOAL_REQUIRE_WAKE", "1")
+    monkeypatch.delenv("CURSOR_GOAL_ALLOW_DEAD_WAKE", raising=False)
+    assert run_cli("manage", "create", "native eval", "--native")[0] == 0
+    code, _out, err = run_cli("eval", "prompt")
+    assert code == 0
+    assert "wake" not in err.lower()
+
+
 def test_eval_prompt_warns_but_continues_by_default(
     goal_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

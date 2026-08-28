@@ -7,21 +7,21 @@
 
 **Set a verifiable condition. Keep working until it's met.**
 
-This repo is the **`/cursor-goal` harness** — a Codex-style persisted loop (file state, remaining-work auditor, separate evaluator, `--test`, turn/wake budgets, `stop`/`subagentStop` + wake). It is **not** Cursor's built-in `/goal`.
+This repo is the **`/cursor-goal` harness** — a Codex-style persisted loop (file state, remaining-work auditor, separate evaluator, `--test`, turn/wake budgets). It **layers** Cursor's built-in `/goal` when `CreateGoal` is available: native runtime owns keep-going; this harness owns proof of done.
 
-| | Cursor built-in | This project |
-|---|---|---|
-| Slash command | `/goal` | `/cursor-goal` |
-| Skill folder | `~/.cursor/skills-cursor/goal` | `~/.cursor/skills/cursor-goal` |
-| Continuation | Runtime (`CreateGoal` / `UpdateGoal`) | Hooks + wake |
-| Done when | Agent calls `UpdateGoal complete` | `manage done` after CLEAR + YES |
+| | Cursor built-in `/goal` alone | This harness | Layered (recommended) |
+|---|---|---|---|
+| Slash command | `/goal` | `/cursor-goal` | Custom Mode + `/goal`, or `/cursor-goal` |
+| Skill folder | `~/.cursor/skills-cursor/goal` | `~/.cursor/skills/cursor-goal` | both (do not overwrite the built-in) |
+| Continuation | Runtime (`CreateGoal` / `UpdateGoal`) | Hooks + wake | Native `CreateGoal` (hooks+wake off) |
+| Done when | Same-model self-audit then `UpdateGoal complete` | `manage done` after CLEAR + YES | CLEAR + YES → `manage done` → `UpdateGoal complete` |
 
-Use native `/goal` when you want platform continuation (idle/headless/cloud). Use `/cursor-goal` when you want maker ≠ checker and `--test`. User skills are **not** copied to Cloud Agents — this harness is a local/classic or Teams plugin install.
+**Recommended local unattended path:** pin **cursor-goal as a Custom Mode**, then `/goal …` or `/cursor-goal …` (the second path calls `CreateGoal` when the tool exists). Use vanilla `/goal` alone when you only want platform continuation and same-model audit. Use `/cursor-goal` with wake when native tools are gated or `CURSOR_GOAL_NATIVE=0`. Do not stack a `/loop` sleeper on the same pursuing goal. User skills are **not** copied to Cloud Agents — this harness is a local/classic or Teams plugin install.
 
-**Origin:** Codex `/goal` is an [OpenAI Codex](https://github.com/openai/codex) feature (`codex-rs/ext/goal`). This repo ports that loop to Cursor. Codex continues from inside its runtime; this harness uses documented `stop` / `subagentStop` hooks plus a wake watchdog, and splits maker ≠ checker instead of a same-model self-audit.
+**Origin:** Codex `/goal` is an [OpenAI Codex](https://github.com/openai/codex) feature (`codex-rs/ext/goal`). This repo ports that loop to Cursor. Codex continues from inside its runtime; this harness uses native `CreateGoal` when the tools exist, otherwise documented `stop` / `subagentStop` hooks plus a wake watchdog, and splits maker ≠ checker instead of a same-model self-audit.
 
 **Primary loop:** in-turn subagent evaluation (worker ≠ evaluator model) via the Python harness.  
-**Continuation:** Cursor's documented `stop` and `subagentStop` hooks (`followup_message`) keep turns flowing, plus a best-effort wake watchdog (`AGENT_GOAL_WAKE`) that does not depend on hook stdout capture.
+**Continuation:** native `CreateGoal` when armed; otherwise Cursor's documented `stop` and `subagentStop` hooks (`followup_message`) plus a best-effort wake watchdog (`AGENT_GOAL_WAKE`).
 
 ```text
 /cursor-goal all tests in test/auth pass and the lint step is clean
@@ -63,7 +63,7 @@ Three supported paths:
 | Path | Who | How |
 |------|-----|-----|
 | **Clone + installer** | Individuals | Clone `main` (or a GitHub Release source archive) → `scripts/install-goal.sh` / `scripts/install-goal.ps1` |
-| **Tagged release** | Individuals | `git clone --branch v5.0.0 …` then installer (see [docs/install.md](docs/install.md)). |
+| **Tagged release** | Individuals | `git clone --branch v5.1.0 …` then installer (see [docs/install.md](docs/install.md)). |
 | **Teams marketplace** | Teams/Enterprise | Import this repo in Cursor Dashboard → Plugins (see `.cursor-plugin/marketplace.json`) |
 
 **Agent install (explicit steps):**
@@ -71,7 +71,7 @@ Three supported paths:
 1. Clone `https://github.com/tboy1337/cursor-goal` (default branch `main`). Prefer a tagged source archive only when that tag exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases).
 2. Run the OS installer from the repo root (`scripts/install-goal.sh` on Unix/macOS; `scripts/install-goal.ps1` on native Windows).
 3. Verify with `manage status` and `eval spawn-config` (commands below).
-4. In Cursor, open **Customize → Skills** and confirm **one** user skill named `cursor-goal` (not extra `goal` / `goal.bak.*` entries). Cursor's built-in `/goal` may still appear separately under built-in skills — that is expected.
+4. In Cursor, open **Customize → Skills** and confirm **one** user skill named `cursor-goal` (not extra `goal` / `goal.bak.*` entries). Cursor's built-in `/goal` may still appear separately under built-in skills — that is expected. Pin cursor-goal as a Custom Mode to layer maker ≠ checker under native `/goal`.
 
 Do **not** use Git Bash `install-goal.sh` against native Windows Cursor — the script refuses and redirects you to `install-goal.ps1` (required for `stop_hook.cmd`).
 

@@ -980,3 +980,36 @@ def test_release_singleflight_swallow_lock_release_error(
             lambda *_a, **_k: (_ for _ in ()).throw(OSError("cannot unlock")),
         )
     stop_mod._release_singleflight(BoomHandle())  # type: ignore[arg-type]
+
+
+def test_stop_silences_followup_when_native(goal_home: Path) -> None:
+    run_cli("manage", "create", "native stop", "--native")
+    code, payload = _run_stop({"status": "completed", "loop_count": 0})
+    assert code == 0
+    assert payload == {}
+    data = load_goal_json(goal_home)
+    assert data["turns_used"] == 1
+    assert data["status"] == "pursuing"
+    assert data["native_continuation"] is True
+
+
+def test_stop_native_does_not_budget_limit(goal_home: Path) -> None:
+    run_cli("manage", "create", "native budget", "--native", "--budget", "1")
+    code, payload = _run_stop({"status": "completed", "loop_count": 0})
+    assert code == 0
+    assert payload == {}
+    data = load_goal_json(goal_home)
+    assert data["turns_used"] == 1
+    assert data["status"] == "pursuing"
+
+
+def test_subagent_stop_still_followups_when_native(goal_home: Path) -> None:
+    run_cli("manage", "create", "native subagent", "--native")
+    response = handle_subagent_stop(
+        {"subagent_type": "goal-evaluator", "status": "completed"}
+    )
+    assert "eval parse-result" in response["followup_message"]
+    auditor = handle_subagent_stop(
+        {"subagent_type": "goal-auditor", "status": "completed"}
+    )
+    assert "eval parse-audit" in auditor["followup_message"]

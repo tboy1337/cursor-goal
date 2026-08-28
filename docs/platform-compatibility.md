@@ -1,6 +1,6 @@
 # Platform Compatibility
 
-cursor-goal targets **Cursor IDE only**. The harness is a **Python 3.12+** package; agent protocol and stop-hook auto-continuation are Cursor-specific. Codex origin is `/goal` (`codex-rs/ext/goal`). Cursor's built-in `/goal` is a different product; this repo installs `/cursor-goal`.
+cursor-goal targets **Cursor IDE only**. The harness is a **Python 3.12+** package; agent protocol and native `CreateGoal` layering (or stop-hook auto-continuation) are Cursor-specific. Codex origin is `/goal` (`codex-rs/ext/goal`). This repo installs `/cursor-goal` and layers Cursor's built-in `/goal` when `CreateGoal` is available.
 
 **Install:** `./scripts/install-goal.sh` or `.\scripts\install-goal.ps1` from a full clone (see [install.md](install.md)).
 

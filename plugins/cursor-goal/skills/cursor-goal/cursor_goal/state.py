@@ -61,6 +61,7 @@ __all__ = (
     "MAX_FIELD_CHARS",
     "MAX_TURN_BUDGET",
     "SCHEMA_VERSION",
+    "NATIVE_CONTINUATION_ENV",
     "_ACL_HARDEN_FAILURES",
     "_HARDENED_PATHS",
     "_harden_windows_acl",
@@ -71,9 +72,11 @@ __all__ = (
     "data_dir",
     "data_dir_is_insecure",
     "normalize_workdir",
+    "native_continuation_env_disabled",
     "path_has_symlink_or_reparse",
     "refuse_if_acl_harden_failed",
     "refuse_if_data_dir_insecure",
+    "resolve_native_continuation_flag",
 )
 
 EVAL_FLAG_NAME = "goal-eval-done"
@@ -102,6 +105,7 @@ ALLOWED_STATUSES = frozenset(
     }
 )
 BLOCK_STREAK_REQUIRED = 3
+NATIVE_CONTINUATION_ENV = "CURSOR_GOAL_NATIVE"
 _UPDATABLE_FIELDS = frozenset(
     {
         "active",
@@ -124,6 +128,7 @@ _UPDATABLE_FIELDS = frozenset(
         "block_streak",
         "last_block_turn_key",
         "condition_updated_pending",
+        "native_continuation",
     }
 )
 LAST_STOP_RESPONSE_NAME = "last-stop-response.json"
@@ -341,6 +346,29 @@ def snapshot_goal(*, raise_corrupt: bool = False) -> GoalState | None:
         return load_goal(raise_corrupt=raise_corrupt)
 
 
+def native_continuation_env_disabled() -> bool:
+    """True when ``CURSOR_GOAL_NATIVE=0`` forces hooks+wake for every goal."""
+    raw = os.environ.get(NATIVE_CONTINUATION_ENV, "1").strip().lower()
+    disabled = raw in {"0", "false", "no", "off"}
+    logger.debug(
+        "native continuation env disabled=%s raw=%r", disabled, raw or "<unset>"
+    )
+    return disabled
+
+
+def resolve_native_continuation_flag(requested: bool) -> bool:
+    """Persist native continuation only when requested and the env allows it."""
+    if not requested:
+        return False
+    if native_continuation_env_disabled():
+        logger.info(
+            "Ignoring native continuation request (%s disables it)",
+            NATIVE_CONTINUATION_ENV,
+        )
+        return False
+    return True
+
+
 def _parse_active(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -499,6 +527,16 @@ def _set_condition_updated_pending(state: GoalState, value: Any) -> None:
     )
 
 
+def _set_native_continuation(state: GoalState, value: Any) -> None:
+    if isinstance(value, bool):
+        state.native_continuation = value
+        return
+    raise ValueError(
+        "native_continuation must be a JSON boolean, got "
+        f"{type(value).__name__}: {value!r}"
+    )
+
+
 _FIELD_SETTERS: dict[str, Callable[[GoalState, Any], None]] = {
     "active": _set_active,
     "condition": _set_condition,
@@ -520,6 +558,7 @@ _FIELD_SETTERS: dict[str, Callable[[GoalState, Any], None]] = {
     "block_streak": _set_block_streak,
     "last_block_turn_key": _set_last_block_turn_key,
     "condition_updated_pending": _set_condition_updated_pending,
+    "native_continuation": _set_native_continuation,
 }
 
 
@@ -553,6 +592,7 @@ class GoalState:  # pylint: disable=too-many-instance-attributes
     block_streak: int = 0
     last_block_turn_key: str = ""
     condition_updated_pending: bool = False
+    native_continuation: bool = False
     schema_version: int = SCHEMA_VERSION
 
     def to_dict(self) -> dict[str, Any]:
@@ -561,7 +601,7 @@ class GoalState:  # pylint: disable=too-many-instance-attributes
         return data
 
     @classmethod
-    def from_dict(  # pylint: disable=too-many-branches,too-many-statements
+    def from_dict(  # pylint: disable=too-many-branches,too-many-statements,too-many-locals
         cls, data: dict[str, Any]
     ) -> GoalState:
         try:
@@ -596,6 +636,14 @@ class GoalState:  # pylint: disable=too-many-instance-attributes
                 )
             except ValueError as exc:
                 raise ValueError(f"invalid condition_updated_pending: {exc}") from exc
+
+        if "native_continuation" not in data:
+            native_continuation = False
+        else:
+            try:
+                native_continuation = _parse_active(data.get("native_continuation"))
+            except ValueError as exc:
+                raise ValueError(f"invalid native_continuation: {exc}") from exc
 
         wake_budget_raw = data.get("wake_budget")
         if wake_budget_raw is None or wake_budget_raw == "":
@@ -701,6 +749,7 @@ class GoalState:  # pylint: disable=too-many-instance-attributes
                 str(data.get("last_block_turn_key") or ""),
             ),
             condition_updated_pending=condition_updated_pending,
+            native_continuation=native_continuation,
             schema_version=SCHEMA_VERSION,
         )
 

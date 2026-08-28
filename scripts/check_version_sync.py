@@ -204,7 +204,7 @@ def _read_marketplace_metadata_version(root: Path) -> str | None:
 
 
 def _read_skill_version_file(root: Path) -> str | None:
-    path = root / "plugins" / "cursor-goal" / "skills" / "goal" / "VERSION"
+    path = root / "plugins" / "cursor-goal" / "skills" / "cursor-goal" / "VERSION"
     if not path.is_file():
         return None
     version = path.read_text(encoding="utf-8").strip()

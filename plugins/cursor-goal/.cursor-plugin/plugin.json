@@ -1,7 +1,7 @@
 {
   "name": "cursor-goal",
-  "version": "5.0.0",
-  "description": "Codex-style /cursor-goal harness (maker!=checker + stop-hook safety net); not Cursor's built-in /goal",
+  "version": "5.1.0",
+  "description": "Codex-style /cursor-goal harness (maker!=checker; layers native /goal continuation when CreateGoal is available)",
   "author": {
     "name": "tboy1337"
   },

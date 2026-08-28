@@ -2287,3 +2287,133 @@ def test_doctor_warns_on_in_root_goal_bak(
     bak.mkdir(parents=True)
     warnings = doctor_mod._skill_layout_warnings()
     assert any("Leftover skill backup" in item for item in warnings)
+
+
+def test_create_native_skips_wake_and_status_succeeds(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+    code, out, _err = run_cli("manage", "create", "native demo", "--native")
+    assert code == 0
+    assert "GOAL_WAKE_REQUIRED" not in out
+    assert "Native continuation" in out
+    data = load_goal_json(goal_home)
+    assert data["native_continuation"] is True
+    assert data["status"] == "pursuing"
+    assert data["active"] is True
+    status_code, status_out, _status_err = run_cli("manage", "status")
+    assert status_code == 0
+    assert "Native continuation: true" in status_out
+    assert "ACTION REQUIRED" not in status_out
+    doctor_code, doctor_out, doctor_err = run_cli("manage", "doctor")
+    combined = doctor_out + doctor_err
+    assert "Wake not armed while pursuing" not in combined
+    assert doctor_code == 0 or "native" in combined.lower()
+
+
+def test_create_native_env_disabled_keeps_wake(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+    monkeypatch.setenv("CURSOR_GOAL_NATIVE", "0")
+    code, out, err = run_cli("manage", "create", "hooks path", "--native")
+    assert code == 0
+    assert "GOAL_WAKE_REQUIRED" in out
+    assert "ignoring --native" in err
+    data = load_goal_json(goal_home)
+    assert data["native_continuation"] is False
+
+
+def test_native_on_records_and_skips_wake_gate(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+    assert run_cli("manage", "create", "later native")[0] == 0
+    assert load_goal_json(goal_home)["native_continuation"] is False
+    code, out, _err = run_cli("manage", "native-on")
+    assert code == 0
+    assert "Native continuation recorded" in out
+    assert load_goal_json(goal_home)["native_continuation"] is True
+    status_code, _status_out, _status_err = run_cli("manage", "status")
+    assert status_code == 0
+
+
+def test_native_on_refused_when_env_disabled(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert run_cli("manage", "create", "no native")[0] == 0
+    monkeypatch.setenv("CURSOR_GOAL_NATIVE", "0")
+    code, _out, err = run_cli("manage", "native-on")
+    assert code == 1
+    assert "forbids native" in err
+    assert load_goal_json(goal_home)["native_continuation"] is False
+
+
+def test_native_on_no_goal(goal_home: Path) -> None:
+    del goal_home
+    code, out, _err = run_cli("manage", "native-on")
+    assert code == 1
+    assert "No active goal" in out
+
+
+def test_done_reminds_update_goal_when_native(goal_home: Path) -> None:
+    assert run_cli("manage", "create", "native done", "--native")[0] == 0
+    code, out, err = run_cli("manage", "done", "--force")
+    assert code == 0
+    combined = out + err
+    assert "UpdateGoal" in combined
+
+
+def test_resume_native_skips_wake(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+    assert run_cli("manage", "create", "native resume", "--native")[0] == 0
+    assert run_cli("manage", "pause")[0] == 0
+    code, out, _err = run_cli("manage", "resume")
+    assert code == 0
+    assert "GOAL_WAKE_REQUIRED" not in out
+    assert "skipping wake arm" in out
+    assert load_goal_json(goal_home)["status"] == "pursuing"
+
+
+def test_native_on_disarm_oserror(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cursor_goal import manage as manage_mod
+
+    assert run_cli("manage", "create", "native disarm")[0] == 0
+
+    def boom(*, kill_loop: bool = True) -> None:
+        del kill_loop
+        raise OSError("disarm failed")
+
+    monkeypatch.setattr(manage_mod, "wake_disarm", boom)
+    code, out, _err = run_cli("manage", "native-on")
+    assert code == 0
+    assert "Native continuation recorded" in out
+    assert load_goal_json(goal_home)["native_continuation"] is True
+
+
+def test_blocked_native_asks_user_to_pause(goal_home: Path) -> None:
+    from cursor_goal.state import update_goal_fields
+
+    assert run_cli("manage", "create", "native block", "--native")[0] == 0
+    assert run_cli("manage", "blocked", "missing secret")[0] == 1
+    update_goal_fields(turns_used=1)
+    assert run_cli("manage", "blocked", "missing secret")[0] == 1
+    update_goal_fields(turns_used=2)
+    code, out, _err = run_cli("manage", "blocked", "missing secret")
+    assert code == 0
+    assert "Goal blocked" in out
+    assert "pause the native goal" in out
+
+
+def test_create_no_native_flag_keeps_hooks_path(
+    goal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CURSOR_GOAL_WAKE", "1")
+    code, out, _err = run_cli("manage", "create", "hooks default", "--no-native")
+    assert code == 0
+    assert "GOAL_WAKE_REQUIRED" in out
+    assert load_goal_json(goal_home)["native_continuation"] is False

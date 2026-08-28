@@ -1,6 +1,6 @@
 # Install cursor-goal
 
-cursor-goal is the **`/cursor-goal` harness** for Cursor IDE (auditor, evaluator, `--test`). Cursor's built-in `/goal` (`CreateGoal` / `UpdateGoal`) is a different product — do not install this skill expecting it to replace native `/goal`. This package continues via Cursor hooks plus wake, not `CreateGoal`. Codex origin: OpenAI Codex `/goal` (`codex-rs/ext/goal`).
+cursor-goal is the **`/cursor-goal` harness** for Cursor IDE (auditor, evaluator, `--test`). It **layers** Cursor's built-in `/goal` (`CreateGoal` / `UpdateGoal`) for continuation when those tools exist; it does not replace vanilla `/goal`. When CreateGoal is missing or `CURSOR_GOAL_NATIVE=0`, continuation is Cursor hooks plus wake. Codex origin: OpenAI Codex `/goal` (`codex-rs/ext/goal`).
 
 User skills are **not** copied to Cloud Agents. Install locally (classic scripts) or via Teams marketplace.
 
@@ -66,10 +66,10 @@ On upgrade, the previous skill tree (including a leftover `~/.cursor/skills/goal
 
 ### Install from a tagged release
 
-Package version **5.0.0** pins the clone branch below. Use it when tag `v5.0.0` exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If `git clone --branch` fails, clone `main` with the Quick install steps above ([release.md](release.md)).
+Package version **5.1.0** pins the clone branch below. Use it when tag `v5.1.0` exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If `git clone --branch` fails, clone `main` with the Quick install steps above ([release.md](release.md)).
 
 ```bash
-git clone --branch v5.0.0 https://github.com/tboy1337/cursor-goal.git
+git clone --branch v5.1.0 https://github.com/tboy1337/cursor-goal.git
 cd cursor-goal
 ./scripts/install-goal.sh   # or install-goal.ps1 on Windows
 ```

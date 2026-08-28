@@ -232,8 +232,9 @@ def _skill_layout_warnings() -> list[str]:
     if builtin.is_file():
         warnings.append(
             "Cursor built-in /goal is present (~/.cursor/skills-cursor/goal). "
-            "Expected: use /goal for native continuation; /cursor-goal for "
-            "this harness."
+            "Expected: layer it under this harness (CreateGoal for continuation; "
+            "CLEAR+YES then manage done then UpdateGoal complete). Vanilla /goal "
+            "without this skill still uses same-model self-audit."
         )
     return warnings
 
@@ -559,6 +560,7 @@ def _doctor_check_pursuing(
         print(
             f"  Budgets: turns {state.turns_used}/{state.turn_budget}, "
             f"wake {state.wake_ticks}/{state.wake_budget}"
+            + (" (advisory while native)" if state.native_continuation else "")
         )
         mode = _validation_mode(state)
         print(f"  Validation mode: {mode}")
@@ -574,7 +576,10 @@ def _doctor_check_pursuing(
                 assert_workdir_usable(state.workdir)
             except ValueError as exc:
                 warnings.append(str(exc))
-        if wake_enabled():
+        if state.native_continuation:
+            print("  Continuation: native CreateGoal/UpdateGoal (wake skipped)")
+            print("  Continuation ready: true (native)")
+        elif wake_enabled():
             ready = bool(wake_info.get("continuation_ready"))
             reason = str(wake_info.get("continuation_reason") or "")
             print(f"  Continuation ready: {str(ready).lower()} ({reason})")

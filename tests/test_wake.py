@@ -1901,6 +1901,16 @@ def test_continuation_readiness_not_pursuing(
     assert ready["reason"] == "not_pursuing"
 
 
+def test_wake_dead_warning_skipped_when_native(
+    wake_on: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CURSOR_GOAL_ALLOW_DEAD_WAKE", raising=False)
+    monkeypatch.setenv("CURSOR_GOAL_REQUIRE_WAKE", "1")
+    assert run_cli("manage", "create", "native wake skip", "--native")[0] == 0
+    assert wake_mod.wake_dead_warning() is None
+    assert wake_mod.refuse_if_wake_dead() is None
+
+
 def test_continuation_readiness_uses_config_emit_and_interval_defaults(
     wake_on: Path,
 ) -> None:

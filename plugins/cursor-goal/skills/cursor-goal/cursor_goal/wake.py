@@ -335,6 +335,9 @@ def _wake_dead_reason() -> tuple[str, str, str] | None:
     state = snapshot_goal()
     if state is None or not state.active or state.status != "pursuing":
         return None
+    if state.native_continuation:
+        logger.debug("wake dead check skipped (native continuation)")
+        return None
     readiness = continuation_readiness(goal_pursuing=True)
     if readiness.get("continuation_ready"):
         return None

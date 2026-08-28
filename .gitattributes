@@ -2,7 +2,7 @@
 * text=auto eol=lf
 
 # Plugin VERSION stamp (no extension) must stay LF for sync --check.
-**/skills/goal/VERSION text eol=lf
+**/skills/cursor-goal/VERSION text eol=lf
 
 # --- Source & config (explicit LF) ---
 *.py      text eol=lf diff=python

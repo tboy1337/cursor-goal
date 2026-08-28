@@ -27,6 +27,7 @@ from cursor_goal.state import (
     BLOCK_STREAK_REQUIRED,
     MAX_FIELD_CHARS,
     MAX_TURN_BUDGET,
+    NATIVE_CONTINUATION_ENV,
     CorruptGoalError,
     GoalLockTimeoutError,
     GoalState,
@@ -38,12 +39,14 @@ from cursor_goal.state import (
     has_audit_confirm_signal,
     mark_goal_achieved,
     mutate_goal,
+    native_continuation_env_disabled,
     normalize_workdir,
     now_iso,
     record_block_attempt,
     refuse_if_acl_harden_failed,
     refuse_if_data_dir_insecure,
     reset_block_streak,
+    resolve_native_continuation_flag,
     snapshot_goal,
     update_goal_condition,
 )
@@ -63,6 +66,31 @@ from cursor_goal.wake import status_info as wake_status_info
 from cursor_goal.wake import wake_enabled
 
 logger = get_logger("cursor_goal.manage")
+
+
+def _wake_wanted(*, native_requested: bool = False) -> bool:
+    """Whether create should pause-for-wake (native continuation skips wake)."""
+    if native_requested:
+        return False
+    return wake_enabled()
+
+
+def _print_native_continuation_notes(*, achieved: bool = False) -> None:
+    """Remind the agent how native CreateGoal/UpdateGoal layers with this harness."""
+    if achieved:
+        print(
+            "[goal] Native continuation: call UpdateGoal with status "
+            '"complete" so usage accounting is preserved.'
+        )
+        return
+    print(
+        "[goal] Native continuation: CreateGoal/UpdateGoal owns keep-going. "
+        "Worker stop followups and wake are off. subagentStop still parses "
+        "auditor/evaluator. After manage done, call UpdateGoal complete. "
+        "Budgets are advisory (native runtime has no turn budget). On "
+        "blocked/budget-limited, the user must pause the native /goal "
+        "(CLI Ctrl+C / UI pause)."
+    )
 
 
 def _refuse_if_data_dir_unsafe() -> str | None:
@@ -87,6 +115,7 @@ class _CreateArgs:
     shell_ok: bool
     workdir: str
     force: bool
+    native: bool
 
 
 @dataclass(frozen=True)
@@ -125,6 +154,7 @@ def _parse_create_argv(argv: list[str]) -> _CreateArgs:
     shell_ok = False
     workdir = ""
     force = False
+    native = False
 
     args = list(argv)
     if args and not args[0].startswith("--"):
@@ -162,6 +192,12 @@ def _parse_create_argv(argv: list[str]) -> _CreateArgs:
         elif arg == "--force":
             force = True
             i += 1
+        elif arg == "--native":
+            native = True
+            i += 1
+        elif arg == "--no-native":
+            native = False
+            i += 1
         else:
             raise ValueError(f"Unknown argument: {arg}")
 
@@ -173,6 +209,7 @@ def _parse_create_argv(argv: list[str]) -> _CreateArgs:
         shell_ok=shell_ok,
         workdir=workdir,
         force=force,
+        native=native,
     )
 
 
@@ -322,6 +359,8 @@ def _print_created_goal_summary(
     print(f"  Budget: {turn_budget} turns")
     print(f"  Wake budget: {wake_budget} ticks")
     print(f"  Shell ok: {str(args.shell_ok).lower()}")
+    if state.native_continuation:
+        print("  Native continuation: true")
 
 
 def cmd_create(argv: list[str]) -> int:
@@ -348,9 +387,16 @@ def cmd_create(argv: list[str]) -> int:
         else default_wake_budget(turn_budget)
     )
     workdir = _resolve_create_workdir(args)
+    native = resolve_native_continuation_flag(args.native)
+    if args.native and not native:
+        print(
+            f"[goal] Warning: {NATIVE_CONTINUATION_ENV}=0 — ignoring --native; "
+            "using hooks+wake.",
+            file=sys.stderr,
+        )
     # When wake is enabled, create paused then arm then flip to pursuing so a
     # crash/lock failure cannot leave an unprotected pursuing goal.
-    wake_on = wake_enabled()
+    wake_on = _wake_wanted(native_requested=native)
     state = GoalState(
         active=not wake_on,
         condition=args.condition,
@@ -367,6 +413,7 @@ def cmd_create(argv: list[str]) -> int:
         last_validation_output="",
         last_validation_exit_code=None,
         last_eval_verdict="",
+        native_continuation=native,
     )
     if args.force:
         try:
@@ -390,6 +437,8 @@ def cmd_create(argv: list[str]) -> int:
     _print_created_goal_summary(
         args, state, turn_budget=turn_budget, wake_budget=wake_budget
     )
+    if native:
+        _print_native_continuation_notes()
     _print_weak_condition_warning(args.condition)
     # Status reflects real state: wake-on create stays paused until activate.
     wake_exit_code = _finalize_create_wake_state(wake_on=wake_on)
@@ -403,7 +452,9 @@ def cmd_create(argv: list[str]) -> int:
     return 0
 
 
-def cmd_status(_argv: list[str]) -> int:  # pylint: disable=too-many-branches
+def cmd_status(
+    _argv: list[str],
+) -> int:  # pylint: disable=too-many-branches,too-many-statements
     try:
         state = snapshot_goal(raise_corrupt=True)
     except CorruptGoalError as exc:
@@ -442,6 +493,7 @@ def cmd_status(_argv: list[str]) -> int:  # pylint: disable=too-many-branches
     print(f"  Progress: {state.turns_used} / {state.turn_budget} turns")
     print(f"  Wake ticks: {state.wake_ticks} / {state.wake_budget}")
     print(f"  Schema: {state.schema_version}")
+    print(f"  Native continuation: {str(state.native_continuation).lower()}")
     print(f"  Shell ok: {str(state.shell_ok).lower()}")
     mode = _validation_mode(state)
     print(f"  Validation mode: {mode}")
@@ -451,8 +503,12 @@ def cmd_status(_argv: list[str]) -> int:  # pylint: disable=too-many-branches
         print(f"  Validation: {redact_command(state.validation_command)}")
         if state.last_validation_exit_code is not None:
             print(f"  Last validation exit: {state.last_validation_exit_code}")
-    if not wake_enabled():
-        print("  Wake service: disabled (CURSOR_GOAL_WAKE=0)")
+    if not wake_enabled() or state.native_continuation:
+        if state.native_continuation:
+            print("  Wake service: skipped (native continuation)")
+            print("  Continuation ready: true (native CreateGoal/UpdateGoal)")
+        else:
+            print("  Wake service: disabled (CURSOR_GOAL_WAKE=0)")
     elif wake_info.get("armed"):
         alive = "yes" if wake_info.get("pid_alive") else "no"
         print(
@@ -461,15 +517,17 @@ def cmd_status(_argv: list[str]) -> int:  # pylint: disable=too-many-branches
         )
     else:
         print("  Wake service: not armed")
+    wake_gate = wake_enabled() and not state.native_continuation
     ready = bool(wake_info.get("continuation_ready"))
     reason = str(wake_info.get("continuation_reason") or "")
-    print(f"  Continuation ready: {str(ready).lower()} ({reason})")
-    if wake_info.get("heartbeat_stale"):
+    if not state.native_continuation:
+        print(f"  Continuation ready: {str(ready).lower()} ({reason})")
+    if wake_gate and wake_info.get("heartbeat_stale"):
         print(
             "  Warning: wake heartbeat_stale — loop PID is alive but "
             "last_emit_at is older than 2× interval; restart wake loop if stalled"
         )
-    if display_active and wake_enabled() and not ready:
+    if display_active and wake_gate and not ready:
         hint = str(wake_info.get("command") or _wake_loop_shell_hint())
         pattern = str(
             wake_info.get("notify_pattern")
@@ -501,7 +559,7 @@ def cmd_status(_argv: list[str]) -> int:  # pylint: disable=too-many-branches
     else:
         print("  Audit scope: narrow")
     print(f"  Created: {state.created_at}")
-    if display_active and wake_enabled() and not ready:
+    if display_active and wake_gate and not ready:
         return 1
     return 0
 
@@ -580,9 +638,16 @@ def cmd_resume(_argv: list[str]) -> int:
         return 1
 
     # Arm while still paused, then flip to pursuing — avoids unprotected pursue.
-    arm_result = _maybe_arm_wake()
-    if arm_result.status == "failed":
-        return _pause_after_arm_failure(arm_result.detail)
+    # Native continuation skips wake: CreateGoal owns keep-going.
+    if current.native_continuation:
+        print(
+            "[goal] Native continuation: skipping wake arm "
+            "(CreateGoal owns keep-going)."
+        )
+    else:
+        arm_result = _maybe_arm_wake()
+        if arm_result.status == "failed":
+            return _pause_after_arm_failure(arm_result.detail)
 
     def mutator(state: GoalState) -> None:
         if state.status not in _RESUMABLE_STATUSES:
@@ -609,7 +674,9 @@ def cmd_resume(_argv: list[str]) -> int:
         "[goal] Goal resumed. Continuing toward: "
         f"{redact_secrets(result.condition, max_chars=None)}"
     )
-    if wake_enabled():
+    if result.native_continuation:
+        _print_native_continuation_notes()
+    elif wake_enabled():
         print(
             "[goal] Confirm `wake status` continuation_ready=true before other work. "
             "Tip: CURSOR_GOAL_LOG_FILE=1 for durable diagnostics."
@@ -740,6 +807,11 @@ def cmd_blocked(argv: list[str]) -> int:
             "[goal] Auto-continuation stopped. User: /cursor-goal resume after "
             "resolving the blocker, or /cursor-goal clear."
         )
+        if state.native_continuation:
+            print(
+                "[goal] Native /goal cannot be paused by the agent. "
+                "User: pause the native goal (CLI Ctrl+C / UI pause)."
+            )
         return 0
     print(
         f"[goal] Block recorded ({state.block_streak}/{BLOCK_STREAK_REQUIRED}): "
@@ -851,6 +923,8 @@ def cmd_done(argv: list[str]) -> int:
         f"[goal] Goal achieved in {state.turns_used} turns: "
         f"{redact_secrets(state.condition, max_chars=None)}"
     )
+    if state.native_continuation:
+        _print_native_continuation_notes(achieved=True)
     return 0
 
 
@@ -925,6 +999,17 @@ def _maybe_arm_wake() -> _ArmWakeResult:
     Returns ok / disabled / failed. Callers must pause+exit 1 on failed so a
     pursuing goal is never left without an armed wake when wake is enabled.
     """
+    try:
+        current = snapshot_goal()
+    except GoalLockTimeoutError as exc:
+        return _ArmWakeResult(status="failed", detail=str(exc))
+    if current is not None and current.native_continuation:
+        logger.info("Wake arm skipped (native continuation)")
+        print(
+            "[goal] Native continuation: skipping wake arm "
+            "(CreateGoal owns keep-going)."
+        )
+        return _ArmWakeResult(status="disabled")
     if not wake_enabled():
         print(
             "[goal] Wake: disabled (CURSOR_GOAL_WAKE=0). "
@@ -965,6 +1050,50 @@ def _maybe_arm_wake() -> _ArmWakeResult:
         "with notify_on_output matching the pattern above"
     )
     return _ArmWakeResult(status="ok", config=config)
+
+
+def cmd_native_on(_argv: list[str]) -> int:
+    """Mark an existing goal as using native CreateGoal continuation.
+
+    Agent-facing: call after CreateGoal succeeds when create ran without
+    ``--native`` (for example Custom Mode + user-typed ``/goal``). Disarms
+    wake so hooks+wake do not compete with the platform runtime.
+    """
+    unsafe = _refuse_if_data_dir_unsafe()
+    if unsafe is not None:
+        print(unsafe, file=sys.stderr)
+        return 1
+    if native_continuation_env_disabled():
+        print(
+            f"[goal] Error: {NATIVE_CONTINUATION_ENV}=0 forbids native "
+            "continuation; using hooks+wake.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        snapshot_goal(raise_corrupt=True)
+    except CorruptGoalError as exc:
+        print(f"[goal] Error: {exc}", file=sys.stderr)
+        return 1
+
+    def mutator(state: GoalState) -> None:
+        state.native_continuation = True
+
+    try:
+        result = mutate_goal(mutator)
+    except GoalLockTimeoutError as exc:
+        print(f"[goal] Error: {exc}", file=sys.stderr)
+        return 1
+    if result is None:
+        print("[goal] No active goal to mark native.")
+        return 1
+    try:
+        wake_disarm(kill_loop=True)
+    except OSError as exc:
+        logger.warning("Could not disarm wake after native-on: %s", exc)
+    print("[goal] Native continuation recorded.")
+    _print_native_continuation_notes()
+    return 0
 
 
 def cmd_harness_cmd(_argv: list[str]) -> int:
@@ -1014,6 +1143,7 @@ def cmd_manage(argv: list[str]) -> int:
         "clear": cmd_clear,
         "doctor": cmd_doctor,
         "harness-cmd": cmd_harness_cmd,
+        "native-on": cmd_native_on,
     }
     handler = dispatch.get(command)
     if handler is None:
@@ -1028,11 +1158,12 @@ def _print_help() -> int:
     print(
         '  create "<condition>" [--test "<cmd>"] [--budget <N>] '
         "[--wake-budget <N>] [--workdir <path>] [--allow-shell] "
-        "[--deny-shell] [--force]"
+        "[--deny-shell] [--force] [--native] [--no-native]"
     )
     print("  status     Show current goal state")
     print("  doctor     Install / health diagnostics")
     print("  harness-cmd  Print resolved run_goal.py / wake loop invocation")
+    print("  native-on  Record CreateGoal success; skip wake / worker stop followups")
     print("  pause      Pause auto-continuation (user /cursor-goal pause only)")
     print("  resume     Resume a paused or blocked goal")
     print('  update "<condition>"  Change condition in place (invalidates CLEAR+YES)')

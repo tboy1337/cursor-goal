@@ -1,6 +1,6 @@
 ---
 name: cursor-goal
-description: Codex-style goal harness for Cursor (auditor, evaluator, --test, budgets). Use when the user types /cursor-goal or asks for the cursor-goal harness. Do not use for Cursor's built-in /goal (CreateGoal/UpdateGoal).
+description: Codex-style goal harness for Cursor (auditor, evaluator, --test, budgets). Use when the user types /cursor-goal, pins this skill as a Custom Mode with /goal, or asks for the cursor-goal harness. Layers native CreateGoal/UpdateGoal for continuation when those tools exist; do not replace vanilla /goal when this skill is not in context.
 disable-model-invocation: true
 ---
 
@@ -8,9 +8,11 @@ disable-model-invocation: true
 
 Set a persistent objective. Work toward it across turns until it is met.
 
-**Cursor's built-in `/goal`** (`CreateGoal` / `UpdateGoal`) is the platform continuation mechanism (idle, headless, cloud). This skill is a **different product**: a Codex-style Python harness with file state, remaining-work auditor, separate evaluator, `--test`, and turn/wake budgets. Continuation here is `stop` / `subagentStop` plus wake — not `CreateGoal`. Type `/cursor-goal` to use this harness. Do not treat a native `/goal` invocation as this skill.
+**Layered with Cursor's built-in `/goal`:** native `CreateGoal` / `UpdateGoal` own **keep-going** (idle, headless, cloud, status line, usage accounting). This skill owns **is it actually done** (file state, remaining-work auditor, separate evaluator, `--test`). Do **not** run both continuation systems: once CreateGoal succeeds, skip wake and ignore worker `stop` followups. Keep `subagentStop` for auditor/evaluator parse. Vanilla `/goal` without this skill still uses same-model self-audit — do not overwrite `~/.cursor/skills-cursor/goal`.
 
-This is a **Cursor port of OpenAI Codex `/goal`**. Codex implements `/goal` as first-class runtime (`codex-rs/ext/goal`). This harness persists `goal.json` and continues via hooks plus wake.
+Probe the tool list. If `CreateGoal` is present, use it. Do not assume `/goal` exists from the slash name alone. `CURSOR_GOAL_NATIVE=0` forces the hooks+wake path.
+
+This is a **Cursor port of OpenAI Codex `/goal`**. Codex implements `/goal` as first-class runtime (`codex-rs/ext/goal`). This harness persists `goal.json` and continues via native CreateGoal when available, otherwise `stop` / `subagentStop` plus wake.
 
 ## Harness (Python)
 
@@ -109,10 +111,23 @@ Then:
   - `wake_budget` → `--wake-budget N`
   - `workdir` → `--workdir <path>`
   - `force: true` → `--force` (replace existing goal)
+  - After CreateGoal succeeds (see Native continuation below) → `--native`
   - If parse lacks `allow_shell` but the raw user text contains `--allow-shell` / `--deny-shell`, forward those flags from the raw input before create.
   - If parse JSON includes `warning`, show it to the user. Do **not** invent `--test`.
 
-After **every** `create` or `resume`, complete the **Wake handshake** below **before** other work. **Do not skip.** Create with wake enabled prints `Status: paused (awaiting wake arm)` until arm/activate succeeds, then `Status: pursuing`. If create/resume exits non-zero (wake arm failed → goal paused), fix the error and `manage resume` — do not work as if pursuing. If `wake status` shows `continuation_ready=false` while pursuing, `manage status` / `manage doctor` treat that as blocking (ACTION REQUIRED / FAIL, exit non-zero) — start the loop before relying on those commands' success. Tip: `CURSOR_GOAL_LOG_FILE=1` for durable diagnostics. Then start working toward the condition.
+## Native continuation (CreateGoal / UpdateGoal)
+
+Probe tools. If `CreateGoal` is **not** in the list, or `CURSOR_GOAL_NATIVE=0`, or CreateGoal fails: `manage create` **without** `--native` and complete the **Wake handshake** below. Do not retry CreateGoal.
+
+If `CreateGoal` **is** in the list and the env allows native:
+
+1. **User typed `/cursor-goal`:** call `CreateGoal` **exactly once** with the same condition (this is an explicit goal request). On success: `manage create … --native` (skip wake). On failure: report it, then `manage create` without `--native` and do the wake handshake.
+2. **User typed `/goal` while this skill is the Custom Mode:** the built-in `/goal` skill calls `CreateGoal` once — do **not** call it a second time. Still `manage create … --native` so auditor/evaluator/`--test` run. If create already happened without `--native`, `manage native-on` after CreateGoal succeeded.
+3. **Done order (never reverse):** CLEAR + YES → `manage done` → `UpdateGoal` with status `complete`. The built-in same-model completion audit is **not** enough. Do **not** call `UpdateGoal complete` until `manage done` succeeds.
+4. Worker `stop` followups and wake stay **off** while `native_continuation` is true. `subagentStop` for `goal-auditor` / `goal-evaluator` still runs. Turn/wake budgets are **advisory** (native runtime has no budget). On harness `blocked` or `budget-limited`, tell the user to pause the native goal (CLI Ctrl+C / UI pause). Do **not** lie with `UpdateGoal complete`.
+5. Resume from user pause: `UpdateGoal` status `active` if the user asked to resume **and** `manage resume` (with `--native` already recorded, skip wake).
+
+After **every** `create` or `resume` **without** native continuation, complete the **Wake handshake** below **before** other work. **Do not skip.** Create with wake enabled prints `Status: paused (awaiting wake arm)` until arm/activate succeeds, then `Status: pursuing`. If create/resume exits non-zero (wake arm failed → goal paused), fix the error and `manage resume` — do not work as if pursuing. If `wake status` shows `continuation_ready=false` while pursuing **and native continuation is false**, `manage status` / `manage doctor` treat that as blocking. When create printed native continuation notes, do **not** start `GOAL_WAKE_REQUIRED`. Tip: `CURSOR_GOAL_LOG_FILE=1` for durable diagnostics. Then start working toward the condition.
 
 ## Command Reference
 
@@ -124,6 +139,8 @@ After **every** `create` or `resume`, complete the **Wake handshake** below **be
 | `/cursor-goal resume` | Resume a paused or blocked goal |
 | `/cursor-goal clear` | Remove goal entirely (**user only**) |
 | `/cursor-goal blocked <reason>` | Record an impasse; after 3 consecutive same-reason turns the harness stops |
+
+`manage native-on` records CreateGoal success after a create that omitted `--native`. `CURSOR_GOAL_NATIVE=0` forbids `--native` / `native-on`.
 
 Aliases for clear: `stop`, `off`, `reset`, `cancel`
 
@@ -183,7 +200,7 @@ While `status` is `pursuing`, repeat:
 5. **Remaining-work audit** — spawn a **new** readonly `goal-auditor` Task (see below) with the original condition and **no** work summary. Do this after every implemented batch; do not reuse a CLEAR from before those edits. This is the unattended equivalent of a new plan-mode chat. Do **not** invoke Cursor Plan Mode or `/ce-plan` (they wait on the user). For **broad** conditions (not equivalent to a test/validation command): first spawn parallel `Task` `explore` subagents (`thoroughness: very thorough`) covering tree/CI/installers/schema-docs/fail-open/tests; implement in-scope hits; then spawn the auditor. A one-line `CLEAR` without an `EXPLORED:` block citing real files is rejected.
 6. **Act on audit** — REMAINING → continue at step 1 with that punch list (do not spawn `goal-evaluator` yet). CLEAR → for **narrow** goals, evaluate. For **broad** goals, spawn a **new** `goal-auditor` with `eval audit-prompt --confirm` and `eval parse-audit --confirm`; only then evaluate (both CLEARs required).
 7. **Evaluate** — spawn a readonly evaluator subagent on the configured model (see below). Never evaluate after every single file edit or after read-only exploration.
-8. **Act on result** — YES → `manage done` (requires CLEAR + YES; broad goals also need confirm-pass CLEAR). NO → continue at step 1 with the reason.
+8. **Act on result** — YES → `manage done` (requires CLEAR + YES; broad goals also need confirm-pass CLEAR). If `manage status` shows `native_continuation: true`, then call `UpdateGoal` with status `complete`. NO → continue at step 1 with the reason.
 
 Do **not** invoke Plan Mode, `/ce-plan`, `/review`, `/review-bugbot`, `/review-security`, or thermo-nuclear review inside this loop. They stall unattended continuation. The remaining-work auditor *is* the plan-mode-quality pass (explore Tasks + harness-gated EXPLORED cites; confirm-pass on broad goals). It is scoped to the original condition (not a second quality bar for a "tests pass" goal).
 
@@ -238,7 +255,7 @@ Alternatively: `eval parse-result @path\to\file.txt` or (short output only) `eva
 
 On YES: automatically records a YES-bound evaluator signal (exit 0). On NO/UNCLEAR: exit 1.
 
-**If YES** (exit 0): run `manage done` (also requires a CLEAR audit signal this cycle; broad goals also require confirm-pass CLEAR).
+**If YES** (exit 0): run `manage done` (also requires a CLEAR audit signal this cycle; broad goals also require confirm-pass CLEAR). If native continuation is on, then `UpdateGoal` complete.
 
 **If NO** (exit 1): read REASON, continue working, audit again after more progress.
 
@@ -250,9 +267,11 @@ Evaluate after validation results, logical units of work, or changes that could 
 
 **While `status` is `pursuing`, do not end the turn idle.** Either mark the goal done (`manage done` after CLEAR + YES) or finish an audit/evaluate cycle (REMAINING or NO) and start the next concrete action in the same turn. Do not stop mid-goal waiting for the stop hook to wake you. Never tell the user the goal is complete unless `manage status` shows `achieved`.
 
-## Continuation Hooks (documented, primary safety net)
+## Continuation Hooks (documented, primary safety net unless native)
 
-Two Cursor-documented hooks (`https://cursor.com/docs/hooks.md`), both wired to `scripts/stop_hook.py` (Windows: `scripts/stop_hook.cmd`), keep the turn loop going:
+When **native continuation is on**, the worker `stop` hook emits no `followup_message` (CreateGoal owns keep-going). **`subagentStop` still fires** for `goal-evaluator` and `goal-auditor`.
+
+When native continuation is **off**, two Cursor-documented hooks (`https://cursor.com/docs/hooks.md`), both wired to `scripts/stop_hook.py` (Windows: `scripts/stop_hook.cmd`), keep the turn loop going:
 
 - **`stop`** fires when your turn ends. If the goal is still `pursuing`, it returns a `followup_message` that auto-continues you.
 - **`subagentStop`** (`matcher: "goal-evaluator"` and `matcher: "goal-auditor"`) fires the instant that subagent finishes, independent of when your own turn ends. Evaluator: run `eval parse-result`. Auditor: run `eval parse-audit`. It never calls `manage done` itself.
@@ -263,7 +282,9 @@ When you see a `[GOAL]` prefix, resume working toward the condition immediately.
 
 ## Wake Watchdog (best-effort supplement, not a Cursor-documented mechanism)
 
-While a goal is `pursuing` and wake is enabled (the default), arming and starting a live Shell wake loop with `notify_on_output` is **recommended** as a supplement to the two hooks above — it does not depend on Cursor capturing hook stdout (see repo `docs/cursor-windows-stop-hook-race.md`). It is **not** a Cursor-documented API (`notify_on_output` on a background Shell is a Cursor IDE convenience, not a hooks contract), so treat it as best-effort: long-idle background shells can be reaped by the platform. `eval validate` / `eval prompt` / `eval spawn-config` warn (not refuse) when pursuing without a verified-alive loop; set `CURSOR_GOAL_REQUIRE_WAKE=1` to restore the old hard-refusal behavior. `manage create`/`resume` and `manage doctor`/`status` are unchanged: arming still gates `pursuing`, and doctor/status still hard-fail while pursuing with `continuation_ready=false`. Opt out of wake entirely with `CURSOR_GOAL_WAKE=0`. For fully unattended runs outside the IDE turn loop, prefer a Cursor Automation or the Cursor CLI/SDK headless agent loop instead of relying on a monitored background shell.
+Skip this entire section while `native_continuation` is true (create `--native` or `manage native-on`). Do not start `GOAL_WAKE_REQUIRED`. Do not stack `/loop` sleepers on the same goal.
+
+While a goal is `pursuing`, wake is enabled, **and native continuation is off**, arming and starting a live Shell wake loop with `notify_on_output` is **recommended** as a supplement to the two hooks above — it does not depend on Cursor capturing hook stdout (see repo `docs/cursor-windows-stop-hook-race.md`). It is **not** a Cursor-documented API (`notify_on_output` on a background Shell is a Cursor IDE convenience, not a hooks contract), so treat it as best-effort: long-idle background shells can be reaped by the platform. `eval validate` / `eval prompt` / `eval spawn-config` warn (not refuse) when pursuing without a verified-alive loop; set `CURSOR_GOAL_REQUIRE_WAKE=1` to restore the old hard-refusal behavior. `manage create`/`resume` and `manage doctor`/`status` are unchanged when native is off: arming still gates `pursuing`, and doctor/status still hard-fail while pursuing with `continuation_ready=false`. Opt out of wake entirely with `CURSOR_GOAL_WAKE=0`. Opt out of native layering with `CURSOR_GOAL_NATIVE=0`. For fully unattended runs outside the IDE turn loop, prefer native `/goal` continuation, a Cursor Automation, or the Cursor CLI/SDK headless agent loop instead of relying on a monitored background shell.
 
 `manage create` / `resume` arms wake state and prints one machine-readable line agents must consume:
 
@@ -273,7 +294,7 @@ GOAL_WAKE_REQUIRED {"command":"<shell command>","pattern":"^AGENT_GOAL_WAKE FOLL
 
 If arm fails, create/resume **exits 1**, leaves the goal **`paused`**, and does not print `GOAL_WAKE_REQUIRED`.
 
-### Wake handshake (recommended after every create/resume)
+### Wake handshake (recommended after every create/resume **without** `--native`)
 
 Do this before other work when wake is enabled. Until `continuation_ready=true` (implies `pid_alive=true`), `manage status` / `manage doctor` report **ACTION REQUIRED** / **FAIL** and exit non-zero — treat that as blocking for those specific commands. `eval validate` / `eval prompt` / `eval spawn-config` only **warn** (they no longer refuse) while `continuation_ready=false`; set `CURSOR_GOAL_REQUIRE_WAKE=1` if you want them to hard-refuse instead, or `CURSOR_GOAL_ALLOW_DEAD_WAKE=1` to silence the warning.
 
@@ -291,6 +312,8 @@ Interval: `CURSOR_GOAL_WAKE_INTERVAL_S` (default 15, min 5, max 600), or pass `-
 
 Default turn budget is 20 (max 500). Customize with `--budget N` or natural language (`stop after 10 turns`). Exhausted when `turns_used >= turn_budget` **or** `wake_ticks >= wake_budget` → `budget-limited` (check `last_reason` / status for which limit hit). On `[GOAL BUDGET]`: stop new substantive work; list remaining in-scope items and blockers; do not spawn auditor/evaluator hoping for YES; do not `manage done` unless the condition is actually met.
 
+While native continuation is on, those budgets are **advisory** — the platform keeps going until `UpdateGoal complete` or the user pauses. Do not `UpdateGoal complete` just because the budget is exhausted.
+
 ## Failure modes
 
 | Symptom | Likely cause | Action |
@@ -300,7 +323,8 @@ Default turn budget is 20 (max 500). Customize with `--budget N` or natural lang
 | Wake armed but no continuation | Loop not started / notify not attached | Start `command` from `GOAL_WAKE_REQUIRED` with `notify_on_output` |
 | Create/resume exit 1, status paused | Wake arm failed | Fix data-dir/ACL, then `manage resume` |
 | Double continuation soon after manual `wake tick` | Wake→wake coalesce on `tick` only | Expected; loop cadence is unchanged |
-| `manage status` ACTION REQUIRED / exit 1 / doctor FAIL wake | `continuation_ready=false` while pursuing | Blocking: start wake loop, confirm `continuation_ready=true` |
+| `manage status` ACTION REQUIRED / exit 1 / doctor FAIL wake | `continuation_ready=false` while pursuing **and not native** | Blocking: start wake loop, confirm `continuation_ready=true` |
+| Native status line stays active after `manage done` | Forgot `UpdateGoal complete` | Call UpdateGoal complete; do not reverse the done order |
 | Create refused (shell metacharacters) | `shell_ok=false` + shell-mode `--test` | Pass `--allow-shell` or use an argv-safe `--test` |
 | Doctor FAIL classic + marketplace | Stacked install paths | Uninstall classic hooks **or** disable marketplace plugin |
 | Marketplace hooks fail on Windows | Missing absolute `CURSOR_GOAL_PYTHON` | Set absolute env (required for doctor OK) or prefer `install-goal.ps1` |

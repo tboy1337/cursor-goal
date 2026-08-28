@@ -166,7 +166,7 @@ def write_plugin(root: Path) -> Path:
         "version": version,
         "description": (
             "Codex-style /cursor-goal harness "
-            "(maker!=checker + stop-hook safety net); not Cursor's built-in /goal"
+            "(maker!=checker; layers native /goal continuation when CreateGoal is available)"
         ),
         "author": {"name": "tboy1337"},
         "homepage": "https://github.com/tboy1337/cursor-goal",
@@ -189,7 +189,7 @@ def write_plugin(root: Path) -> Path:
         "name": "cursor-goal-marketplace",
         "owner": {"name": "tboy1337"},
         "metadata": {
-            "description": "Codex-style /cursor-goal harness (not Cursor's built-in /goal)",
+            "description": "Codex-style /cursor-goal harness (layers native /goal when CreateGoal is available)",
             "version": version,
             "pluginRoot": "plugins",
         },
@@ -219,8 +219,8 @@ def write_plugin(root: Path) -> Path:
     readme.write_text(
         "# cursor-goal (Cursor plugin)\n\n"
         "This plugin is the `/cursor-goal` harness (auditor, evaluator, "
-        "`--test`). Cursor's built-in `/goal` (`CreateGoal` / `UpdateGoal`) "
-        "is a different product.\n\n"
+        "`--test`). It layers Cursor's built-in `/goal` (`CreateGoal` / "
+        "`UpdateGoal`) for continuation when those tools exist.\n\n"
         "Teams/Enterprise: import this repository as a Team Marketplace "
         "(see repo `.cursor-plugin/marketplace.json`).\n\n"
         "Individuals: prefer `scripts/install-goal.sh` / `install-goal.ps1` "

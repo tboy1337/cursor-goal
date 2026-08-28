@@ -362,6 +362,8 @@ def test_plugin_manifests_and_hooks_contract() -> None:
     keeper = (plugin / "agents" / "goalKeeper.md").read_text(encoding="utf-8")
     assert "Verify this turn" in keeper
     assert "manage blocked" in keeper
+    assert "CreateGoal" in keeper
+    assert "do not call CreateGoal" not in keeper.lower()
     skill = (plugin / "skills" / "cursor-goal" / "SKILL.md").read_text(encoding="utf-8")
     assert "name: cursor-goal" in skill
     assert "disable-model-invocation: true" in skill
@@ -372,6 +374,9 @@ def test_plugin_manifests_and_hooks_contract() -> None:
     assert "manage update" in skill
     assert "--confirm" in skill
     assert "confirm-pass" in skill.lower()
+    assert "CreateGoal" in skill
+    assert "UpdateGoal" in skill
+    assert "native continuation" in skill.lower()
     evaluator = (plugin / "agents" / "goal-evaluator.md").read_text(encoding="utf-8")
     assert "MISSING EVIDENCE" in evaluator
     assert "strong evidence" not in evaluator.lower()

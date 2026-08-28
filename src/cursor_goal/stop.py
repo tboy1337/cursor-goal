@@ -523,6 +523,9 @@ def _handle_stop_persist_failure(exc: OSError) -> dict[str, Any]:
     state = snapshot_goal()
     if state is None or not state.active or state.status != "pursuing":
         return {}
+    if state.native_continuation:
+        logger.info("stop persist fail-open silenced (native continuation)")
+        return {}
     # Account fail-open continues against turn budget so free loops cannot
     # bypass the budget beyond MAX_FAIL_OPEN_CONTINUES.
     effective_turns = int(state.turns_used) + count
@@ -541,6 +544,24 @@ def _handle_stop_persist_failure(exc: OSError) -> dict[str, Any]:
         )
         return {}
     remaining = max(0, state.turn_budget - effective_turns)
+    return _continue_followup(state, remaining)
+
+
+def _payload_after_stop_turn(state: GoalState, budget_hit: bool) -> dict[str, Any]:
+    """Followup, silence, or budget wrap-up after a successful stop mutation."""
+    if state.native_continuation:
+        logger.info(
+            "stop hook silenced (native continuation) turns_used=%s",
+            state.turns_used,
+        )
+        return {}
+    if state.status == "budget-limited" or budget_hit:
+        try:
+            wake_disarm(kill_loop=True)
+        except OSError as exc:
+            logger.debug("Could not disarm wake after budget limit: %s", exc)
+        return _budget_limited_response(state)
+    remaining = max(0, state.turn_budget - state.turns_used)
     return _continue_followup(state, remaining)
 
 
@@ -570,6 +591,10 @@ def handle_stop(
         if not state.active or state.status != "pursuing":
             raise ValueError("inactive")
         state.turns_used = int(state.turns_used) + 1
+        # Native continuation: keep an advisory turn count but never
+        # budget-limit or emit a competing followup (CreateGoal owns keep-going).
+        if state.native_continuation:
+            return
         # Stop path charges turns only; wake budget is enforced in wake.py.
         if budgets_exhausted(
             state.turns_used,
@@ -600,16 +625,7 @@ def handle_stop(
 
     if state is None:
         return {}
-
-    if state.status == "budget-limited" or budget_hit:
-        try:
-            wake_disarm(kill_loop=True)
-        except OSError as exc:
-            logger.debug("Could not disarm wake after budget limit: %s", exc)
-        return _budget_limited_response(state)
-
-    remaining = max(0, state.turn_budget - state.turns_used)
-    return _continue_followup(state, remaining)
+    return _payload_after_stop_turn(state, budget_hit)
 
 
 def cmd_stop(_argv: list[str] | None = None) -> int:

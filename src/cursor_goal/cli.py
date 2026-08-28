@@ -71,7 +71,7 @@ def _print_help() -> None:
     print("  manage <subcommand> [...]     Goal lifecycle")
     print(
         "                                "
-        "(create|status|doctor|harness-cmd|pause|resume|done|clear)"
+        "(create|status|doctor|harness-cmd|native-on|pause|resume|done|clear)"
     )
     print("  eval <subcommand> [...]       Evaluator harness")
     print(

@@ -26,9 +26,11 @@ from cursor_goal.state import (
     has_audit_signal,
     has_eval_signal,
     load_goal,
+    native_continuation_env_disabled,
     record_block_attempt,
     record_parse_audit,
     record_parse_result,
+    resolve_native_continuation_flag,
     save_goal,
     set_eval_signal,
     take_condition_updated_pending,
@@ -179,6 +181,7 @@ def test_from_dict_defaults_and_rejects_unsupported_schema(goal_home: Path) -> N
     assert state.schema_version == 1
     assert state.block_streak == 0
     assert state.condition_updated_pending is False
+    assert state.native_continuation is False
     assert state.last_block_reason == ""
 
     with pytest.raises(ValueError, match="unsupported schema_version"):
@@ -1321,6 +1324,57 @@ def test_from_dict_rejects_invalid_block_fields(goal_home: Path) -> None:
                 "condition_updated_pending": "yes",
             }
         )
+    with pytest.raises(ValueError, match="native_continuation"):
+        GoalState.from_dict(
+            {
+                "condition": "c",
+                "turn_budget": 20,
+                "turns_used": 0,
+                "schema_version": 1,
+                "status": "pursuing",
+                "active": True,
+                "native_continuation": "yes",
+            }
+        )
+
+
+def test_from_dict_accepts_native_continuation(goal_home: Path) -> None:
+    del goal_home
+    state = GoalState.from_dict(
+        {
+            "condition": "native",
+            "turn_budget": 20,
+            "turns_used": 0,
+            "schema_version": 1,
+            "status": "pursuing",
+            "active": True,
+            "native_continuation": True,
+        }
+    )
+    assert state.native_continuation is True
+
+
+def test_update_goal_fields_native_continuation(goal_home: Path) -> None:
+    save_goal(GoalState(condition="c", created_at="t", status="pursuing", active=True))
+    updated = update_goal_fields(native_continuation=True)
+    assert updated is not None
+    assert updated.native_continuation is True
+    with pytest.raises(ValueError, match="native_continuation"):
+        update_goal_fields(native_continuation="yes")
+
+
+def test_native_continuation_env_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CURSOR_GOAL_NATIVE", raising=False)
+    assert native_continuation_env_disabled() is False
+    assert resolve_native_continuation_flag(True) is True
+    assert resolve_native_continuation_flag(False) is False
+    monkeypatch.setenv("CURSOR_GOAL_NATIVE", "0")
+    assert native_continuation_env_disabled() is True
+    assert resolve_native_continuation_flag(True) is False
+    monkeypatch.setenv("CURSOR_GOAL_NATIVE", "off")
+    assert native_continuation_env_disabled() is True
+    monkeypatch.setenv("CURSOR_GOAL_NATIVE", "1")
+    assert native_continuation_env_disabled() is False
 
 
 def test_record_block_attempt_streak_and_same_turn(goal_home: Path) -> None:

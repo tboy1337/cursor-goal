@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Quick fixes for common install and continuation failures. cursor-goal is the `/cursor-goal` harness (Codex-style loop). Cursor's built-in `/goal` is a different command.
+Quick fixes for common install and continuation failures. cursor-goal is the `/cursor-goal` harness (Codex-style loop). Pin it as a Custom Mode and use `/goal` (or `/cursor-goal`) to layer native continuation under maker ≠ checker. Vanilla `/goal` without this skill is still same-model self-audit.
 
 Also run:
 
@@ -19,7 +19,7 @@ Stall checklist (Hooks `{}`, no continuation): work the steps below before filin
 ## Hooks Execution Log shows `{}` but the goal should continue
 
 1. Check `~/.cursor-goal/data/last-stop-response.json`. If it contains `followup_message` while Hooks shows `{}`, you hit the [Cursor stdout race](cursor-windows-stop-hook-race.md).
-2. Ensure wake is armed and the loop is alive (`manage status` / `manage doctor`). Doctor **FAIL**s while `pursuing` if wake is enabled and `continuation_ready=false` (missing or dead loop). Doctor skips that gate when `CURSOR_GOAL_WAKE=0`.
+2. Ensure wake is armed and the loop is alive (`manage status` / `manage doctor`) **unless** `native_continuation` is true (then worker `stop` emitting `{}` is expected; native runtime continues). Doctor **FAIL**s while `pursuing` if wake is enabled, native continuation is off, and `continuation_ready=false` (missing or dead loop). Doctor skips that gate when `CURSOR_GOAL_WAKE=0` or native continuation is on.
 3. Prefer the `command` from create/resume's `GOAL_WAKE_REQUIRED` line (or `wake status` JSON). Start background Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor`:
 
 ```text
@@ -36,7 +36,7 @@ py -3 -u "$env:USERPROFILE\.cursor\skills\cursor-goal\scripts\run_goal.py" wake 
 
 ## Wake not armed / `continuation_ready=false`
 
-Doctor **hard-fails** when a goal is `pursuing`, wake is enabled, and the loop is missing or dead. `manage status` prints an **ACTION REQUIRED** recovery command, `Continuation ready: false (…)`, and exits **1**. Immediately start `wake loop` as above. If create/resume exited 1 with the goal paused, fix data-dir/ACL issues then `manage resume`. Disable wake only with `CURSOR_GOAL_WAKE=0` (not recommended while the stop race remains).
+Doctor **hard-fails** when a goal is `pursuing`, wake is enabled, **native continuation is off**, and the loop is missing or dead. `manage status` prints an **ACTION REQUIRED** recovery command, `Continuation ready: false (…)`, and exits **1**. Immediately start `wake loop` as above. If create/resume exited 1 with the goal paused, fix data-dir/ACL issues then `manage resume`. Disable wake only with `CURSOR_GOAL_WAKE=0` (not recommended while the stop race remains). Skip wake entirely with `manage create --native` after CreateGoal, or `CURSOR_GOAL_NATIVE=0` to force hooks+wake.
 
 Create with wake enabled prints `Status: paused (awaiting wake arm)` then `Status: pursuing` only after a successful arm/activate — do not treat the early paused line as a failure. For durable diagnostics set `CURSOR_GOAL_LOG_FILE=1` (create and doctor FAIL also print this tip).
 
@@ -52,9 +52,9 @@ Doctor **FAIL**s when `~/.cursor/skills/cursor-goal/VERSION` (or the resolved sk
 
 Cursor [loads every `SKILL.md` under `~/.cursor/skills/`](https://cursor.com/docs/skills). Pre-v5 installers left `goal.bak.<UTC>` siblings that show up as extra skills. Re-run the v5 installer: it migrates those folders to `~/.cursor-goal/backups/` (keep 1) and **deletes** leftover `~/.cursor/skills/goal`. You should see **one** user skill named `cursor-goal`. Cursor's built-in `/goal` under `~/.cursor/skills-cursor/goal` is expected and is not this project.
 
-Seeing both `/goal` and `/cursor-goal` in the product is expected: `/goal` is native continuation; `/cursor-goal` is this harness.
+Seeing both `/goal` and `/cursor-goal` in the product is expected. Pin cursor-goal as a Custom Mode to layer maker ≠ checker under native `/goal`. Vanilla `/goal` alone is native continuation with same-model self-audit.
 
-Doctor **FAIL**s while `~/.cursor/skills/goal/SKILL.md` still exists (stacked old user skill). Doctor **WARN**s when the built-in `~/.cursor/skills-cursor/goal` is present.
+Doctor **FAIL**s while `~/.cursor/skills/goal/SKILL.md` still exists (stacked old user skill). Doctor **WARN**s when the built-in `~/.cursor/skills-cursor/goal` is present (layer it; do not overwrite it).
 
 ## `manage doctor` FAIL: insecure data directory
 

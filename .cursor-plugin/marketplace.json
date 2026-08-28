@@ -4,16 +4,16 @@
     "name": "tboy1337"
   },
   "metadata": {
-    "description": "Codex-style /cursor-goal harness (not Cursor's built-in /goal)",
-    "version": "5.0.0",
+    "description": "Codex-style /cursor-goal harness (layers native /goal when CreateGoal is available)",
+    "version": "5.1.0",
     "pluginRoot": "plugins"
   },
   "plugins": [
     {
       "name": "cursor-goal",
       "source": "cursor-goal",
-      "description": "Codex-style /cursor-goal harness (maker!=checker + stop-hook safety net); not Cursor's built-in /goal",
-      "version": "5.0.0",
+      "description": "Codex-style /cursor-goal harness (maker!=checker; layers native /goal continuation when CreateGoal is available)",
+      "version": "5.1.0",
       "license": "AGPL-3.0-only",
       "keywords": [
         "goal",
