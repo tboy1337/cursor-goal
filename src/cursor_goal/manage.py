@@ -8,8 +8,6 @@ functions are intentionally *not* re-exported — import ``cursor_goal.doctor``
 directly (including in tests) to call them.
 """
 
-# pylint: disable=too-many-lines
-
 from __future__ import annotations
 
 import os
@@ -20,13 +18,30 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from cursor_goal.doctor import _validation_mode, _wake_loop_shell_hint, cmd_doctor
+from cursor_goal.doctor import (  # noqa: F401  pylint: disable=unused-import
+    _validation_mode,
+    _wake_loop_shell_hint,
+    cmd_doctor,
+)
 from cursor_goal.logging_config import get_logger
+from cursor_goal.manage_common import (
+    print_native_continuation_notes as _print_native_continuation_notes,
+)
+from cursor_goal.manage_common import wake_wanted as _wake_wanted
+from cursor_goal.manage_create import (
+    _create_goal_or_error,
+    _CreateArgs,
+    _normalize_workdir,
+    _parse_create_argv,
+    _print_created_goal_summary,
+    _refuse_shell_metachar_validation,
+    _validate_create,
+)
+from cursor_goal.manage_status import cmd_status
 from cursor_goal.paths import harness_cmd_report
-from cursor_goal.state import (
+from cursor_goal.state import (  # pylint: disable=unused-import
     BLOCK_STREAK_REQUIRED,
     MAX_FIELD_CHARS,
-    MAX_TURN_BUDGET,
     NATIVE_CONTINUATION_ENV,
     CorruptGoalError,
     GoalLockTimeoutError,
@@ -36,11 +51,9 @@ from cursor_goal.state import (
     clear_goal_files,
     create_goal_atomic,
     default_wake_budget,
-    has_audit_confirm_signal,
     mark_goal_achieved,
     mutate_goal,
     native_continuation_env_disabled,
-    normalize_workdir,
     now_iso,
     record_block_attempt,
     refuse_if_acl_harden_failed,
@@ -51,71 +64,55 @@ from cursor_goal.state import (
     update_goal_condition,
 )
 from cursor_goal.validation import (
-    deny_shell_enabled,
-    is_broad_condition,
     redact_command,
     redact_secrets,
-    try_split_argv,
     weak_condition_warning,
 )
-from cursor_goal.wake import NOTIFY_PATTERN
+from cursor_goal.wake import (
+    NOTIFY_PATTERN,
+)
 from cursor_goal.wake import arm as wake_arm
 from cursor_goal.wake import disarm as wake_disarm
-from cursor_goal.wake import format_wake_required_line
-from cursor_goal.wake import status_info as wake_status_info
-from cursor_goal.wake import wake_enabled
+from cursor_goal.wake import (
+    format_wake_required_line,
+)
+from cursor_goal.wake import (
+    status_info as wake_status_info,  # pylint: disable=unused-import
+)
+from cursor_goal.wake import (
+    wake_enabled,
+)
+
+# Re-exports used by sibling modules and tests (monkeypatch surface).
+__all__ = (
+    "cmd_manage",
+    "cmd_status",
+    "create_goal_atomic",
+    "snapshot_goal",
+    "wake_status_info",
+    "_validation_mode",
+)
 
 logger = get_logger("cursor_goal.manage")
 
 
-def _wake_wanted(*, native_requested: bool = False) -> bool:
-    """Whether create should pause-for-wake (native continuation skips wake)."""
-    if native_requested:
-        return False
-    return wake_enabled()
-
-
-def _print_native_continuation_notes(*, achieved: bool = False) -> None:
-    """Remind the agent how native CreateGoal/UpdateGoal layers with this harness."""
-    if achieved:
-        print(
-            "[goal] Native continuation: call UpdateGoal with status "
-            '"complete" so usage accounting is preserved.'
-        )
-        return
-    print(
-        "[goal] Native continuation: CreateGoal/UpdateGoal owns keep-going. "
-        "Worker stop followups and wake are off. subagentStop still parses "
-        "auditor/evaluator. After manage done, call UpdateGoal complete. "
-        "Budgets are advisory (native runtime has no turn budget). On "
-        "blocked/budget-limited, the user must pause the native /goal "
-        "(CLI Ctrl+C / UI pause)."
-    )
-
-
 def _refuse_if_data_dir_unsafe() -> str | None:
-    """Return an error message if the data dir is insecure or Windows ACL
-    hardening failed, else ``None``. Mirrors the gate every mutating command
-    in ``stop.py``/``evaluate.py``/``wake.py`` already applies so a failed
-    ACL harden cannot be bypassed just by using ``manage pause``/``resume``/
-    ``done``/``clear`` instead of the hook/eval entry points.
-    """
+    """Return an error if the data dir is insecure or ACL harden failed."""
     insecure = refuse_if_data_dir_insecure()
     if insecure is not None:
         return insecure
     return refuse_if_acl_harden_failed()
 
 
-@dataclass(frozen=True)
-class _CreateArgs:
-    condition: str
-    test_cmd: str
-    budget: int
-    wake_budget: int | None
-    shell_ok: bool
-    workdir: str
-    force: bool
-    native: bool
+def _resolve_create_workdir(args: _CreateArgs) -> str:
+    """Resolve the workdir for a new goal: explicit --workdir, else cwd."""
+    if args.workdir:
+        return _normalize_workdir(args.workdir)
+    try:
+        return str(Path.cwd().resolve())
+    except OSError as exc:
+        logger.debug("Could not capture create cwd as workdir: %s", exc)
+        return ""
 
 
 @dataclass(frozen=True)
@@ -125,169 +122,6 @@ class _ArmWakeResult:
     status: str  # ok | disabled | failed
     detail: str = ""
     config: dict[str, Any] | None = None
-
-
-def _parse_budget(raw: str, *, label: str = "Budget") -> int:
-    try:
-        value = int(raw)
-    except ValueError as exc:
-        raise ValueError(f"{label} must be a positive integer, got {raw!r}") from exc
-    if value < 1:
-        raise ValueError(f"{label} must be a positive integer, got {value}")
-    if value > MAX_TURN_BUDGET:
-        raise ValueError(f"{label} must be <= {MAX_TURN_BUDGET}, got {value}")
-    return value
-
-
-def _normalize_workdir(raw: str) -> str:
-    """Expand and validate workdir; return absolute path string or raise ValueError."""
-    return normalize_workdir(raw)
-
-
-# pylint: disable-next=too-many-branches
-def _parse_create_argv(argv: list[str]) -> _CreateArgs:
-    """Parse create CLI flags into a typed args object."""
-    condition = ""
-    test_cmd = ""
-    budget = 20
-    wake_budget: int | None = None
-    shell_ok = False
-    workdir = ""
-    force = False
-    native = False
-
-    args = list(argv)
-    if args and not args[0].startswith("--"):
-        condition = args.pop(0)
-
-    i = 0
-    while i < len(args):
-        arg = args[i]
-        if arg == "--test":
-            if i + 1 >= len(args):
-                raise ValueError("--test requires a value")
-            test_cmd = args[i + 1]
-            i += 2
-        elif arg == "--budget":
-            if i + 1 >= len(args):
-                raise ValueError("--budget requires a value")
-            budget = _parse_budget(args[i + 1])
-            i += 2
-        elif arg == "--wake-budget":
-            if i + 1 >= len(args):
-                raise ValueError("--wake-budget requires a value")
-            wake_budget = _parse_budget(args[i + 1], label="Wake budget")
-            i += 2
-        elif arg == "--workdir":
-            if i + 1 >= len(args):
-                raise ValueError("--workdir requires a value")
-            workdir = args[i + 1]
-            i += 2
-        elif arg == "--deny-shell":
-            shell_ok = False
-            i += 1
-        elif arg == "--allow-shell":
-            shell_ok = True
-            i += 1
-        elif arg == "--force":
-            force = True
-            i += 1
-        elif arg == "--native":
-            native = True
-            i += 1
-        elif arg == "--no-native":
-            native = False
-            i += 1
-        else:
-            raise ValueError(f"Unknown argument: {arg}")
-
-    return _CreateArgs(
-        condition=condition,
-        test_cmd=test_cmd,
-        budget=budget,
-        wake_budget=wake_budget,
-        shell_ok=shell_ok,
-        workdir=workdir,
-        force=force,
-        native=native,
-    )
-
-
-def _validate_create(args: _CreateArgs) -> str | None:
-    """Return an error message if create args are invalid, else None."""
-    if not args.condition:
-        return (
-            "[goal] Error: condition is required. "
-            'Usage: cursor-goal manage create "<condition>"'
-        )
-    if len(args.condition) > MAX_FIELD_CHARS:
-        return (
-            f"[goal] Error: condition exceeds {MAX_FIELD_CHARS} character limit "
-            f"({len(args.condition)} chars)"
-        )
-    if len(args.test_cmd) > MAX_FIELD_CHARS:
-        return (
-            f"[goal] Error: validation command exceeds {MAX_FIELD_CHARS} "
-            f"character limit ({len(args.test_cmd)} chars)"
-        )
-    if args.workdir:
-        try:
-            _normalize_workdir(args.workdir)
-        except ValueError as exc:
-            return f"[goal] Error: {exc}"
-    return _refuse_if_data_dir_unsafe()
-
-
-def _refuse_shell_metachar_validation(args: _CreateArgs) -> str | None:
-    """Refuse a shell-metachar --test command when shell_ok is false (fail closed)."""
-    if not args.test_cmd or args.shell_ok or try_split_argv(args.test_cmd) is not None:
-        return None
-    if deny_shell_enabled():
-        return (
-            "[goal] Error: validation requires shell metacharacters but "
-            "CURSOR_GOAL_DENY_SHELL is set. Use an argv-safe --test."
-        )
-    return (
-        "[goal] Error: validation requires shell metacharacters but "
-        "shell_ok=false. Pass --allow-shell or use an argv-safe --test."
-    )
-
-
-def _create_goal_or_error(
-    state: GoalState, *, force: bool
-) -> tuple[GoalState | None, int | None]:
-    """Create *state* atomically, surfacing corrupt/existing-goal/lock errors.
-
-    Returns ``(created, exit_code)``; when ``exit_code`` is not ``None`` the
-    caller should return it immediately (the error has already been printed).
-    """
-    try:
-        # Surface quarantine before overwrite/create.
-        try:
-            snapshot_goal(raise_corrupt=True)
-        except CorruptGoalError as exc:
-            print(f"[goal] Error: {exc}", file=sys.stderr)
-            print(
-                "[goal] Fix or remove the quarantined goal.json, then retry "
-                "(use --force only after clearing corrupt state).",
-                file=sys.stderr,
-            )
-            return None, 1
-        created, status = create_goal_atomic(state, force=force)
-    except GoalLockTimeoutError as exc:
-        print(f"[goal] Error: {exc}", file=sys.stderr)
-        return None, 1
-    if status == "exists" and created is not None:
-        print(
-            "[goal] Error: a goal already exists. "
-            "Use --force to overwrite, or clear first.",
-            file=sys.stderr,
-        )
-        safe_existing = redact_secrets(created.condition, max_chars=None)
-        print(f"[goal] Existing condition: {safe_existing}", file=sys.stderr)
-        print(f"[goal] Existing status: {created.status}", file=sys.stderr)
-        return None, 1
-    return created, None
 
 
 def _finalize_create_wake_state(*, wake_on: bool) -> int | None:
@@ -324,43 +158,6 @@ def _finalize_create_wake_state(*, wake_on: bool) -> int | None:
         return _pause_after_arm_failure(f"activate after arm failed: {exc}")
     print("  Status: pursuing")
     return None
-
-
-def _resolve_create_workdir(args: _CreateArgs) -> str:
-    """Resolve the workdir for a new goal: explicit --workdir, else cwd."""
-    if args.workdir:
-        return _normalize_workdir(args.workdir)
-    try:
-        return str(Path.cwd().resolve())
-    except OSError as exc:
-        logger.debug("Could not capture create cwd as workdir: %s", exc)
-        return ""
-
-
-def _print_created_goal_summary(
-    args: _CreateArgs, state: GoalState, *, turn_budget: int, wake_budget: int
-) -> None:
-    """Print the ``[goal] Goal created:`` summary block for ``cmd_create``."""
-    safe_condition = redact_secrets(args.condition, max_chars=None)
-    print("[goal] Goal created:")
-    print(f"  Condition: {safe_condition}")
-    if args.test_cmd:
-        print(f"  Validation: {redact_command(args.test_cmd)}")
-        mode = _validation_mode(state)
-        print(f"  Validation mode: {mode}")
-        if mode == "shell":
-            print(
-                "  Warning: shell-mode validation (trusted-user goal.json). "
-                "Prefer argv-safe commands; shell was explicitly enabled "
-                "with --allow-shell."
-            )
-    if state.workdir:
-        print(f"  Workdir: {state.workdir}")
-    print(f"  Budget: {turn_budget} turns")
-    print(f"  Wake budget: {wake_budget} ticks")
-    print(f"  Shell ok: {str(args.shell_ok).lower()}")
-    if state.native_continuation:
-        print("  Native continuation: true")
 
 
 def cmd_create(argv: list[str]) -> int:
@@ -449,118 +246,6 @@ def cmd_create(argv: list[str]) -> int:
             "[goal] Tip: set CURSOR_GOAL_LOG_FILE=1 for durable diagnostics "
             "while debugging stalls."
         )
-    return 0
-
-
-def cmd_status(
-    _argv: list[str],
-) -> int:  # pylint: disable=too-many-branches,too-many-statements
-    try:
-        state = snapshot_goal(raise_corrupt=True)
-    except CorruptGoalError as exc:
-        print(f"[goal] Error: {exc}", file=sys.stderr)
-        print(
-            "[goal] Fix or remove ~/.cursor-goal/data/goal.json "
-            "(or CURSOR_GOAL_DATA), then retry. Corrupt files are renamed to "
-            "goal.json.corrupt.<UTC>.",
-            file=sys.stderr,
-        )
-        return 1
-    except GoalLockTimeoutError as exc:
-        print(f"[goal] Error: {exc}", file=sys.stderr)
-        return 1
-
-    if state is None:
-        print("[goal] No active goal.")
-        return 0
-
-    # Derive displayed activity from pursuing status so paused goals are clear.
-    display_active = state.active and state.status == "pursuing"
-    wake_info = wake_status_info()
-    print("[goal] Status Report")
-    print(f"  Active: {str(display_active).lower()}")
-    print(f"  Status: {state.status}")
-    print(f"  Condition: {redact_secrets(state.condition, max_chars=None)}")
-    if state.block_streak:
-        print(f"  Block streak: {state.block_streak} / {BLOCK_STREAK_REQUIRED}")
-        if state.last_block_reason:
-            print(
-                "  Last block reason: "
-                f"{redact_secrets(state.last_block_reason, max_chars=500)}"
-            )
-    if state.condition_updated_pending:
-        print("  Condition updated: pending (next followup will note it)")
-    print(f"  Progress: {state.turns_used} / {state.turn_budget} turns")
-    print(f"  Wake ticks: {state.wake_ticks} / {state.wake_budget}")
-    print(f"  Schema: {state.schema_version}")
-    print(f"  Native continuation: {str(state.native_continuation).lower()}")
-    print(f"  Shell ok: {str(state.shell_ok).lower()}")
-    mode = _validation_mode(state)
-    print(f"  Validation mode: {mode}")
-    if state.workdir:
-        print(f"  Workdir: {state.workdir}")
-    if state.validation_command:
-        print(f"  Validation: {redact_command(state.validation_command)}")
-        if state.last_validation_exit_code is not None:
-            print(f"  Last validation exit: {state.last_validation_exit_code}")
-    if not wake_enabled() or state.native_continuation:
-        if state.native_continuation:
-            print("  Wake service: skipped (native continuation)")
-            print("  Continuation ready: true (native CreateGoal/UpdateGoal)")
-        else:
-            print("  Wake service: disabled (CURSOR_GOAL_WAKE=0)")
-    elif wake_info.get("armed"):
-        alive = "yes" if wake_info.get("pid_alive") else "no"
-        print(
-            f"  Wake service: armed gen={wake_info.get('token_prefix', '?')} "
-            f"alive={alive} interval_s={wake_info.get('interval_s')}"
-        )
-    else:
-        print("  Wake service: not armed")
-    wake_gate = wake_enabled() and not state.native_continuation
-    ready = bool(wake_info.get("continuation_ready"))
-    reason = str(wake_info.get("continuation_reason") or "")
-    if not state.native_continuation:
-        print(f"  Continuation ready: {str(ready).lower()} ({reason})")
-    if wake_gate and wake_info.get("heartbeat_stale"):
-        print(
-            "  Warning: wake heartbeat_stale — loop PID is alive but "
-            "last_emit_at is older than 2× interval; restart wake loop if stalled"
-        )
-    if display_active and wake_gate and not ready:
-        hint = str(wake_info.get("command") or _wake_loop_shell_hint())
-        pattern = str(
-            wake_info.get("notify_pattern")
-            or wake_info.get("pattern")
-            or NOTIFY_PATTERN
-        )
-        if reason == "not_armed" or not wake_info.get("armed"):
-            print(
-                "  ACTION REQUIRED: wake not armed while pursuing — start background "
-                f"Shell `{hint}` with notify_on_output matching {pattern}, "
-                "then confirm `wake status` shows continuation_ready=true"
-            )
-        else:
-            print(
-                "  ACTION REQUIRED: wake loop not alive — start background Shell "
-                f"`{hint}` with notify_on_output matching {pattern}, "
-                "then confirm continuation_ready=true / pid_alive=true"
-            )
-    if state.last_reason:
-        print(f"  Last evaluation: {redact_secrets(state.last_reason, max_chars=500)}")
-    if state.last_eval_verdict:
-        print(f"  Last verdict: {state.last_eval_verdict}")
-    if state.last_audit_verdict:
-        print(f"  Last audit: {state.last_audit_verdict}")
-    if is_broad_condition(state.condition):
-        print("  Audit scope: broad (confirm-pass required)")
-        confirm_line = "CLEAR" if has_audit_confirm_signal() else "missing"
-        print(f"  Confirm audit: {confirm_line}")
-    else:
-        print("  Audit scope: narrow")
-    print(f"  Created: {state.created_at}")
-    if display_active and wake_gate and not ready:
-        return 1
     return 0
 
 

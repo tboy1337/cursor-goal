@@ -40,7 +40,7 @@ cd cursor-goal
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-goal.ps1
 ```
 
-Pin a release with `git clone --branch v5.1.6` instead of `main` when you want that tag. Teams/Enterprise can import this repository as a marketplace plugin (see `.cursor-plugin/marketplace.json` and [docs/teams-agpl.md](docs/teams-agpl.md)).
+Pin a release with `git clone --branch v5.1.7` instead of `main` when you want that tag. Teams/Enterprise can import this repository as a marketplace plugin (see `.cursor-plugin/marketplace.json` and [docs/teams-agpl.md](docs/teams-agpl.md)).
 
 After a successful install:
 
@@ -154,6 +154,8 @@ $env:CURSOR_GOAL_EVAL_MODEL = 'gpt-5.3-codex'
 | [docs/install.md](docs/install.md) | Installer paths, what gets copied, tagged releases |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Doctor FAILs, hooks, wake, marketplace |
 | [docs/known-limitations.md](docs/known-limitations.md) | Continuation, blocked vs pause, audit rules |
+| [docs/cursor-windows-stop-hook-race.md](docs/cursor-windows-stop-hook-race.md) | Upstream stop-hook stdout race |
+| [docs/windows-stop-hook-smoke.md](docs/windows-stop-hook-smoke.md) | Manual Windows hook smoke |
 | [docs/platform-compatibility.md](docs/platform-compatibility.md) | Windows / Unix / Teams |
 | [SECURITY.md](SECURITY.md) | Trust model for `~/.cursor-goal/data` |
 | [docs/teams-agpl.md](docs/teams-agpl.md) | Marketplace redistribution under AGPL-3.0 |

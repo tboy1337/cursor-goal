@@ -57,7 +57,6 @@ Desktop.ini
 # --- Secrets / local env ---
 .env
 .env.*
-!.env.example
 
 # --- Harness ephemeral run output ---
 testing/results/run-*/

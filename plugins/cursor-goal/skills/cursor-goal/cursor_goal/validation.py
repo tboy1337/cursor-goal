@@ -48,7 +48,7 @@ _SECRETISH = re.compile(
 )
 
 _PEM_BLOCK = re.compile(
-    r"-----BEGIN((?:\s+[A-Z0-9]+)*\s+PRIVATE KEY)-----" r".*?" r"-----END\1-----",
+    r"-----BEGIN((?:\s+[A-Z0-9]+)*\s+PRIVATE KEY)-----.*?-----END\1-----",
     re.DOTALL,
 )
 

@@ -38,20 +38,6 @@
     ]
   },
   {
-    "path": "src/cursor_goal/manage.py",
-    "file_name": "manage.py",
-    "functions": [
-      {
-        "name": "_parse_create_argv",
-        "complexity": 26
-      },
-      {
-        "name": "cmd_status",
-        "complexity": 43
-      }
-    ]
-  },
-  {
     "path": "src/cursor_goal/parse.py",
     "file_name": "parse.py",
     "functions": [
@@ -78,10 +64,6 @@
       {
         "name": "load_goal",
         "complexity": 16
-      },
-      {
-        "name": "GoalState::from_dict",
-        "complexity": 36
       }
     ]
   },
@@ -102,10 +84,6 @@
       {
         "name": "cmd_wake",
         "complexity": 23
-      },
-      {
-        "name": "continuation_readiness",
-        "complexity": 25
       }
     ]
   },
@@ -120,6 +98,46 @@
       {
         "name": "_kill_pid",
         "complexity": 28
+      }
+    ]
+  },
+  {
+    "path": "src/cursor_goal/goal_schema.py",
+    "file_name": "goal_schema.py",
+    "functions": [
+      {
+        "name": "GoalState::from_dict",
+        "complexity": 36
+      }
+    ]
+  },
+  {
+    "path": "src/cursor_goal/manage_create.py",
+    "file_name": "manage_create.py",
+    "functions": [
+      {
+        "name": "_parse_create_argv",
+        "complexity": 26
+      }
+    ]
+  },
+  {
+    "path": "src/cursor_goal/manage_status.py",
+    "file_name": "manage_status.py",
+    "functions": [
+      {
+        "name": "cmd_status",
+        "complexity": 43
+      }
+    ]
+  },
+  {
+    "path": "src/cursor_goal/wake_readiness.py",
+    "file_name": "wake_readiness.py",
+    "functions": [
+      {
+        "name": "continuation_readiness",
+        "complexity": 25
       }
     ]
   }

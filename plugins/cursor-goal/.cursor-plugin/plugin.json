@@ -1,6 +1,6 @@
 {
   "name": "cursor-goal",
-  "version": "5.1.6",
+  "version": "5.1.7",
   "description": "Codex-style /cursor-goal harness (maker!=checker; layers native /goal continuation when CreateGoal is available)",
   "author": {
     "name": "tboy1337"

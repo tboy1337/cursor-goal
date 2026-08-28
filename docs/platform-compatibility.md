@@ -56,6 +56,9 @@ python3 -u ~/.cursor/skills/cursor-goal/scripts/run_goal.py eval audit-spawn-con
 |----------|---------|
 | `CURSOR_GOAL_DATA` | Absolute override for `~/.cursor-goal/data` |
 | `CURSOR_GOAL_HOME` | Absolute override for skill/home resolution used by path helpers (when set) |
+| `CURSOR_GOAL_NATIVE` | When `0`/`false`/`off`, skip native CreateGoal continuation and use hooks plus wake |
+| `CURSOR_PLUGIN_ROOT` | Set by the Cursor plugin host for marketplace installs; skill/hook paths under the plugin tree |
+| `CURSOR_GOAL_SMOKE_BASE` | Absolute base directory for install-smoke / wake-smoke temp trees (avoids macOS `/var` → `/private/var` symlink doctor FAILs) |
 | `CURSOR_GOAL_PYTHON` | Absolute Python 3.12+ interpreter for marketplace/classic Windows `.cmd` launchers (required for reliable Teams marketplace on Windows) |
 | `CURSOR_GOAL_EVAL_MODEL` | Evaluator model slug for `eval spawn-config` (default `composer-2.5`; `fast` is a known-invalid legacy value that falls back to the default) |
 | `CURSOR_GOAL_VALIDATE_TIMEOUT_SEC` | `eval validate` timeout in seconds (default 600; clamped to 25–3600). Invalid values fall back to 600 |

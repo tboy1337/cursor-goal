@@ -227,11 +227,12 @@ def write_hooks_file(path: Path, data: dict[str, Any]) -> None:
             tmp.write_text(payload, encoding="utf-8")
         tmp.replace(path)
     except Exception:
+        logger.exception("write_hooks_file failed for %s; removing temp %s", path, tmp)
         if tmp.exists():
             try:
                 tmp.unlink()
-            except OSError:
-                pass
+            except OSError as unlink_exc:
+                logger.debug("Could not remove temp %s: %s", tmp, unlink_exc)
         raise
 
 
