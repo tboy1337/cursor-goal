@@ -595,9 +595,6 @@ print(__version__)
 
     Write-Host ""
     Write-Host "Stop hook command: $hookCommand"
-    Write-Host "Verify:"
-    Write-Host ("  {0} -u {1} manage doctor" -f $Python.Exe, (Join-Path $installDir "scripts\run_goal.py"))
-    Write-Host ("  {0} -u {1} manage status" -f $Python.Exe, (Join-Path $installDir "scripts\run_goal.py"))
     Write-GoalInfo "Running manage doctor..."
     # Pipe through Write-Host so doctor stdout does not become the function return
     # value. doctor intentionally writes "FAIL: ..." lines to stderr on failure -
@@ -646,12 +643,9 @@ print(__version__)
     Write-Host ""
     Write-Host "Next steps:"
     Write-Host "  1) Restart Cursor (or reload hooks) so hooks.json takes effect"
-    Write-Host "  2) In Cursor: /cursor-goal <verifiable condition>"
-    Write-Host "  3) Start wake loop with notify_on_output matching ^AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor"
-    Write-Host "  4) Confirm wake status shows pid_alive=true / continuation_ready=true before other work"
-    Write-Host "  5) If Hooks UI shows {} but last-stop-response.json has followup_message, rely on wake"
+    Write-Host "  2) In Cursor: /cursor-goal <verifiable condition>  (or /goal ...)"
     Write-GoalInfo "Windows stop hook uses stop_hook.cmd + stdout drain delay (Cursor capture race mitigation)."
-    Write-GoalInfo "Wake watchdog: after create/resume, start wake loop with notify_on_output on ^AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor."
+    Write-GoalInfo "If create prints GOAL_WAKE_REQUIRED (native CreateGoal missing or CURSOR_GOAL_NATIVE=0), start that wake loop with notify_on_output matching ^AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor, then confirm wake status continuation_ready=true."
     Write-GoalWarn "If stop followups still drop, wake continues the goal; last-stop-response.json is always written."
     Write-GoalWarn "Re-run the installer after moving/upgrading Python (stop_hook.cmd and wake_loop.cmd bake absolute interpreter paths)."
     Write-GoalInfo "Shell validation is off by default; pass --allow-shell only when needed."

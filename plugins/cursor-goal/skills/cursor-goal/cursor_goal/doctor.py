@@ -232,9 +232,9 @@ def _skill_layout_warnings() -> list[str]:
     if builtin.is_file():
         warnings.append(
             "Cursor built-in /goal is present (~/.cursor/skills-cursor/goal). "
-            "Expected: layer it under this harness (CreateGoal for continuation; "
-            "CLEAR+YES then manage done then UpdateGoal complete). Vanilla /goal "
-            "without this skill still uses same-model self-audit."
+            "Expected: this skill layers it (CreateGoal for continuation; "
+            "CLEAR+YES then manage done then UpdateGoal complete). Do not "
+            "overwrite the built-in skill."
         )
     return warnings
 

@@ -2275,6 +2275,8 @@ def test_doctor_warns_on_builtin_cursor_goal_skill(
     builtin.write_text("# builtin\n", encoding="utf-8")
     warnings = doctor_mod._skill_layout_warnings()
     assert any("built-in /goal" in item for item in warnings)
+    assert any("Do not overwrite the built-in skill" in item for item in warnings)
+    assert not any("Vanilla /goal" in item for item in warnings)
 
 
 def test_doctor_warns_on_in_root_goal_bak(

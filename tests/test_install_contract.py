@@ -366,7 +366,9 @@ def test_plugin_manifests_and_hooks_contract() -> None:
     assert "do not call CreateGoal" not in keeper.lower()
     skill = (plugin / "skills" / "cursor-goal" / "SKILL.md").read_text(encoding="utf-8")
     assert "name: cursor-goal" in skill
-    assert "disable-model-invocation: true" in skill
+    assert "disable-model-invocation" not in skill
+    assert "/goal" in skill.split("---", 2)[1]
+    assert "/cursor-goal" in skill.split("---", 2)[1]
     assert "Iron law" in skill
     assert "FOLLOWUP_REQUIRED" in skill
     assert "Fidelity" in skill
@@ -772,6 +774,51 @@ def test_classic_installers_target_cursor_goal_not_goal() -> None:
     assert r".cursor\skills\cursor-goal" in un_ps1
     assert r".cursor\skills\goal" in un_ps1
     assert r".cursor-goal\backups" in un_ps1
+
+
+def test_zero_friction_install_docs_and_skill() -> None:
+    """Successful install must not require doctor, Skills UI, or Custom Mode pin."""
+    root = Path(__file__).resolve().parents[1]
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    install_md = (root / "docs" / "install.md").read_text(encoding="utf-8")
+    skill = (root / ".cursor" / "skills" / "cursor-goal" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    keeper = (root / ".cursor" / "agents" / "goalKeeper.md").read_text(encoding="utf-8")
+    sh_text = (root / "scripts" / "install-goal.sh").read_text(encoding="utf-8")
+    ps1_text = (root / "scripts" / "install-goal.ps1").read_text(encoding="utf-8")
+
+    after = readme.split("After a successful install:")[1].split("Uninstall")[0]
+    assert "Restart Cursor" in after
+    assert "/cursor-goal" in after
+    assert "/goal" in after
+    assert "Run `manage doctor`" not in after
+    assert "confirm a single user skill" not in after.lower()
+    assert "Pin **cursor-goal** as a Custom Mode" not in after
+    assert "Customize" not in after
+
+    assert "run `manage doctor` before the first" not in install_md
+    assert "Confirm **one** `cursor-goal` entry" not in install_md
+    assert "restart cursor" in install_md.lower()
+
+    assert "disable-model-invocation" not in skill
+    frontmatter = skill.split("---", 2)[1]
+    assert "/goal" in frontmatter
+    assert "/cursor-goal" in frontmatter
+    assert "pins this skill as a Custom Mode" not in skill
+    assert "Do not use for vanilla /goal" not in keeper
+    assert "Custom Mode paired with /goal" not in keeper
+
+    for label, text in (("sh", sh_text), ("ps1", ps1_text)):
+        nxt = text.split("Next steps:", 1)[1]
+        assert "Restart Cursor" in nxt, label
+        assert "/cursor-goal" in nxt, label
+        assert "/goal" in nxt, label
+        assert "3) Start wake loop" not in nxt, label
+        assert "Custom Mode" not in nxt, label
+        numbered = nxt.split("Usage in Cursor agent:", 1)[0]
+        numbered = numbered.split("Windows stop hook", 1)[0]
+        assert "manage doctor" not in numbered, label
 
 
 def test_install_backup_migrates_legacy_and_prunes(

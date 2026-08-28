@@ -1,14 +1,13 @@
 ---
 name: cursor-goal
-description: Codex-style goal harness for Cursor (auditor, evaluator, --test, budgets). Use when the user types /cursor-goal, pins this skill as a Custom Mode with /goal, or asks for the cursor-goal harness. Layers native CreateGoal/UpdateGoal for continuation when those tools exist; do not replace vanilla /goal when this skill is not in context.
-disable-model-invocation: true
+description: Codex-style goal harness for Cursor (auditor, evaluator, --test, budgets). Use when the user types /cursor-goal or /goal followed by a completion condition, status, pause, resume, clear, or blocked. Layers native CreateGoal/UpdateGoal with a remaining-work auditor and a separate evaluator. Do not use for ordinary tasks that are not a /goal or /cursor-goal command.
 ---
 
 # /cursor-goal — Autonomous Goal Loop
 
 Set a persistent objective. Work toward it across turns until it is met.
 
-**Layered with Cursor's built-in `/goal`:** native `CreateGoal` / `UpdateGoal` own **keep-going** (idle, headless, cloud, status line, usage accounting). This skill owns **is it actually done** (file state, remaining-work auditor, separate evaluator, `--test`). Do **not** run both continuation systems: once CreateGoal succeeds, skip wake and ignore worker `stop` followups. Keep `subagentStop` for auditor/evaluator parse. Vanilla `/goal` without this skill still uses same-model self-audit — do not overwrite `~/.cursor/skills-cursor/goal`.
+**Layered with Cursor's built-in `/goal`:** native `CreateGoal` / `UpdateGoal` own **keep-going** (idle, headless, cloud, status line, usage accounting). This skill owns **is it actually done** (file state, remaining-work auditor, separate evaluator, `--test`). Do **not** run both continuation systems: once CreateGoal succeeds, skip wake and ignore worker `stop` followups. Keep `subagentStop` for auditor/evaluator parse. After install, this skill auto-applies for `/goal` as well as `/cursor-goal`. Do not overwrite `~/.cursor/skills-cursor/goal`. Pinning this skill as a Custom Mode is optional (keeps these instructions sticky for the whole chat).
 
 Probe the tool list. If `CreateGoal` is present, use it. Do not assume `/goal` exists from the slash name alone. `CURSOR_GOAL_NATIVE=0` forces the hooks+wake path.
 
@@ -122,7 +121,7 @@ Probe tools. If `CreateGoal` is **not** in the list, or `CURSOR_GOAL_NATIVE=0`, 
 If `CreateGoal` **is** in the list and the env allows native:
 
 1. **User typed `/cursor-goal`:** call `CreateGoal` **exactly once** with the same condition (this is an explicit goal request). On success: `manage create … --native` (skip wake). On failure: report it, then `manage create` without `--native` and do the wake handshake.
-2. **User typed `/goal` while this skill is the Custom Mode:** the built-in `/goal` skill calls `CreateGoal` once — do **not** call it a second time. Still `manage create … --native` so auditor/evaluator/`--test` run. If create already happened without `--native`, `manage native-on` after CreateGoal succeeded.
+2. **User typed `/goal`:** the built-in `/goal` skill may already have called `CreateGoal` once — do **not** call it a second time. Still `manage create … --native` so auditor/evaluator/`--test` run. If create already happened without `--native`, `manage native-on` after CreateGoal succeeded.
 3. **Done order (never reverse):** CLEAR + YES → `manage done` → `UpdateGoal` with status `complete`. The built-in same-model completion audit is **not** enough. Do **not** call `UpdateGoal complete` until `manage done` succeeds.
 4. Worker `stop` followups and wake stay **off** while `native_continuation` is true. `subagentStop` for `goal-auditor` / `goal-evaluator` still runs. Turn/wake budgets are **advisory** (native runtime has no budget). On harness `blocked` or `budget-limited`, tell the user to pause the native goal (CLI Ctrl+C / UI pause). Do **not** lie with `UpdateGoal complete`.
 5. Resume from user pause: `UpdateGoal` status `active` if the user asked to resume **and** `manage resume` (with `--native` already recorded, skip wake).
@@ -134,6 +133,7 @@ After **every** `create` or `resume` **without** native continuation, complete t
 | Command | Action |
 |---------|--------|
 | `/cursor-goal <condition>` | Set goal and start working |
+| `/goal <condition>` | Same loop after install (built-in CreateGoal plus this harness) |
 | `/cursor-goal status` | Show current goal state |
 | `/cursor-goal pause` | Pause auto-continuation (**user only** — never pause on your own) |
 | `/cursor-goal resume` | Resume a paused or blocked goal |
@@ -334,7 +334,7 @@ While native continuation is on, those budgets are **advisory** — the platform
 
 Prefer argv-safe `--test` commands. New goals default to deny-shell (`shell_ok=false`); use `--allow-shell` only when needed. Shell mode is reported in `manage status` / `doctor`. Use `--deny-shell` or `CURSOR_GOAL_DENY_SHELL=1` to force argv-only.
 
-Run `manage doctor` after install or when diagnosing stalls. Installers exit non-zero when doctor hard-fails.
+Installers already run `manage doctor` and refuse to succeed on hard FAIL. Re-run doctor when diagnosing stalls.
 ## Writing Good Conditions
 
 ```

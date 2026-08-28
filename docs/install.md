@@ -33,7 +33,7 @@ cd cursor-goal
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-goal.ps1
 ```
 
-After install, **restart Cursor** (or reload hooks) so `hooks.json` takes effect, then run `manage doctor` before the first `/cursor-goal`. Confirm **one** `cursor-goal` entry under [Customize → Skills](https://cursor.com/docs/skills) (no leftover `goal` or `goal.bak.*` user skills).
+After a successful install, **restart Cursor** (or reload hooks) so `hooks.json` takes effect, then type `/cursor-goal <condition>` or `/goal …`. Both get the auditor/evaluator loop. The installer already ran `manage doctor`; if it exited 0, skip doctor. Leftover extra skills after a pre-v5 upgrade are a [troubleshooting](troubleshooting.md) case, not a required confirm step.
 
 ## What gets installed
 
@@ -66,10 +66,10 @@ On upgrade, the previous skill tree (including a leftover `~/.cursor/skills/goal
 
 ### Install from a tagged release
 
-Package version **5.1.1** pins the clone branch below. Use it when tag `v5.1.1` exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If `git clone --branch` fails, clone `main` with the Quick install steps above ([release.md](release.md)).
+Package version **5.1.2** pins the clone branch below. Use it when tag `v5.1.2` exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If `git clone --branch` fails, clone `main` with the Quick install steps above ([release.md](release.md)).
 
 ```bash
-git clone --branch v5.1.1 https://github.com/tboy1337/cursor-goal.git
+git clone --branch v5.1.2 https://github.com/tboy1337/cursor-goal.git
 cd cursor-goal
 ./scripts/install-goal.sh   # or install-goal.ps1 on Windows
 ```
@@ -99,7 +99,7 @@ py -3 -u "$env:USERPROFILE\.cursor\skills\cursor-goal\scripts\run_goal.py" manag
 Expected status: `[goal] No active goal.`  
 Expected spawn-config: JSON with `"subagent_type":"goal-evaluator"` and `"model":"composer-2.5"` (unless overridden).  
 Expected audit-spawn-config: JSON with `"subagent_type":"goal-auditor"` and `"model":"inherit"`.  
-Doctor should print `Doctor: OK` (fix any `FAIL` lines before starting a goal).
+Doctor should print `Doctor: OK`. A successful installer run already did this; re-run doctor when diagnosing stalls.
 
 Then in Agent chat: `/cursor-goal status`
 
