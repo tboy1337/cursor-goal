@@ -879,6 +879,11 @@ def test_zero_friction_install_docs_and_skill() -> None:
     assert "confirm a single user skill" not in after.lower()
     assert "Pin **cursor-goal** as a Custom Mode" not in after
     assert "Customize" not in after
+    assert "Custom Mode" not in readme
+    assert "CURSOR_GOAL_NATIVE=0" not in readme
+    assert "do not intercept" in skill.lower()
+    assert "Custom Mode" not in skill
+    assert "Custom Mode" not in keeper
 
     assert "run `manage doctor` before the first" not in install_md
     assert "Confirm **one** `cursor-goal` entry" not in install_md

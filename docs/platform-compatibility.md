@@ -1,6 +1,6 @@
 # Platform Compatibility
 
-cursor-goal targets **Cursor IDE only**. The harness is a **Python 3.12+** package; agent protocol and native `CreateGoal` layering (or stop-hook auto-continuation) are Cursor-specific. Codex origin is `/goal` (`codex-rs/ext/goal`). This repo installs `/cursor-goal` and layers Cursor's built-in `/goal` when `CreateGoal` is available.
+cursor-goal targets **Cursor IDE only**. The harness is a **Python 3.12+** package; agent protocol and native `CreateGoal` layering (or stop-hook auto-continuation) are Cursor-specific. Codex origin is `/goal` (`codex-rs/ext/goal`). This repo installs `/cursor-goal` and uses Cursor's native `CreateGoal` / `UpdateGoal` tools when they are available. Cursor's `/goal` command stays the built-in default.
 
 **Install:** `./scripts/install-goal.sh` or `.\scripts\install-goal.ps1` from a full clone (see [install.md](install.md)).
 
@@ -56,7 +56,7 @@ python3 -u ~/.cursor/skills/cursor-goal/scripts/run_goal.py eval audit-spawn-con
 |----------|---------|
 | `CURSOR_GOAL_DATA` | Absolute override for `~/.cursor-goal/data` |
 | `CURSOR_GOAL_HOME` | Absolute override for skill/home resolution used by path helpers (when set) |
-| `CURSOR_GOAL_NATIVE` | When `0`/`false`/`off`, skip native CreateGoal continuation and use hooks plus wake |
+| `CURSOR_GOAL_NATIVE` | Debug/test escape hatch: when `0`/`false`/`off`, skip native CreateGoal continuation and use hooks plus wake |
 | `CURSOR_PLUGIN_ROOT` | Set by the Cursor plugin host for marketplace installs; skill/hook paths under the plugin tree |
 | `CURSOR_GOAL_SMOKE_BASE` | Absolute base directory for install-smoke / wake-smoke temp trees (avoids macOS `/var` → `/private/var` symlink doctor FAILs) |
 | `CURSOR_GOAL_PYTHON` | Absolute Python 3.12+ interpreter for marketplace/classic Windows `.cmd` launchers (required for reliable Teams marketplace on Windows) |

@@ -10,7 +10,7 @@ is_background: false
 
 You are the goalKeeper agent (worker / maker). Follow the `/cursor-goal` skill protocol.
 
-This is a Cursor port of OpenAI Codex `/goal`. Cursor's built-in `/goal` (`CreateGoal` / `UpdateGoal`) owns **keep-going**. This harness owns **proof of done**. When `CreateGoal` is in the tool list and `CURSOR_GOAL_NATIVE` is not `0`, call it once on `/cursor-goal` (skip a second call only if this skill is already in context because the user typed `/goal` in an optional Custom Mode), then `manage create --native`. After CLEAR+YES and `manage done`, call `UpdateGoal complete`. Never `UpdateGoal complete` on a self-audit before `manage done`. If CreateGoal is missing or fails, do not retry; use hooks + wake.
+This is a Cursor port of OpenAI Codex `/goal`. Cursor's native `CreateGoal` / `UpdateGoal` tools own **keep-going**. This harness owns **proof of done**. When `CreateGoal` is in the tool list and `CURSOR_GOAL_NATIVE` is not `0`, call it once on `/cursor-goal`, then `manage create --native`. After CLEAR+YES and `manage done`, call `UpdateGoal complete`. Never `UpdateGoal complete` on a self-audit before `manage done`. If CreateGoal is missing or fails, do not retry; use hooks + wake. Cursor's built-in `/goal` command stays the default — do not intercept it.
 
 Resolve the harness with **`manage harness-cmd` first** (via any known `run_goal.py`
 path). Prefer the absolute `run_goal.py` path printed there. Fallbacks:
@@ -69,8 +69,7 @@ py -3 -u "$env:CURSOR_PLUGIN_ROOT\skills\cursor-goal\scripts\run_goal.py" <comma
    (allow_shell true→--allow-shell, false→--deny-shell). If parse omits
    allow_shell but raw text has --allow-shell/--deny-shell, forward from raw.
    If CreateGoal is in the tool list and CURSOR_GOAL_NATIVE is not 0: call
-   CreateGoal once (skip only if this skill is already in context and the
-   user already typed /goal in an optional Custom Mode), then
+   CreateGoal once on /cursor-goal, then
    pass --native to manage create. On CreateGoal failure, omit --native and
    do the wake handshake. Do not invent a --test the user did not pass. Never weaken --test to dodge
    the validation timeout (default 600s; CURSOR_GOAL_VALIDATE_TIMEOUT_SEC).
@@ -135,7 +134,7 @@ Do **not** invoke Plan Mode, `/ce-plan`, `/review`, `/review-bugbot`, `/review-s
 - **Subagent tool:** `Task` — spawn `goal-auditor` then `goal-evaluator` with the matching spawn-config params.
 - **Stop hook (primary when native is off, documented):** Cursor `hooks.json` → `stop_hook.py` (Unix) or `stop_hook.cmd` (Windows) returns `followup_message`. Prefer in-turn evaluation. Windows uses a cmd launcher + stdout drain delay to mitigate Cursor's capture race. Marketplace installs register both launchers; singleflight + a `generation_id` dedupe stamp prevent double followups / double-charged turns. When `native_continuation` is true, worker `stop` emits `{}` — CreateGoal owns keep-going.
 - **subagentStop hook (documented, race-free):** the same script is registered for `subagentStop` scoped to `goal-evaluator` and `goal-auditor` (`matcher`). Evaluator finished → `eval parse-result`. Auditor finished → `eval parse-audit`. It never calls `manage done` itself — only the worker does, after parsing both verdicts. **Keep this even when native continuation is on.**
-- **Native continuation:** probe CreateGoal. `/cursor-goal` → CreateGoal once then `manage create --native`. Optional Custom Mode + `/goal` → native skill already called CreateGoal; `manage create --native` or `manage native-on`. Vanilla `/goal` without this skill is not this harness. Done order: CLEAR+YES → `manage done` → `UpdateGoal complete`. Opt out with `CURSOR_GOAL_NATIVE=0`.
+- **Native continuation:** probe CreateGoal. `/cursor-goal` → CreateGoal once then `manage create --native`. Cursor's `/goal` is not this harness — do not intercept it. Done order: CLEAR+YES → `manage done` → `UpdateGoal complete`. `CURSOR_GOAL_NATIVE=0` is a debug/test escape hatch.
 - **Wake watchdog (required while pursuing without native):** After `manage create` / `resume` without `--native`, parse `GOAL_WAKE_REQUIRED`, start its `command` in a background Shell with `notify_on_output` matching `pattern` or `notify_pattern` (`^AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor`), then verify `wake status` shows `continuation_ready=true`. Prefer the event/`harness-cmd` command over hardcoded paths. Continues even when Cursor drops stop-hook stdout. Disarmed on done/pause/clear/native-on. Disable with `CURSOR_GOAL_WAKE=0`. Skip entirely when native continuation is on.
 - **No idle while pursuing:** do not end a turn without `manage done` or a completed audit/evaluate cycle with the next action started. Never tell the user the goal is complete unless `manage status` shows `achieved`. Cursor may wrap wake as "if no follow-ups needed" — that wrapper is **wrong** while pursuing; always follow up (spawn a new `goal-auditor`).
 - **Fidelity:** keep the full original condition. Do not shrink success to a smaller/easier/already-green subset. Do not recreate with a weaker condition.

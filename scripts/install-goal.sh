@@ -269,7 +269,7 @@ print_summary() {
   echo "  /cursor-goal status | pause | resume | clear"
   echo ""
   echo "Note: Prefer in-turn evaluation; the stop hook is a safety net."
-  echo "If create prints GOAL_WAKE_REQUIRED (native CreateGoal missing or CURSOR_GOAL_NATIVE=0),"
+  echo "If create prints GOAL_WAKE_REQUIRED (CreateGoal missing or failed),"
   echo "  start that wake loop with notify_on_output matching ^AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor,"
   echo "  then confirm wake status shows continuation_ready=true."
   echo "On Windows, use install-goal.ps1 (stop_hook.cmd + drain delay)."

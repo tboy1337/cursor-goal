@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Quick fixes for common install and continuation failures. cursor-goal is the `/cursor-goal` harness (Codex-style loop). Vanilla `/goal` is Cursor's built-in (same-model self-audit). Optionally pin this skill as a Custom Mode if you want `/goal` to use this harness.
+Quick fixes for common install and continuation failures. cursor-goal is the `/cursor-goal` harness (Codex-style loop). Cursor's `/goal` command stays the built-in default; this skill does not intercept it.
 
 Also run:
 
@@ -36,7 +36,7 @@ py -3 -u "$env:USERPROFILE\.cursor\skills\cursor-goal\scripts\run_goal.py" wake 
 
 ## Wake not armed / `continuation_ready=false`
 
-Doctor **hard-fails** when a goal is `pursuing`, wake is enabled, **native continuation is off**, and the loop is missing or dead. `manage status` prints an **ACTION REQUIRED** recovery command, `Continuation ready: false (…)`, and exits **1**. Immediately start `wake loop` as above. If create/resume exited 1 with the goal paused, fix data-dir/ACL issues then `manage resume`. Disable wake only with `CURSOR_GOAL_WAKE=0` (not recommended while the stop race remains). Skip wake entirely with `manage create --native` after CreateGoal, or `CURSOR_GOAL_NATIVE=0` to force hooks+wake.
+Doctor **hard-fails** when a goal is `pursuing`, wake is enabled, **native continuation is off**, and the loop is missing or dead. `manage status` prints an **ACTION REQUIRED** recovery command, `Continuation ready: false (…)`, and exits **1**. Immediately start `wake loop` as above. If create/resume exited 1 with the goal paused, fix data-dir/ACL issues then `manage resume`. Disable wake only with `CURSOR_GOAL_WAKE=0` (not recommended while the stop race remains). Skip wake entirely with `manage create --native` after CreateGoal. `CURSOR_GOAL_NATIVE=0` is a debug/test escape hatch that forces hooks+wake even when CreateGoal exists.
 
 Create with wake enabled prints `Status: paused (awaiting wake arm)` then `Status: pursuing` only after a successful arm/activate — do not treat the early paused line as a failure. For durable diagnostics set `CURSOR_GOAL_LOG_FILE=1` (create and doctor FAIL also print this tip).
 
@@ -52,9 +52,9 @@ Doctor **FAIL**s when `~/.cursor/skills/cursor-goal/VERSION` (or the resolved sk
 
 Cursor [loads every `SKILL.md` under `~/.cursor/skills/`](https://cursor.com/docs/skills). Pre-v5 installers left `goal.bak.<UTC>` siblings that show up as extra skills. Re-run the v5 installer: it migrates those folders to `~/.cursor-goal/backups/` (keep 1) and **deletes** leftover `~/.cursor/skills/goal`. You should see **one** user skill named `cursor-goal`. Cursor's built-in `/goal` under `~/.cursor/skills-cursor/goal` is expected and is not this project.
 
-Seeing both `/goal` and `/cursor-goal` in the product is expected. Vanilla `/goal` stays Cursor's built-in. Pin cursor-goal as a Custom Mode only if you want `/goal` to use this harness.
+Seeing both `/goal` and `/cursor-goal` in the product is expected. Cursor's `/goal` stays the built-in default. This harness runs for `/cursor-goal` only.
 
-Doctor **FAIL**s while `~/.cursor/skills/goal/SKILL.md` still exists (stacked old user skill). Doctor **WARN**s when the built-in `~/.cursor/skills-cursor/goal` is present (layer it; do not overwrite it).
+Doctor **FAIL**s while `~/.cursor/skills/goal/SKILL.md` still exists (stacked old user skill). Cursor's built-in `~/.cursor/skills-cursor/goal` is expected; do not overwrite it.
 
 ## `manage doctor` FAIL: insecure data directory
 

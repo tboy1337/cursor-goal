@@ -1,6 +1,6 @@
 # Install cursor-goal
 
-cursor-goal is the **`/cursor-goal` harness** for Cursor IDE (auditor, evaluator, `--test`). It **layers** Cursor's built-in `/goal` (`CreateGoal` / `UpdateGoal`) for continuation when those tools exist; it does not replace vanilla `/goal`. When CreateGoal is missing or `CURSOR_GOAL_NATIVE=0`, continuation is Cursor hooks plus wake. Codex origin: OpenAI Codex `/goal` (`codex-rs/ext/goal`).
+cursor-goal is the **`/cursor-goal` harness** for Cursor IDE (auditor, evaluator, `--test`). It uses Cursor's native `CreateGoal` / `UpdateGoal` tools for continuation when they exist; it does not replace or intercept Cursor's `/goal` command. When CreateGoal is missing or fails, continuation is Cursor hooks plus wake. Codex origin: OpenAI Codex `/goal` (`codex-rs/ext/goal`).
 
 User skills are **not** copied to Cloud Agents. Install locally (classic scripts) or via Teams marketplace.
 
@@ -33,7 +33,7 @@ cd cursor-goal
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-goal.ps1
 ```
 
-After a successful install, **restart Cursor** (or reload hooks) so `hooks.json` takes effect, then type `/cursor-goal <condition>`. Vanilla `/goal` stays Cursor's built-in. The installer already ran `manage doctor`; if it exited 0, skip doctor. Leftover extra skills after a pre-v5 upgrade are a [troubleshooting](troubleshooting.md) case, not a required confirm step.
+After a successful install, **restart Cursor** (or reload hooks) so `hooks.json` takes effect, then type `/cursor-goal <condition>`. Cursor's `/goal` command stays the built-in default. The installer already ran `manage doctor`; if it exited 0, skip doctor. Leftover extra skills after a pre-v5 upgrade are a [troubleshooting](troubleshooting.md) case, not a required confirm step.
 
 ## What gets installed
 
@@ -66,10 +66,10 @@ On upgrade, the previous skill tree (including a leftover `~/.cursor/skills/goal
 
 ### Install from a tagged release
 
-Package version **5.1.8** pins the clone branch below. Use it when tag `v5.1.8` exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If `git clone --branch` fails, clone `main` with the Quick install steps above ([release.md](release.md)).
+Package version **5.1.9** pins the clone branch below. Use it when tag `v5.1.9` exists on [GitHub Releases](https://github.com/tboy1337/cursor-goal/releases). If `git clone --branch` fails, clone `main` with the Quick install steps above ([release.md](release.md)).
 
 ```bash
-git clone --branch v5.1.8 https://github.com/tboy1337/cursor-goal.git
+git clone --branch v5.1.9 https://github.com/tboy1337/cursor-goal.git
 cd cursor-goal
 ./scripts/install-goal.sh   # or install-goal.ps1 on Windows
 ```

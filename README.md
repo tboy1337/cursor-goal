@@ -13,7 +13,7 @@
 /cursor-goal all tests in test/auth pass and the lint step is clean
 ```
 
-If Cursor's built-in goal tools are present, the skill uses them so the agent keeps going when the session would otherwise stop. Plain `/goal` without this skill is unchanged.
+This skill uses Cursor's native `CreateGoal` / `UpdateGoal` tools automatically so the agent keeps going. Cursor's built-in `/goal` command is unchanged and remains the default.
 
 ## Requirements
 
@@ -40,7 +40,7 @@ cd cursor-goal
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-goal.ps1
 ```
 
-Pin a release with `git clone --branch v5.1.8` instead of `main` when you want that tag. Teams/Enterprise can import this repository as a marketplace plugin (see `.cursor-plugin/marketplace.json` and [docs/teams-agpl.md](docs/teams-agpl.md)).
+Pin a release with `git clone --branch v5.1.9` instead of `main` when you want that tag. Teams/Enterprise can import this repository as a marketplace plugin (see `.cursor-plugin/marketplace.json` and [docs/teams-agpl.md](docs/teams-agpl.md)).
 
 After a successful install:
 
@@ -73,17 +73,15 @@ With a validation command and a turn budget:
 /cursor-goal "compound check" --test "npm test && npm run lint" --allow-shell
 ```
 
-Vanilla `/goal` is unchanged. Optionally pin cursor-goal as a Custom Mode if you want `/goal` to use this harness.
+Cursor's `/goal` command stays the built-in default. This harness runs only when you type `/cursor-goal`. Native `CreateGoal` / `UpdateGoal` are used automatically on `/cursor-goal` when those tools exist.
 
 A pursuing goal finishes only in this order: remaining-work auditor **CLEAR**, evaluator **YES**, then `manage done`. If native continuation is on, call `UpdateGoal complete` after `manage done`.
-
-Set `CURSOR_GOAL_NATIVE=0` to use hooks and wake even when native goal tools exist.
 
 ## Continuation
 
 **Native (default when CreateGoal succeeds).** Cursor keeps the agent working. Skip the wake loop.
 
-**Hooks and wake (when native tools are missing or opted out).** Cursor `stop` / `subagentStop` followups continue the turn. After `manage create`, start the printed `GOAL_WAKE_REQUIRED` command in a background Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor`, then confirm `wake status` shows `continuation_ready=true`. `manage harness-cmd` prints the right `run_goal.py` invocation for classic vs marketplace installs.
+**Hooks and wake (when CreateGoal is missing or failed).** Cursor `stop` / `subagentStop` followups continue the turn. After `manage create`, start the printed `GOAL_WAKE_REQUIRED` command in a background Shell with `notify_on_output` matching `^AGENT_GOAL_WAKE FOLLOWUP_REQUIRED pursuing spawn_goal-auditor`, then confirm `wake status` shows `continuation_ready=true`. `manage harness-cmd` prints the right `run_goal.py` invocation for classic vs marketplace installs.
 
 Cloud Agents do not receive classic `~/.cursor/skills` user skills. Use a local IDE install or the Teams plugin.
 

@@ -209,7 +209,11 @@ def _legacy_user_skill_failures() -> list[str]:
 
 
 def _skill_layout_warnings() -> list[str]:
-    """Warn about leftover bak folders and Cursor's built-in /goal skill."""
+    """Warn about leftover bak folders under the user skills root.
+
+    Cursor's built-in ``~/.cursor/skills-cursor/goal`` is expected and is
+    not this project — do not warn on it and do not overwrite it.
+    """
     warnings: list[str] = []
     skills = _user_home() / ".cursor" / "skills"
     if skills.is_dir():
@@ -228,14 +232,6 @@ def _skill_layout_warnings() -> list[str]:
                 f"({len(bak_dirs)}). Re-run the installer to move them to "
                 "~/.cursor-goal/backups."
             )
-    builtin = _user_home() / ".cursor" / "skills-cursor" / "goal" / "SKILL.md"
-    if builtin.is_file():
-        warnings.append(
-            "Cursor built-in /goal is present (~/.cursor/skills-cursor/goal). "
-            "Expected: this skill layers it (CreateGoal for continuation; "
-            "CLEAR+YES then manage done then UpdateGoal complete). Do not "
-            "overwrite the built-in skill."
-        )
     return warnings
 
 

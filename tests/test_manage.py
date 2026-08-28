@@ -2262,7 +2262,7 @@ def test_doctor_fails_on_leftover_user_goal_skill(
     assert "Legacy user skill" in err
 
 
-def test_doctor_warns_on_builtin_cursor_goal_skill(
+def test_doctor_does_not_warn_on_builtin_cursor_goal_skill(
     goal_home: Path,
 ) -> None:
     from cursor_goal import doctor as doctor_mod
@@ -2274,8 +2274,8 @@ def test_doctor_warns_on_builtin_cursor_goal_skill(
     builtin.parent.mkdir(parents=True)
     builtin.write_text("# builtin\n", encoding="utf-8")
     warnings = doctor_mod._skill_layout_warnings()
-    assert any("built-in /goal" in item for item in warnings)
-    assert any("Do not overwrite the built-in skill" in item for item in warnings)
+    assert not any("built-in /goal" in item for item in warnings)
+    assert not any("skills-cursor" in item for item in warnings)
     assert not any("Vanilla /goal" in item for item in warnings)
 
 

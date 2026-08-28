@@ -740,8 +740,8 @@ def _maybe_arm_wake() -> _ArmWakeResult:
 def cmd_native_on(_argv: list[str]) -> int:
     """Mark an existing goal as using native CreateGoal continuation.
 
-    Agent-facing: call after CreateGoal succeeds when create ran without
-    ``--native`` (for example optional Custom Mode + user-typed ``/goal``).
+    Agent-facing: call after CreateGoal succeeds when a ``/cursor-goal``
+    create ran without ``--native``.
     Disarms wake so hooks+wake do not compete with the platform runtime.
     """
     unsafe = _refuse_if_data_dir_unsafe()

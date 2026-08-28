@@ -8,9 +8,9 @@ disable-model-invocation: true
 
 Set a persistent objective. Work toward it across turns until it is met.
 
-**Layered with Cursor's built-in `/goal`:** native `CreateGoal` / `UpdateGoal` own **keep-going** (idle, headless, cloud, status line, usage accounting). This skill owns **is it actually done** (file state, remaining-work auditor, separate evaluator, `--test`). Do **not** run both continuation systems: once CreateGoal succeeds, skip wake and ignore worker `stop` followups. Keep `subagentStop` for auditor/evaluator parse. After install this skill applies for `/cursor-goal`. Vanilla `/goal` stays Cursor's built-in. Do not overwrite `~/.cursor/skills-cursor/goal`. Pinning this skill as a Custom Mode is optional if you want `/goal` to use this harness.
+**Layered with Cursor's native goal tools:** `CreateGoal` / `UpdateGoal` own **keep-going** (idle, headless, cloud, status line, usage accounting). This skill owns **is it actually done** (file state, remaining-work auditor, separate evaluator, `--test`). Do **not** run both continuation systems: once CreateGoal succeeds, skip wake and ignore worker `stop` followups. Keep `subagentStop` for auditor/evaluator parse. After install this skill applies only for `/cursor-goal`. Cursor's built-in `/goal` stays the default command — do not intercept it, and do not overwrite `~/.cursor/skills-cursor/goal`.
 
-Probe the tool list. If `CreateGoal` is present, use it. Do not assume `/goal` exists from the slash name alone. `CURSOR_GOAL_NATIVE=0` forces the hooks+wake path.
+Probe the tool list. If `CreateGoal` is present, use it on `/cursor-goal`. Do not assume the user typed `/goal` from the slash name alone. `CURSOR_GOAL_NATIVE=0` is a debug/test escape hatch that forces the hooks+wake path.
 
 This is a **Cursor port of OpenAI Codex `/goal`**. Codex implements `/goal` as first-class runtime (`codex-rs/ext/goal`). This harness persists `goal.json` and continues via native CreateGoal when available, otherwise `stop` / `subagentStop` plus wake.
 
@@ -122,7 +122,7 @@ Probe tools. If `CreateGoal` is **not** in the list, or `CURSOR_GOAL_NATIVE=0`, 
 If `CreateGoal` **is** in the list and the env allows native:
 
 1. **User typed `/cursor-goal`:** call `CreateGoal` **exactly once** with the same condition (this is an explicit goal request). On success: `manage create … --native` (skip wake). On failure: report it, then `manage create` without `--native` and do the wake handshake.
-2. **This skill is already in context and the user typed `/goal` (optional Custom Mode):** the built-in `/goal` skill may already have called `CreateGoal` once — do **not** call it a second time. Still `manage create … --native` so auditor/evaluator/`--test` run. If create already happened without `--native`, `manage native-on` after CreateGoal succeeded. Vanilla `/goal` without this skill in context is not this harness — do not intercept it.
+2. **Cursor's `/goal` is not this harness.** Leave the built-in command alone. Do not `manage create` for a vanilla `/goal` turn.
 3. **Done order (never reverse):** CLEAR + YES → `manage done` → `UpdateGoal` with status `complete`. The built-in same-model completion audit is **not** enough. Do **not** call `UpdateGoal complete` until `manage done` succeeds.
 4. Worker `stop` followups and wake stay **off** while `native_continuation` is true. `subagentStop` for `goal-auditor` / `goal-evaluator` still runs. Turn/wake budgets are **advisory** (native runtime has no budget). On harness `blocked` or `budget-limited`, tell the user to pause the native goal (CLI Ctrl+C / UI pause). Do **not** lie with `UpdateGoal complete`.
 5. Resume from user pause: `UpdateGoal` status `active` if the user asked to resume **and** `manage resume` (with `--native` already recorded, skip wake).
@@ -140,7 +140,7 @@ After **every** `create` or `resume` **without** native continuation, complete t
 | `/cursor-goal clear` | Remove goal entirely (**user only**) |
 | `/cursor-goal blocked <reason>` | Record an impasse; after 3 consecutive same-reason turns the harness stops |
 
-`manage native-on` records CreateGoal success after a create that omitted `--native`. `CURSOR_GOAL_NATIVE=0` forbids `--native` / `native-on`.
+`manage native-on` records CreateGoal success after a `/cursor-goal` create that omitted `--native`. `CURSOR_GOAL_NATIVE=0` is a debug/test escape hatch that forbids `--native` / `native-on`.
 
 Aliases for clear: `stop`, `off`, `reset`, `cancel`
 
@@ -284,7 +284,7 @@ When you see a `[GOAL]` prefix, resume working toward the condition immediately.
 
 Skip this entire section while `native_continuation` is true (create `--native` or `manage native-on`). Do not start `GOAL_WAKE_REQUIRED`. Do not stack `/loop` sleepers on the same goal.
 
-While a goal is `pursuing`, wake is enabled, **and native continuation is off**, arming and starting a live Shell wake loop with `notify_on_output` is **recommended** as a supplement to the two hooks above — it does not depend on Cursor capturing hook stdout (see repo `docs/cursor-windows-stop-hook-race.md`). It is **not** a Cursor-documented API (`notify_on_output` on a background Shell is a Cursor IDE convenience, not a hooks contract), so treat it as best-effort: long-idle background shells can be reaped by the platform. `eval validate` / `eval prompt` / `eval spawn-config` warn (not refuse) when pursuing without a verified-alive loop; set `CURSOR_GOAL_REQUIRE_WAKE=1` to restore the old hard-refusal behavior. `manage create`/`resume` and `manage doctor`/`status` are unchanged when native is off: arming still gates `pursuing`, and doctor/status still hard-fail while pursuing with `continuation_ready=false`. Opt out of wake entirely with `CURSOR_GOAL_WAKE=0`. Opt out of native layering with `CURSOR_GOAL_NATIVE=0`. For fully unattended runs outside the IDE turn loop, prefer native `/goal` continuation, a Cursor Automation, or the Cursor CLI/SDK headless agent loop instead of relying on a monitored background shell.
+While a goal is `pursuing`, wake is enabled, **and native continuation is off**, arming and starting a live Shell wake loop with `notify_on_output` is **recommended** as a supplement to the two hooks above — it does not depend on Cursor capturing hook stdout (see repo `docs/cursor-windows-stop-hook-race.md`). It is **not** a Cursor-documented API (`notify_on_output` on a background Shell is a Cursor IDE convenience, not a hooks contract), so treat it as best-effort: long-idle background shells can be reaped by the platform. `eval validate` / `eval prompt` / `eval spawn-config` warn (not refuse) when pursuing without a verified-alive loop; set `CURSOR_GOAL_REQUIRE_WAKE=1` to restore the old hard-refusal behavior. `manage create`/`resume` and `manage doctor`/`status` are unchanged when native is off: arming still gates `pursuing`, and doctor/status still hard-fail while pursuing with `continuation_ready=false`. Opt out of wake entirely with `CURSOR_GOAL_WAKE=0`. `CURSOR_GOAL_NATIVE=0` is a debug/test escape hatch that skips native CreateGoal layering. For fully unattended runs outside the IDE turn loop, prefer `/cursor-goal` native continuation, a Cursor Automation, or the Cursor CLI/SDK headless agent loop instead of relying on a monitored background shell.
 
 `manage create` / `resume` arms wake state and prints one machine-readable line agents must consume:
 

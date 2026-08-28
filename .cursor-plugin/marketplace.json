@@ -4,16 +4,16 @@
     "name": "tboy1337"
   },
   "metadata": {
-    "description": "Codex-style /cursor-goal harness (layers native /goal when CreateGoal is available)",
-    "version": "5.1.8",
+    "description": "Codex-style /cursor-goal harness (uses native CreateGoal/UpdateGoal when available)",
+    "version": "5.1.9",
     "pluginRoot": "plugins"
   },
   "plugins": [
     {
       "name": "cursor-goal",
       "source": "cursor-goal",
-      "description": "Codex-style /cursor-goal harness (maker!=checker; layers native /goal continuation when CreateGoal is available)",
-      "version": "5.1.8",
+      "description": "Codex-style /cursor-goal harness (maker!=checker; uses native CreateGoal/UpdateGoal when available)",
+      "version": "5.1.9",
       "license": "AGPL-3.0-only",
       "keywords": [
         "goal",
