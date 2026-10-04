@@ -73,15 +73,11 @@ from cursor_goal.wake import (
 )
 from cursor_goal.wake import arm as wake_arm
 from cursor_goal.wake import disarm as wake_disarm
-from cursor_goal.wake import (
-    format_wake_required_line,
-)
+from cursor_goal.wake import format_wake_required_line
 from cursor_goal.wake import (
     status_info as wake_status_info,  # pylint: disable=unused-import
 )
-from cursor_goal.wake import (
-    wake_enabled,
-)
+from cursor_goal.wake import wake_enabled
 
 # Re-exports used by sibling modules and tests (monkeypatch surface).
 __all__ = (
