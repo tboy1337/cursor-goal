@@ -267,7 +267,7 @@ def build_steps(
         steps.append(
             (
                 "complexipy",
-                [complexipy, MYPY_TARGET, "-mx", "15", "--quiet"],
+                [complexipy, MYPY_TARGET, "--max-complexity-allowed", "15", "--quiet"],
             )
         )
     steps.append(

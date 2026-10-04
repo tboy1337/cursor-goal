@@ -56,7 +56,7 @@ jobs:
       - name: Pylint
         run: pylint src/cursor_goal
       - name: Complexipy
-        run: complexipy src/cursor_goal -mx 15 --quiet
+        run: complexipy src/cursor_goal --max-complexity-allowed 15 --quiet
       - name: ShellCheck
         run: |
           shellcheck --severity=warning scripts/*.sh

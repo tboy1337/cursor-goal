@@ -632,8 +632,8 @@ def test_release_and_ci_run_complexipy_and_wake_smoke() -> None:
     root = Path(__file__).resolve().parents[1]
     ci = (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     rel = (root / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-    assert "complexipy src/cursor_goal -mx 15 --quiet" in ci
-    assert "complexipy src/cursor_goal -mx 15 --quiet" in rel
+    assert "complexipy src/cursor_goal --max-complexity-allowed 15 --quiet" in ci
+    assert "complexipy src/cursor_goal --max-complexity-allowed 15 --quiet" in rel
     assert rel.count("python scripts/wake-smoke.py") == 3
 
 
