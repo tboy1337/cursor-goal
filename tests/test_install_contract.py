@@ -714,8 +714,8 @@ def test_sync_plugin_tree_check_detects_vendored_drift(tmp_path: Path) -> None:
     assert mod.check_plugin(fake) == 1
 
 
-def test_check_version_sync_detects_readme_pin_drift(tmp_path: Path) -> None:
-    """README tagged-clone pin must match package version."""
+def test_check_version_sync_live_repo_omits_readme_pin(tmp_path: Path) -> None:
+    """Live sync succeeds without a README pin; conflicting docs pins still raise."""
     root = Path(__file__).resolve().parents[1]
     script = root / "scripts" / "check_version_sync.py"
     spec = importlib.util.spec_from_file_location("check_version_sync", script)
@@ -723,7 +723,6 @@ def test_check_version_sync_detects_readme_pin_drift(tmp_path: Path) -> None:
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
 
-    # Smoke: live repo is in sync (README pin included after Phase 1).
     completed = subprocess.run(
         [sys.executable, str(script)],
         cwd=root,
@@ -732,19 +731,16 @@ def test_check_version_sync_detects_readme_pin_drift(tmp_path: Path) -> None:
         text=True,
     )
     assert completed.returncode == 0, completed.stderr
-    assert "README=v" in completed.stdout
+    assert "README=v" not in completed.stdout
+    assert f"docs=v{__version__}" in completed.stdout
 
-    pin = mod._read_readme_pin(root)
-    assert pin == __version__
-
-    # Isolated helper: conflicting pins raise.
-    bad = tmp_path / "README.md"
+    bad = tmp_path / "install.md"
     bad.write_text(
         "git clone --branch v1.0.0 x\ngit clone --branch v2.16.0 y\n",
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="Conflicting README"):
-        mod._read_tagged_clone_pin(bad, label="README")
+    with pytest.raises(ValueError, match="Conflicting docs"):
+        mod._read_tagged_clone_pin(bad, label="docs")
 
 
 def _load_check_version_sync() -> ModuleType:

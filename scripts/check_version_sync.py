@@ -4,7 +4,6 @@
 Checks:
   - pyproject.toml ``version`` == ``cursor_goal.__version__``
   - docs/install.md tagged clone pin ``vX.Y.Z`` matches (when present)
-  - README.md tagged clone pin ``vX.Y.Z`` matches (when present)
   - plugins/cursor-goal/.cursor-plugin/plugin.json ``version`` matches (when present)
   - .cursor-plugin/marketplace.json plugin entry version matches (when present)
 
@@ -150,10 +149,6 @@ def _read_docs_pin(root: Path) -> str | None:
     return _read_tagged_clone_pin(root / "docs" / "install.md", label="docs")
 
 
-def _read_readme_pin(root: Path) -> str | None:
-    return _read_tagged_clone_pin(root / "README.md", label="README")
-
-
 def _read_plugin_version(root: Path) -> str | None:
     path = root / "plugins" / "cursor-goal" / ".cursor-plugin" / "plugin.json"
     if not path.is_file():
@@ -256,14 +251,6 @@ def _cmd_check_sync() -> int:
         errors.append(f"docs pin v{docs} != package {proj}")
 
     try:
-        readme = _read_readme_pin(root)
-    except ValueError as exc:
-        errors.append(str(exc))
-        readme = None
-    if readme is not None and readme != proj:
-        errors.append(f"README pin v{readme} != package {proj}")
-
-    try:
         plugin = _read_plugin_version(root)
     except ValueError as exc:
         errors.append(str(exc))
@@ -316,8 +303,6 @@ def _cmd_check_sync() -> int:
     extras = []
     if docs is not None:
         extras.append(f"docs=v{docs}")
-    if readme is not None:
-        extras.append(f"README=v{readme}")
     if plugin is not None:
         extras.append(f"plugin={plugin}")
     if market is not None:

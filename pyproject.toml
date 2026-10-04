@@ -4,7 +4,7 @@ requires = [ "setuptools>=77" ]
 
 [project]
 name = "cursor-goal"
-version = "5.1.10"
+version = "5.1.11"
 description = "Cursor IDE /cursor-goal harness (maker≠checker); not Cursor's built-in /goal"
 readme = "README.md"
 license = "AGPL-3.0-only"
@@ -61,6 +61,10 @@ line_length = 88
 known_first_party = [ "cursor_goal" ]
 src_paths = [ "src", "tests" ]
 skip_glob = [ "testing/samples/**", "testing/scripts/**" ]
+
+# Classifiers stop at the newest CPython the harness matrix runs.
+[tool.pyproject-fmt]
+max_supported_python = "3.14"
 
 [tool.bandit]
 exclude_dirs = [ "testing", "tests" ]

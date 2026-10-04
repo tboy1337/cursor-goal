@@ -2,7 +2,7 @@
 
 Checklist for cutting a tagged GitHub Release (`vX.Y.Z`).
 
-Current package version is **5.1.10**. The public GitHub tag for this release is **`v5.1.10`**. After tagging, README/install pins work with `git clone --branch v5.1.10`.
+Current package version is **5.1.10**. The public GitHub tag for this release is **`v5.1.10`**. After tagging, the install doc pin works with `git clone --branch v5.1.10`.
 
 ## Manual Cursor IDE smoke (before pushing a version bump)
 
@@ -26,7 +26,7 @@ Non-IDE wake smoke: `python scripts/wake-smoke.py` (also run by `scripts/verify.
 1. **Bump the package version only in sources of truth**
    - [`src/cursor_goal/__init__.py`](../src/cursor_goal/__init__.py) (`__version__`)
    - [`pyproject.toml`](../pyproject.toml) (`[project].version`)
-   - Update tagged-clone pins in [`docs/install.md`](install.md) and [`README.md`](../README.md) to `vX.Y.Z`
+   - Update the tagged-clone pin in [`docs/install.md`](install.md) to `vX.Y.Z`
 
 2. **Regenerate the plugin / marketplace tree**
 

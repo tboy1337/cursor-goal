@@ -169,7 +169,6 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-          cache: pip
       - name: Install PSScriptAnalyzer and Pester 5
         run: |
           if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {
