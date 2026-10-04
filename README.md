@@ -17,7 +17,7 @@ This skill uses Cursor's native `CreateGoal` / `UpdateGoal` tools automatically 
 
 ## Requirements
 
-- Python 3.12+ (`python3`, `python`, or Windows `py -3`)
+- Python 3.12+
 - Cursor IDE 1.7+
 
 ## Install
@@ -32,7 +32,7 @@ cd cursor-goal
 ./scripts/install-goal.sh
 ```
 
-Windows (PowerShell — not Git Bash):
+Windows (PowerShell):
 
 ```powershell
 git clone https://github.com/tboy1337/cursor-goal.git
@@ -40,7 +40,7 @@ cd cursor-goal
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-goal.ps1
 ```
 
-Pin a release with `git clone --branch v5.1.10` instead of `main` when you want that tag. Teams/Enterprise can import this repository as a marketplace plugin (see `.cursor-plugin/marketplace.json` and [docs/teams-agpl.md](docs/teams-agpl.md)).
+Teams/Enterprise can import this repository as a marketplace plugin (see `.cursor-plugin/marketplace.json` and [docs/teams-agpl.md](docs/teams-agpl.md)).
 
 After a successful install:
 
@@ -50,8 +50,6 @@ After a successful install:
 The installer already ran `manage doctor`. If it printed `Doctor: OK` and exited 0, you are done. Re-run doctor only when diagnosing stalls ([docs/troubleshooting.md](docs/troubleshooting.md)).
 
 Uninstall with `./scripts/uninstall-goal.sh` or `.\scripts\uninstall-goal.ps1` (`--purge-data` / `-PurgeData` also removes `~/.cursor-goal`).
-
-`pip install -e ".[dev]"` is for developing this repo. It does not register the Cursor skill, agents, or hooks.
 
 More detail: [docs/install.md](docs/install.md).
 
@@ -165,7 +163,7 @@ $env:CURSOR_GOAL_EVAL_MODEL = 'gpt-5.3-codex'
 
 ```bash
 pip install -e ".[dev]"
-python3 scripts/verify.py            # Windows: py -3 scripts/verify.py
+python3 scripts/verify.py            # Windows: py scripts/verify.py
 python3 scripts/verify.py --fix      # isort/black, then verify
 ```
 
